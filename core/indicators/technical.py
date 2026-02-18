@@ -238,3 +238,48 @@ def calculate_adx(high: pd.Series, low: pd.Series, close: pd.Series, period: int
     adx = dx.ewm(span=period, adjust=False).mean()
     
     return adx
+
+
+def calculate_bollinger_bands(
+    close: pd.Series, period: int = 20, std_dev: float = 2.0
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """
+    Calculate Bollinger Bands.
+    
+    Bollinger Bands consist of a middle band (SMA) and upper/lower bands
+    placed a specified number of standard deviations from the middle band.
+    Prices near the lower band suggest oversold conditions; prices near
+    the upper band suggest overbought conditions.
+    
+    Args:
+        close: Close prices
+        period: SMA period for the middle band (default 20)
+        std_dev: Number of standard deviations for upper/lower bands (default 2.0)
+    
+    Returns:
+        Tuple of (upper, middle, lower) as pandas Series,
+        each the same length as input with leading NaNs for warmup.
+    
+    Raises:
+        ValueError: If period < 1 or std_dev <= 0
+    
+    Example:
+        >>> upper, middle, lower = calculate_bollinger_bands(df['close'], period=20, std_dev=2.0)
+    """
+    if period < 1:
+        raise ValueError(f"Period must be >= 1, got {period}")
+    
+    if std_dev <= 0:
+        raise ValueError(f"std_dev must be > 0, got {std_dev}")
+    
+    if len(close) == 0:
+        empty = pd.Series(dtype=float)
+        return empty, empty.copy(), empty.copy()
+    
+    middle = calculate_sma(close, period)
+    rolling_std = close.rolling(window=period).std(ddof=0)
+    
+    upper = middle + std_dev * rolling_std
+    lower = middle - std_dev * rolling_std
+    
+    return upper, middle, lower

@@ -12,6 +12,7 @@ from core.indicators import (
     IndicatorEngine,
     calculate_adx,
     calculate_atr,
+    calculate_bollinger_bands,
     calculate_ema,
     calculate_rsi,
     calculate_sma,
@@ -440,6 +441,147 @@ class TestADX:
             assert np.allclose(our_tail.values, ta_tail.values, rtol=1e-3, atol=1e-5)
 
 
+# ── Bollinger Bands Tests ─────────────────────────────────────────────────────
+
+
+class TestBollingerBands:
+    """Tests for Bollinger Bands calculation."""
+
+    def test_bb_basic(self, sample_ohlcv):
+        """Test Bollinger Bands calculation basics."""
+        close = sample_ohlcv['close']
+        upper, middle, lower = calculate_bollinger_bands(close, period=20, std_dev=2.0)
+
+        # Check lengths
+        assert len(upper) == len(close)
+        assert len(middle) == len(close)
+        assert len(lower) == len(close)
+
+        # After warmup, upper > middle > lower
+        valid = ~upper.isna()
+        assert (upper[valid] >= middle[valid]).all()
+        assert (middle[valid] >= lower[valid]).all()
+
+    def test_bb_middle_matches_sma(self, sample_ohlcv):
+        """Test that middle band equals SMA."""
+        close = sample_ohlcv['close']
+        period = 20
+
+        _, middle, _ = calculate_bollinger_bands(close, period=period)
+        sma = calculate_sma(close, period)
+
+        pd.testing.assert_series_equal(middle, sma)
+
+    def test_bb_band_width(self):
+        """Test that band width equals 2 * std_dev * rolling_std."""
+        close = pd.Series([10, 12, 11, 13, 14, 12, 15, 16, 13, 17,
+                           11, 14, 16, 18, 15, 12, 19, 20, 14, 17,
+                           13, 16, 18, 20, 15])
+        period = 5
+        std_dev = 2.0
+
+        upper, middle, lower = calculate_bollinger_bands(close, period=period, std_dev=std_dev)
+
+        expected_std = close.rolling(window=period).std(ddof=0)
+        expected_width = 2 * std_dev * expected_std
+
+        actual_width = upper - lower
+
+        # Compare where valid
+        valid = ~expected_width.isna()
+        assert np.allclose(actual_width[valid].values, expected_width[valid].values, rtol=1e-10)
+
+    def test_bb_symmetry(self, sample_ohlcv):
+        """Test that upper and lower bands are symmetric around the middle."""
+        close = sample_ohlcv['close']
+        upper, middle, lower = calculate_bollinger_bands(close, period=20, std_dev=2.0)
+
+        valid = ~upper.isna()
+        upper_dist = upper[valid] - middle[valid]
+        lower_dist = middle[valid] - lower[valid]
+
+        assert np.allclose(upper_dist.values, lower_dist.values, rtol=1e-10)
+
+    def test_bb_empty_series(self):
+        """Test Bollinger Bands handles empty series."""
+        close = pd.Series(dtype=float)
+        upper, middle, lower = calculate_bollinger_bands(close, period=20)
+
+        assert len(upper) == 0
+        assert len(middle) == 0
+        assert len(lower) == 0
+
+    def test_bb_invalid_period(self):
+        """Test Bollinger Bands raises error for invalid period."""
+        close = pd.Series([1, 2, 3, 4, 5])
+
+        with pytest.raises(ValueError):
+            calculate_bollinger_bands(close, period=0)
+
+        with pytest.raises(ValueError):
+            calculate_bollinger_bands(close, period=-1)
+
+    def test_bb_invalid_std_dev(self):
+        """Test Bollinger Bands raises error for invalid std_dev."""
+        close = pd.Series([1, 2, 3, 4, 5])
+
+        with pytest.raises(ValueError):
+            calculate_bollinger_bands(close, period=20, std_dev=0)
+
+        with pytest.raises(ValueError):
+            calculate_bollinger_bands(close, period=20, std_dev=-1.0)
+
+    def test_bb_flat_market(self, flat_market):
+        """Test Bollinger Bands narrow on flat market."""
+        close = flat_market['close']
+        upper, middle, lower = calculate_bollinger_bands(close, period=20, std_dev=2.0)
+
+        # Bands should be relatively narrow in flat market
+        valid = ~upper.isna()
+        band_width = (upper[valid] - lower[valid]).mean()
+        price_mean = close[valid].mean()
+        band_pct = band_width / price_mean
+
+        # Band width should be small relative to price (<20% for flat market)
+        assert band_pct < 0.20
+
+    @pytest.mark.skipif(not TA_AVAILABLE, reason="ta library not installed")
+    def test_bb_matches_ta_library(self, sample_ohlcv):
+        """Test Bollinger Bands matches ta library implementation."""
+        close = sample_ohlcv['close']
+        period = 20
+        std_dev = 2.0
+
+        our_upper, our_middle, our_lower = calculate_bollinger_bands(close, period, std_dev)
+
+        ta_bb = ta.volatility.BollingerBands(close, window=period, window_dev=std_dev)
+        ta_upper = ta_bb.bollinger_hband()
+        ta_middle = ta_bb.bollinger_mavg()
+        ta_lower = ta_bb.bollinger_lband()
+
+        # Middle band (SMA) should match exactly
+        our_mid_valid = our_middle.dropna()
+        ta_mid_valid = ta_middle.dropna()
+        min_len = min(len(our_mid_valid), len(ta_mid_valid))
+        if min_len > 0:
+            assert np.allclose(
+                our_mid_valid.iloc[-min_len:].values,
+                ta_mid_valid.iloc[-min_len:].values,
+                rtol=1e-5, atol=1e-8,
+            )
+
+        # Upper and lower may differ slightly due to ddof (population vs sample std)
+        our_up_valid = our_upper.dropna()
+        ta_up_valid = ta_upper.dropna()
+        min_len = min(len(our_up_valid), len(ta_up_valid))
+        if min_len > 0:
+            assert np.allclose(
+                our_up_valid.iloc[-min_len:].values,
+                ta_up_valid.iloc[-min_len:].values,
+                rtol=1e-2, atol=1e-4,
+            )
+
+
 # ── IndicatorEngine Tests ─────────────────────────────────────────────────────
 
 
@@ -490,6 +632,23 @@ class TestIndicatorEngine:
         assert 'ema_fast' in indicators
         assert 'rsi' in indicators
         assert 'adx' not in indicators
+    
+    def test_calculate_all_bollinger_bands(self, sample_ohlcv):
+        """Test IndicatorEngine calculates Bollinger Bands from config."""
+        config = {
+            'bb_period': 20,
+            'bb_std_dev': 2.0,
+        }
+
+        indicators = IndicatorEngine.calculate_all(sample_ohlcv, config)
+
+        assert 'bb_upper' in indicators
+        assert 'bb_middle' in indicators
+        assert 'bb_lower' in indicators
+
+        for key in ('bb_upper', 'bb_middle', 'bb_lower'):
+            assert isinstance(indicators[key], pd.Series)
+            assert len(indicators[key]) == len(sample_ohlcv)
     
     def test_calculate_smart_hodler_indicators(self, sample_ohlcv):
         """Test Smart Hodler preset indicator calculation."""

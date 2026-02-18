@@ -48,7 +48,7 @@ GoldenGibbon follows a strict unidirectional data flow through isolated layers:
          │
          ▼
 ┌──────────────────┐
-│ Strategy Engine  │ ◀─── Smart Hodler, [Future Strategies]
+│ Strategy Engine  │ ◀─── Smart Hodler, Mean Reversion, [Future Strategies]
 └────────┬─────────┘
          │
          ▼
@@ -101,6 +101,7 @@ GoldenGibbon follows a strict unidirectional data flow through isolated layers:
 
 - 🚧 **Strategy Base Class** — Abstract interface for strategy implementations
 - 🚧 **Smart Hodler Strategy** — Trend-following 15m/1H strategy with tiered exits
+- 🚧 **Mean Reversion Strategy** — Bollinger Band fade in range-bound markets (regime-complementary to Smart Hodler)
 - 🚧 **Risk Engine** — Position sizing, trailing stops, hard stops
 - 🚧 **Portfolio Model** — Track balance, positions, equity curve
 - 🚧 **Backtest Runner** — Candle-by-candle simulation with metrics
@@ -118,6 +119,7 @@ GoldenGibbon follows a strict unidirectional data flow through isolated layers:
 - 🔮 **Paper Trading Mode** — Test strategies with live data
 - 🔮 **Live Trading** — Binance integration with order lifecycle
 - 🔮 **Multi-Strategy Support** — Run multiple strategies in parallel
+- 🔮 **Regime-Based Allocation** — Automatic capital routing between Smart Hodler and Mean Reversion
 - 🔮 **Parameter Optimization** — Grid search and walk-forward analysis
 
 ---
@@ -153,7 +155,44 @@ See [`strategy_smart_hodler.md`](strategy_smart_hodler.md) for full specificatio
 
 ---
 
-## 🚀 Quick Start
+## � Mean Reversion Strategy
+
+The second strategy is **Mean Reversion** — a contrarian system designed to profit in range-bound markets where Smart Hodler sits idle.
+
+### Signal Logic
+
+**BUY** when all conditions are met:
+- `Close ≤ Lower Bollinger Band (20, 2σ)` (price overextended)
+- `RSI(14) < 30` (oversold confirmation)
+- `ADX(14) < 25` (range-bound regime — **inverse** of Smart Hodler)
+- `Volume > 1.5 × SMA(20)` (capitulation spike)
+- **Hourly confirmation:** `RSI(14) > 35` + `Close > EMA(50)`
+
+**SELL** with tiered exits:
+1. **Middle reversion (50%):** `Close ≥ SMA(20)` — price reached the mean
+2. **Full reversion (100%):** `Close ≥ Upper Band` OR `RSI > 70`
+3. **Regime shift (100%):** `ADX rises > 30` — market started trending
+
+### Risk Management
+
+- **Position sizing:** 75% of capital (no scale-in — shorter trades)
+- **Hard stop:** 2% max drawdown per trade
+- **Time stop:** Exit after 16 candles (~4h) if middle band not reached
+- **No trailing stop** — targets a fixed level (the mean)
+- **Cooldown:** 8 candles (~2h) after stop-loss only; no cooldown after profit exits
+
+### Regime Complementarity
+
+| Market Regime | Smart Hodler | Mean Reversion |
+|---|---|---|
+| Trending (ADX > 25) | **Active** | Inactive |
+| Range-bound (ADX < 25) | Inactive | **Active** |
+
+See [`strategy_mean_reversion.md`](strategy_mean_reversion.md) for full specification.
+
+---
+
+## �🚀 Quick Start
 
 ### Prerequisites
 
@@ -268,9 +307,9 @@ Current test coverage: **32 passing tests** across indicators and data layer.
 
 Progress is tracked in [`kanban.md`](kanban.md). Current status:
 
-### Phase 1: Foundation & Backtest Engine (40% Complete)
-- ✅ Tasks 1.1–1.9 (Project setup, data layer, indicators)
-- 🚧 Tasks 1.10–1.22 (Strategy, risk, backtest runner)
+### Phase 1: Foundation & Backtest Engine (35% Complete)
+- ✅ Tasks 1.1–1.10 (Project setup, data layer, indicators, strategy base)
+- 🚧 Tasks 1.11–1.28 (Smart Hodler, Mean Reversion, risk, backtest runner)
 
 ### Phase 2: Real-Time Interface (0% Complete)
 - 📋 Tasks 2.1–2.52 (FastAPI backend, React frontend, WebSocket)
@@ -360,7 +399,8 @@ This is a personal trading platform under active development. Contributions, sug
 
 - [Blueprint](blueprint.md) — Detailed technical specification
 - [Kanban](kanban.md) — Development roadmap and task tracking
-- [Smart Hodler Strategy](strategy_smart_hodler.md) — Full strategy specification
+- [Smart Hodler Strategy](strategy_smart_hodler.md) — Trend-following strategy specification
+- [Mean Reversion Strategy](strategy_mean_reversion.md) — Mean-reversion strategy specification
 
 ---
 

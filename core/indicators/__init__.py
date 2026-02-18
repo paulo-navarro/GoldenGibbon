@@ -8,6 +8,7 @@ from core.indicators.engine import IndicatorEngine, calculate_smart_hodler_indic
 from core.indicators.technical import (
     calculate_adx,
     calculate_atr,
+    calculate_bollinger_bands,
     calculate_ema,
     calculate_rsi,
     calculate_sma,
@@ -23,4 +24,5 @@ __all__ = [
     "calculate_atr",
     "calculate_rsi",
     "calculate_adx",
+    "calculate_bollinger_bands",
 ]

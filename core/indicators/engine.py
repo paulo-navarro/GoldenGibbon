@@ -12,6 +12,7 @@ import pandas as pd
 from core.indicators.technical import (
     calculate_adx,
     calculate_atr,
+    calculate_bollinger_bands,
     calculate_ema,
     calculate_rsi,
     calculate_sma,
@@ -83,6 +84,17 @@ class IndicatorEngine:
         # Volume SMA
         if 'volume_sma_period' in config:
             indicators['volume_sma'] = calculate_sma(df['volume'], config['volume_sma_period'])
+        
+        # Bollinger Bands
+        if 'bb_period' in config:
+            bb_upper, bb_middle, bb_lower = calculate_bollinger_bands(
+                df['close'],
+                config['bb_period'],
+                config.get('bb_std_dev', 2.0),
+            )
+            indicators['bb_upper'] = bb_upper
+            indicators['bb_middle'] = bb_middle
+            indicators['bb_lower'] = bb_lower
         
         return indicators
 

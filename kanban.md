@@ -1,6 +1,6 @@
 # Kanban – Crypto Trading Platform
 
-> Updated: 2026-02-17
+> Updated: 2026-02-18
 
 ---
 
@@ -20,8 +20,10 @@
 - [x] **1.6** MarketData model – dataclass with `symbol`, `timeframe`, `candles`, `indicators`
 - [x] **1.7** Data Loader – fetch historical candles from Binance API + cache to Postgres
 - [x] **1.8** Indicator Engine – pure functions: EMA, ADX, ATR, RSI, Volume SMA
+- [x] **1.8a** Bollinger Bands indicator – `calculate_bollinger_bands(close, period, std_dev)` → upper, middle, lower
+- [x] **1.8b** Bollinger Bands unit tests – validate against known values
 - [x] **1.9** Indicator unit tests – validate outputs against known values
-- [ ] **1.10** Strategy base class – `Strategy.decide(market_data, portfolio) → Signal`
+- [x] **1.10** Strategy base class – `Strategy.decide(market_data, portfolio) → Signal`
 - [ ] **1.11** Smart Hodler strategy – full signal logic (BUY / SELL 100% / SELL 50% / HOLD)
 - [ ] **1.12** Smart Hodler state machine – FLAT → POSITION → REDUCED → COOLDOWN
 - [ ] **1.13** Smart Hodler session filter – dead zone logic (weekends + overnight UTC)
@@ -34,6 +36,12 @@
 - [ ] **1.20** Backtest metrics – total return, drawdown, win rate, Sharpe ratio, vs Buy & Hold
 - [ ] **1.21** Backtest reporting – output results to console + persist to Postgres
 - [ ] **1.22** Logging – structured logs for every decision (signal, order, fill, stop)
+- [ ] **1.23** MarketData multi-timeframe – extend model to support 15m + 1H candles/indicators
+- [ ] **1.24** Mean Reversion strategy – full signal logic (BUY / SELL 50% / SELL 100% / HOLD)
+- [ ] **1.25** Mean Reversion state machine – FLAT → POSITION → REDUCED → COOLDOWN (no cooldown on profit exits)
+- [ ] **1.26** Mean Reversion config – add `mean_reversion` section to `strategies.yaml`
+- [ ] **1.27** Mean Reversion time stop – exit after 16 candles if middle BB not reached
+- [ ] **1.28** Mean Reversion unit tests – signal logic, state transitions, regime filter
 
 ---
 
@@ -159,7 +167,7 @@
 - [ ] **5.1** Strategy plugin system – register new strategies without modifying core
 - [ ] **5.2** Multi-strategy support – run multiple strategies in parallel via Celery workers
 - [ ] **5.3** Strategy comparison – side-by-side backtest metrics across strategies
-- [ ] **5.4** Portfolio allocation engine – distribute capital across strategies
+- [ ] **5.4** Portfolio allocation engine – distribute capital across strategies (regime-based: Smart Hodler ↔ Mean Reversion)
 - [ ] **5.5** Advanced dashboard features – strategy switcher, parameter tuning UI
 - [ ] **5.6** Parameter optimization – grid search / walk-forward analysis for strategy tuning
 - [ ] **5.7** Config migration – Hybrid loader (DB → ENV → YAML priority), strategy_configs table, admin UI CRUD
