@@ -112,11 +112,19 @@ class MarketData(BaseModel):
     Normalized market data passed through the system.
     
     Contains candles and calculated indicators for a specific symbol and timeframe.
+    Optionally carries a secondary (confirmation) timeframe for multi-timeframe
+    strategies (e.g., 15m primary + 1H confirmation).
     """
+    # ── Primary timeframe (required) ─────────────────────────────────────
     symbol: str
     timeframe: str
     candles: pd.DataFrame  # Columns: open_time, open, high, low, close, volume
     indicators: Dict[str, pd.Series] = Field(default_factory=dict)
+
+    # ── Secondary / confirmation timeframe (optional) ────────────────────
+    secondary_timeframe: Optional[str] = None
+    secondary_candles: Optional[pd.DataFrame] = None
+    secondary_indicators: Dict[str, pd.Series] = Field(default_factory=dict)
     
     @field_validator("symbol")
     @classmethod
@@ -134,6 +142,67 @@ class MarketData(BaseModel):
         if v not in valid:
             raise ValueError(f"Invalid timeframe: {v}. Must be one of {valid}")
         return v
+    
+    @field_validator("secondary_timeframe")
+    @classmethod
+    def validate_secondary_timeframe(cls, v: Optional[str]) -> Optional[str]:
+        """Validate secondary timeframe format when provided."""
+        if v is not None:
+            valid = {"1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"}
+            if v not in valid:
+                raise ValueError(f"Invalid secondary timeframe: {v}. Must be one of {valid}")
+        return v
+    
+    @model_validator(mode='after')
+    def validate_secondary_fields(self) -> 'MarketData':
+        """Ensure secondary_timeframe and secondary_candles are both set or both unset."""
+        has_tf = self.secondary_timeframe is not None
+        has_candles = self.secondary_candles is not None
+        if has_tf != has_candles:
+            raise ValueError(
+                "secondary_timeframe and secondary_candles must both be set or both be None"
+            )
+        return self
+    
+    def get_indicator(self, name: str, timeframe: Optional[str] = None) -> pd.Series:
+        """
+        Get an indicator by name, optionally from a specific timeframe.
+        
+        Args:
+            name: Indicator key (e.g. 'ema_50', 'rsi', 'adx').
+            timeframe: Timeframe to read from. Defaults to primary.
+                       Pass secondary_timeframe to read from confirmation data.
+        
+        Returns:
+            pd.Series with the indicator values.
+        
+        Raises:
+            KeyError: If the indicator or timeframe is not found.
+        """
+        if timeframe is None or timeframe == self.timeframe:
+            if name not in self.indicators:
+                raise KeyError(
+                    f"Indicator '{name}' not found in primary ({self.timeframe}) indicators. "
+                    f"Available: {list(self.indicators.keys())}"
+                )
+            return self.indicators[name]
+        elif timeframe == self.secondary_timeframe:
+            if name not in self.secondary_indicators:
+                raise KeyError(
+                    f"Indicator '{name}' not found in secondary ({self.secondary_timeframe}) indicators. "
+                    f"Available: {list(self.secondary_indicators.keys())}"
+                )
+            return self.secondary_indicators[name]
+        else:
+            raise KeyError(
+                f"Timeframe '{timeframe}' not available. "
+                f"Primary: {self.timeframe}, Secondary: {self.secondary_timeframe}"
+            )
+    
+    @property
+    def has_secondary(self) -> bool:
+        """Check if secondary timeframe data is available."""
+        return self.secondary_timeframe is not None
     
     model_config = ConfigDict(arbitrary_types_allowed=True)  # Allow pandas DataFrame
 
@@ -318,6 +387,35 @@ class StrategyConditions(BaseModel):
         ])
 
 
+class MeanReversionConditions(BaseModel):
+    """
+    Conditions checklist for Mean Reversion strategy.
+
+    Used for debugging and UI display to show which conditions are met.
+    The BUY gate requires all seven conditions simultaneously.
+    """
+    close_below_lower_bb: bool = False
+    rsi_oversold: bool = False
+    adx_below_threshold: bool = False
+    volume_spike: bool = False
+    hourly_rsi_ok: bool = False
+    hourly_close_above_ema: bool = False
+    session_filter_pass: bool = False
+
+    @property
+    def all_buy_conditions_met(self) -> bool:
+        """Check if all BUY conditions are satisfied."""
+        return all([
+            self.close_below_lower_bb,
+            self.rsi_oversold,
+            self.adx_below_threshold,
+            self.volume_spike,
+            self.hourly_rsi_ok,
+            self.hourly_close_above_ema,
+            self.session_filter_pass,
+        ])
+
+
 class BacktestMetrics(BaseModel):
     """
     Backtest results and metrics.
@@ -391,6 +489,7 @@ __all__ = [
     "Order",
     "Portfolio",
     "StrategyConditions",
+    "MeanReversionConditions",
     "BacktestMetrics",
     "PortfolioSnapshot",
 ]

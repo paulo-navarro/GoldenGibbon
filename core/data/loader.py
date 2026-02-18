@@ -14,6 +14,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from core.data.binance_client import BinanceClient
+from core.indicators.engine import IndicatorEngine
 from core.models import Candle, MarketData
 from db.models import CandleRecord
 from db.utils import candle_to_orm, candles_to_dataframe, orm_to_candle
@@ -339,6 +340,82 @@ class DataLoader:
         
         logger.debug(
             f"Loaded MarketData: {symbol} {timeframe} with {len(df)} candles"
+        )
+        
+        return market_data
+    
+    def get_multi_timeframe_market_data(
+        self,
+        symbol: str,
+        primary_timeframe: str,
+        secondary_timeframe: str,
+        strategy_config: Dict,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        lookback_days: Optional[int] = None,
+    ) -> MarketData:
+        """
+        Load market data for two timeframes and return a single MarketData object.
+        
+        Fetches candles for both the primary and secondary timeframes, calculates
+        indicators for each using the strategy config, and returns a unified
+        MarketData instance with ``secondary_*`` fields populated.
+        
+        Args:
+            symbol: Trading symbol (e.g. "BTCUSDT").
+            primary_timeframe: Primary timeframe (e.g. "15m").
+            secondary_timeframe: Confirmation timeframe (e.g. "1h").
+            strategy_config: Strategy config dict with indicator parameters.
+            start_date: Start date (optional, mutually exclusive with lookback_days).
+            end_date: End date (optional, defaults to now).
+            lookback_days: Days to look back (optional).
+        
+        Returns:
+            MarketData with both primary and secondary candles/indicators populated.
+        """
+        # Load primary timeframe
+        primary_md = self.get_market_data(
+            symbol=symbol,
+            timeframe=primary_timeframe,
+            start_date=start_date,
+            end_date=end_date,
+            lookback_days=lookback_days,
+        )
+        
+        # Load secondary timeframe
+        secondary_md = self.get_market_data(
+            symbol=symbol,
+            timeframe=secondary_timeframe,
+            start_date=start_date,
+            end_date=end_date,
+            lookback_days=lookback_days,
+        )
+        
+        # Calculate indicators — same function, different data
+        primary_indicators = IndicatorEngine.calculate_all(
+            primary_md.candles, strategy_config
+        )
+        secondary_indicators = IndicatorEngine.calculate_all(
+            secondary_md.candles, strategy_config
+        )
+        
+        # Build unified MarketData
+        market_data = MarketData(
+            symbol=symbol,
+            timeframe=primary_timeframe,
+            candles=primary_md.candles,
+            indicators=primary_indicators,
+            secondary_timeframe=secondary_timeframe,
+            secondary_candles=secondary_md.candles,
+            secondary_indicators=secondary_indicators,
+        )
+        
+        logger.info(
+            f"Loaded multi-TF MarketData: {symbol} "
+            f"{primary_timeframe} ({len(primary_md.candles)} candles, "
+            f"{len(primary_indicators)} indicators) + "
+            f"{secondary_timeframe} ({len(secondary_md.candles)} candles, "
+            f"{len(secondary_indicators)} indicators)"
         )
         
         return market_data

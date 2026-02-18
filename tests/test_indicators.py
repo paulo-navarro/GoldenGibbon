@@ -752,3 +752,89 @@ class TestIndicatorIntegration:
         # All should be Series with correct length
         for name, series in indicators.items():
             assert len(series) == len(df)
+
+
+# ── Multi-Timeframe Indicator Tests ──────────────────────────────────────────
+
+
+class TestMultiTimeframeIndicators:
+    """Tests that calculate_all works identically on any timeframe DataFrame."""
+
+    @pytest.fixture
+    def smart_hodler_config(self):
+        """Strategy config matching strategies.yaml smart_hodler section."""
+        return {
+            'ema_fast': 50,
+            'ema_slow': 200,
+            'adx_period': 14,
+            'atr_period': 14,
+            'volume_sma_period': 20,
+            'ema_hourly': 21,
+            'rsi_period': 14,
+        }
+
+    def test_calculate_all_on_15m(self, sample_ohlcv, smart_hodler_config):
+        """calculate_all works on 15m data."""
+        result = IndicatorEngine.calculate_all(sample_ohlcv, smart_hodler_config)
+        assert isinstance(result, dict)
+        assert 'ema_fast' in result
+        assert 'adx' in result
+
+    def test_calculate_all_on_1h(self, sample_ohlcv_1h, smart_hodler_config):
+        """calculate_all works identically on 1H data."""
+        result = IndicatorEngine.calculate_all(sample_ohlcv_1h, smart_hodler_config)
+        assert isinstance(result, dict)
+        assert 'ema_fast' in result
+        assert 'adx' in result
+
+    def test_same_keys_both_timeframes(self, sample_ohlcv, sample_ohlcv_1h, smart_hodler_config):
+        """Both timeframes produce the same set of indicator keys."""
+        primary = IndicatorEngine.calculate_all(sample_ohlcv, smart_hodler_config)
+        secondary = IndicatorEngine.calculate_all(sample_ohlcv_1h, smart_hodler_config)
+        assert set(primary.keys()) == set(secondary.keys())
+
+    def test_series_length_matches_input(self, sample_ohlcv, sample_ohlcv_1h, smart_hodler_config):
+        """Each indicator Series has the same length as its input DataFrame."""
+        primary = IndicatorEngine.calculate_all(sample_ohlcv, smart_hodler_config)
+        secondary = IndicatorEngine.calculate_all(sample_ohlcv_1h, smart_hodler_config)
+
+        for name, series in primary.items():
+            assert len(series) == len(sample_ohlcv), f"primary {name}"
+        for name, series in secondary.items():
+            assert len(series) == len(sample_ohlcv_1h), f"secondary {name}"
+
+    def test_values_differ_across_timeframes(self, sample_ohlcv, sample_ohlcv_1h, smart_hodler_config):
+        """Indicator values computed on different data are different."""
+        primary = IndicatorEngine.calculate_all(sample_ohlcv, smart_hodler_config)
+        secondary = IndicatorEngine.calculate_all(sample_ohlcv_1h, smart_hodler_config)
+
+        p_last = primary['ema_fast'].dropna().iloc[-1]
+        s_last = secondary['ema_fast'].dropna().iloc[-1]
+        assert p_last != s_last
+
+    def test_bollinger_bands_both_timeframes(self, sample_ohlcv, sample_ohlcv_1h):
+        """Bollinger Bands are calculated on whichever DataFrame is passed."""
+        config = {'bb_period': 20, 'bb_std_dev': 2.0}
+        primary = IndicatorEngine.calculate_all(sample_ohlcv, config)
+        secondary = IndicatorEngine.calculate_all(sample_ohlcv_1h, config)
+
+        for result in (primary, secondary):
+            assert 'bb_upper' in result
+            assert 'bb_middle' in result
+            assert 'bb_lower' in result
+
+    def test_smart_hodler_preset_still_works(self, sample_ohlcv):
+        """calculate_smart_hodler_indicators is unaffected by the refactor."""
+        config = {
+            'ema_fast': 50,
+            'ema_slow': 200,
+            'adx_period': 14,
+            'atr_period': 14,
+            'rsi_period': 14,
+            'volume_sma_period': 20,
+            'ema_hourly': 21,
+        }
+        hodler_inds = calculate_smart_hodler_indicators(sample_ohlcv, config)
+        assert 'ema_50' in hodler_inds
+        assert 'ema_200' in hodler_inds
+        assert 'adx' in hodler_inds

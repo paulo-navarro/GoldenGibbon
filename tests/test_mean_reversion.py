@@ -1,0 +1,513 @@
+"""
+Tests for the Mean Reversion strategy signal logic.
+
+Covers:
+    - Initialization and reset
+    - BUY path (all 7 conditions, each condition individually false)
+    - SELL_FULL path (upper BB, RSI overbought, ADX regime shift)
+    - SELL_HALF path (middle BB reversion)
+    - Signal priority (SELL_FULL > SELL_HALF > BUY > HOLD)
+    - State routing (FLAT, POSITION, REDUCED, COOLDOWN)
+    - Edge cases (NaN indicators, missing secondary data, config defaults)
+"""
+
+import math
+from unittest.mock import MagicMock
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from core.models import (
+    MarketData,
+    MeanReversionConditions,
+    Portfolio,
+    Signal,
+    StrategyState,
+)
+from core.strategies import MeanReversion
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+DEFAULT_CONFIG = {
+    "adx_threshold": 25,
+    "rsi_oversold": 30,
+    "rsi_overbought": 70,
+    "adx_regime_shift": 30,
+    "volume_spike_multiplier": 1.5,
+    "hourly_rsi_threshold": 35,
+}
+
+N = 50  # Primary bars
+N_1H = 15  # Secondary (hourly) bars
+
+
+def _make_series(value, length=N):
+    """Create a constant pd.Series of the given length."""
+    return pd.Series([value] * length, dtype=float)
+
+
+def _make_candles(close_val=90.0, volume_val=8000.0, length=N):
+    """Create a simple OHLCV DataFrame with constant values."""
+    dates = pd.date_range("2024-01-01", periods=length, freq="15min")
+    return pd.DataFrame(
+        {
+            "open": [close_val] * length,
+            "high": [close_val + 1] * length,
+            "low": [close_val - 1] * length,
+            "close": [close_val] * length,
+            "volume": [volume_val] * length,
+        },
+        index=dates,
+    )
+
+
+def _make_candles_1h(close_val=110.0, volume_val=24000.0, length=N_1H):
+    """Create a simple 1H OHLCV DataFrame with constant values."""
+    dates = pd.date_range("2024-01-01", periods=length, freq="1h")
+    return pd.DataFrame(
+        {
+            "open": [close_val] * length,
+            "high": [close_val + 1] * length,
+            "low": [close_val - 1] * length,
+            "close": [close_val] * length,
+            "volume": [volume_val] * length,
+        },
+        index=dates,
+    )
+
+
+def _make_market_data(
+    *,
+    close=90.0,
+    volume=8000.0,
+    bb_lower=95.0,
+    bb_middle=100.0,
+    bb_upper=105.0,
+    rsi=25.0,
+    adx=20.0,
+    volume_sma=5000.0,
+    rsi_1h_val=50.0,
+    ema_50_1h_val=100.0,
+    close_1h=110.0,
+    include_secondary=True,
+) -> MarketData:
+    """
+    Build a MarketData object with hand-crafted indicators.
+
+    By default all 7 BUY conditions are met:
+        1. close_below_lower_bb:   close (90) <= bb_lower (95)     ✓
+        2. rsi_oversold:           rsi (25) < 30                   ✓
+        3. adx_below_threshold:    adx (20) < 25                   ✓
+        4. volume_spike:           volume (8000) > 1.5 × 5000      ✓
+        5. hourly_rsi_ok:          rsi_1h (50) > 35                ✓
+        6. hourly_close_above_ema: close_1h (110) > ema_50_1h (100)✓
+        7. session_filter_pass:    stubbed True                    ✓
+    """
+    candles = _make_candles(close_val=close, volume_val=volume)
+
+    primary_indicators = {
+        "bb_lower": _make_series(bb_lower),
+        "bb_middle": _make_series(bb_middle),
+        "bb_upper": _make_series(bb_upper),
+        "rsi": _make_series(rsi),
+        "adx": _make_series(adx),
+        "volume_sma": _make_series(volume_sma),
+    }
+
+    kwargs = dict(
+        symbol="BTCUSDT",
+        timeframe="15m",
+        candles=candles,
+        indicators=primary_indicators,
+    )
+
+    if include_secondary:
+        candles_1h = _make_candles_1h(close_val=close_1h)
+        kwargs.update(
+            secondary_timeframe="1h",
+            secondary_candles=candles_1h,
+            secondary_indicators={
+                "rsi": _make_series(rsi_1h_val, N_1H),
+                "ema_50": _make_series(ema_50_1h_val, N_1H),
+            },
+        )
+
+    return MarketData(**kwargs)
+
+
+def _portfolio() -> Portfolio:
+    """Minimal Portfolio mock."""
+    return MagicMock(spec=Portfolio)
+
+
+# ── Initialization & Reset ───────────────────────────────────────────────────
+
+
+class TestMeanReversionInit:
+    """Verify constructor defaults and reset behavior."""
+
+    def test_name_returns_mean_reversion(self):
+        s = MeanReversion(DEFAULT_CONFIG)
+        assert s.name == "mean_reversion"
+
+    def test_initial_state_is_flat(self):
+        s = MeanReversion(DEFAULT_CONFIG)
+        assert s.state == StrategyState.FLAT
+
+    def test_initial_conditions_type(self):
+        s = MeanReversion(DEFAULT_CONFIG)
+        assert isinstance(s.conditions, MeanReversionConditions)
+
+    def test_initial_conditions_all_false(self):
+        s = MeanReversion(DEFAULT_CONFIG)
+        assert not s.conditions.all_buy_conditions_met
+
+    def test_reset_clears_state(self):
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.POSITION
+        s.reset()
+        assert s.state == StrategyState.FLAT
+
+    def test_reset_clears_conditions(self):
+        s = MeanReversion(DEFAULT_CONFIG)
+        md = _make_market_data()
+        s.decide(md, _portfolio())
+        assert s.conditions.close_below_lower_bb  # confirm it was set
+        s.reset()
+        assert not s.conditions.close_below_lower_bb
+
+    def test_import_from_package(self):
+        from core.strategies import MeanReversion as Imported
+
+        assert Imported is MeanReversion
+
+
+# ── BUY Signal (FLAT state) ─────────────────────────────────────────────────
+
+
+class TestBuySignal:
+    """BUY requires all 7 conditions met AND state == FLAT."""
+
+    def test_buy_all_conditions_met(self):
+        s = MeanReversion(DEFAULT_CONFIG)
+        md = _make_market_data()
+        assert s.decide(md, _portfolio()) == Signal.BUY
+
+    def test_buy_conditions_snapshot_updated(self):
+        s = MeanReversion(DEFAULT_CONFIG)
+        md = _make_market_data()
+        s.decide(md, _portfolio())
+        c = s.conditions
+        assert c.close_below_lower_bb
+        assert c.rsi_oversold
+        assert c.adx_below_threshold
+        assert c.volume_spike
+        assert c.hourly_rsi_ok
+        assert c.hourly_close_above_ema
+        assert c.session_filter_pass
+
+    # ── Each condition individually false → HOLD ─────────────────────────
+
+    def test_hold_when_close_above_lower_bb(self):
+        """Close > lower BB → close_below_lower_bb = False."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        md = _make_market_data(close=96.0, bb_lower=95.0)
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+    def test_buy_when_close_equals_lower_bb(self):
+        """Close == lower BB → close_below_lower_bb = True (<=)."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        md = _make_market_data(close=95.0, bb_lower=95.0)
+        assert s.decide(md, _portfolio()) == Signal.BUY
+
+    def test_hold_when_rsi_above_oversold(self):
+        """RSI >= 30 → rsi_oversold = False."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        md = _make_market_data(rsi=35.0)
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+    def test_hold_when_adx_above_threshold(self):
+        """ADX >= 25 → adx_below_threshold = False (market is trending)."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        md = _make_market_data(adx=30.0)
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+    def test_hold_when_volume_below_spike(self):
+        """Volume <= 1.5 × SMA → volume_spike = False."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        md = _make_market_data(volume=7000.0, volume_sma=5000.0)
+        # 7000 < 1.5 × 5000 = 7500 → no spike
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+    def test_hold_when_hourly_rsi_below_threshold(self):
+        """1H RSI <= 35 → hourly_rsi_ok = False (falling knife)."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        md = _make_market_data(rsi_1h_val=30.0)
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+    def test_hold_when_hourly_close_below_ema(self):
+        """1H close <= EMA(50) → hourly_close_above_ema = False."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        md = _make_market_data(close_1h=95.0, ema_50_1h_val=100.0)
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+    def test_no_buy_from_reduced(self):
+        """No scale-in: BUY is NOT allowed from REDUCED state."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.REDUCED
+        md = _make_market_data()
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+
+# ── SELL_FULL Signal ─────────────────────────────────────────────────────────
+
+
+class TestSellFullSignal:
+    """SELL_FULL: upper BB, RSI overbought, or ADX regime shift."""
+
+    def test_sell_full_on_upper_bb(self):
+        """Close >= upper BB → SELL_FULL from POSITION."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.POSITION
+        md = _make_market_data(close=106.0, bb_upper=105.0)
+        assert s.decide(md, _portfolio()) == Signal.SELL_FULL
+
+    def test_sell_full_on_close_equals_upper_bb(self):
+        """Close == upper BB → SELL_FULL (>=)."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.POSITION
+        md = _make_market_data(close=105.0, bb_upper=105.0)
+        assert s.decide(md, _portfolio()) == Signal.SELL_FULL
+
+    def test_sell_full_on_rsi_overbought(self):
+        """RSI > 70 → SELL_FULL from POSITION."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.POSITION
+        md = _make_market_data(close=98.0, rsi=75.0)
+        assert s.decide(md, _portfolio()) == Signal.SELL_FULL
+
+    def test_sell_full_on_adx_regime_shift(self):
+        """ADX > 30 → SELL_FULL from POSITION (market started trending)."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.POSITION
+        md = _make_market_data(close=98.0, adx=35.0)
+        assert s.decide(md, _portfolio()) == Signal.SELL_FULL
+
+    def test_sell_full_from_reduced(self):
+        """SELL_FULL is also reachable from REDUCED."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.REDUCED
+        md = _make_market_data(close=106.0, bb_upper=105.0)
+        assert s.decide(md, _portfolio()) == Signal.SELL_FULL
+
+    def test_sell_full_not_from_flat(self):
+        """SELL_FULL is NOT produced when state is FLAT."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.FLAT
+        # Close above upper BB + RSI overbought, but FLAT → no sell
+        md = _make_market_data(close=106.0, bb_upper=105.0, rsi=75.0)
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+
+# ── SELL_HALF Signal ─────────────────────────────────────────────────────────
+
+
+class TestSellHalfSignal:
+    """SELL_HALF: close >= middle BB (SMA 20) — price reverted to mean."""
+
+    def test_sell_half_on_middle_bb(self):
+        """Close >= middle BB → SELL_HALF from POSITION."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.POSITION
+        md = _make_market_data(close=101.0, bb_middle=100.0)
+        assert s.decide(md, _portfolio()) == Signal.SELL_HALF
+
+    def test_sell_half_on_close_equals_middle_bb(self):
+        """Close == middle BB → SELL_HALF (>=)."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.POSITION
+        md = _make_market_data(close=100.0, bb_middle=100.0)
+        assert s.decide(md, _portfolio()) == Signal.SELL_HALF
+
+    def test_hold_when_close_below_middle_bb(self):
+        """Close < middle BB from POSITION → HOLD (hasn't reverted yet)."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.POSITION
+        md = _make_market_data(close=98.0, bb_middle=100.0)
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+    def test_sell_half_not_from_reduced(self):
+        """SELL_HALF is NOT produced from REDUCED state."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.REDUCED
+        md = _make_market_data(close=101.0, bb_middle=100.0)
+        # REDUCED can only get SELL_FULL or HOLD
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+    def test_sell_half_not_from_flat(self):
+        """SELL_HALF is NOT produced from FLAT state."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.FLAT
+        md = _make_market_data(close=101.0, bb_middle=100.0)
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+
+# ── Signal Priority ──────────────────────────────────────────────────────────
+
+
+class TestSignalPriority:
+    """SELL_FULL wins over SELL_HALF wins over BUY."""
+
+    def test_sell_full_beats_sell_half(self):
+        """Close >= upper BB also >= middle BB, but SELL_FULL wins."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.POSITION
+        # Close above upper BB (→ SELL_FULL) and also above middle BB (→ SELL_HALF)
+        md = _make_market_data(close=106.0, bb_middle=100.0, bb_upper=105.0)
+        assert s.decide(md, _portfolio()) == Signal.SELL_FULL
+
+    def test_rsi_overbought_beats_sell_half(self):
+        """RSI > 70 triggers SELL_FULL even when close >= middle BB."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.POSITION
+        md = _make_market_data(close=101.0, bb_middle=100.0, rsi=75.0)
+        assert s.decide(md, _portfolio()) == Signal.SELL_FULL
+
+    def test_adx_regime_shift_beats_sell_half(self):
+        """ADX > 30 triggers SELL_FULL even when close >= middle BB."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.POSITION
+        md = _make_market_data(close=101.0, bb_middle=100.0, adx=35.0)
+        assert s.decide(md, _portfolio()) == Signal.SELL_FULL
+
+
+# ── State Routing ────────────────────────────────────────────────────────────
+
+
+class TestStateRouting:
+    """Verify signal gating per strategy state."""
+
+    def test_cooldown_always_hold(self):
+        """COOLDOWN state always returns HOLD regardless of conditions."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.COOLDOWN
+        md = _make_market_data()
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+    def test_no_buy_from_position(self):
+        """POSITION state cannot produce BUY."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.POSITION
+        md = _make_market_data()
+        assert s.decide(md, _portfolio()) != Signal.BUY
+
+    def test_hold_from_flat_when_conditions_not_met(self):
+        """FLAT + conditions not met → HOLD."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        md = _make_market_data(rsi=50.0)  # RSI not oversold
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+
+# ── Edge Cases ───────────────────────────────────────────────────────────────
+
+
+class TestEdgeCases:
+    """NaN handling, missing data, and boundary conditions."""
+
+    def test_hold_when_no_secondary_data(self):
+        """Missing secondary timeframe → HOLD (conservative)."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        md = _make_market_data(include_secondary=False)
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+    def test_hold_when_primary_indicator_nan(self):
+        """NaN in a primary indicator → HOLD."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        md = _make_market_data()
+        md.indicators["rsi"].iloc[-1] = float("nan")
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+    def test_hold_when_primary_indicator_missing(self):
+        """Missing required primary indicator key → HOLD."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        md = _make_market_data()
+        del md.indicators["bb_lower"]
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+    def test_hold_when_secondary_indicator_missing(self):
+        """Missing required secondary indicator key → HOLD."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        md = _make_market_data()
+        del md.secondary_indicators["rsi"]
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+    def test_hold_when_hourly_rsi_nan(self):
+        """NaN in hourly RSI → hourly_rsi_ok stays False → HOLD."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        nan_rsi = _make_series(float("nan"), N_1H)
+        md = _make_market_data()
+        md.secondary_indicators["rsi"] = nan_rsi
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+    def test_hold_when_hourly_ema_nan(self):
+        """NaN in hourly EMA 50 → hourly_close_above_ema stays False → HOLD."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        md = _make_market_data()
+        md.secondary_indicators["ema_50"] = _make_series(float("nan"), N_1H)
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+    def test_conditions_updated_every_call(self):
+        """Conditions snapshot is refreshed on each decide() call."""
+        s = MeanReversion(DEFAULT_CONFIG)
+
+        # First call: all conditions met
+        md1 = _make_market_data()
+        s.decide(md1, _portfolio())
+        assert s.conditions.rsi_oversold is True
+
+        # Second call: RSI not oversold
+        md2 = _make_market_data(rsi=50.0)
+        s.decide(md2, _portfolio())
+        assert s.conditions.rsi_oversold is False
+
+    def test_config_defaults_used_when_keys_missing(self):
+        """Strategy works with empty config (uses defaults)."""
+        s = MeanReversion({})
+        md = _make_market_data()
+        result = s.decide(md, _portfolio())
+        assert result == Signal.BUY
+
+    def test_volume_spike_threshold_uses_multiplier(self):
+        """Volume must exceed multiplier × SMA, not just SMA."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        # volume=7500, sma=5000 → 7500 == 1.5 × 5000, not strictly greater
+        md = _make_market_data(volume=7500.0, volume_sma=5000.0)
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+    def test_volume_spike_just_above_threshold(self):
+        """Volume just above multiplier × SMA → spike detected."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        md = _make_market_data(volume=7501.0, volume_sma=5000.0)
+        assert s.decide(md, _portfolio()) == Signal.BUY
+
+
+# ── Regime Complementarity with Smart Hodler ─────────────────────────────────
+
+
+class TestRegimeComplementarity:
+    """Mean Reversion and Smart Hodler should not BUY at the same time."""
+
+    def test_adx_filter_inverted_from_smart_hodler(self):
+        """Mean Reversion requires ADX < 25; Smart Hodler requires ADX > 25."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        # ADX at 30 → trending market → mean reversion won't buy
+        md = _make_market_data(adx=30.0)
+        s.decide(md, _portfolio())
+        assert s.conditions.adx_below_threshold is False
+
+        # ADX at 20 → range-bound → mean reversion will buy
+        md2 = _make_market_data(adx=20.0)
+        s.decide(md2, _portfolio())
+        assert s.conditions.adx_below_threshold is True

@@ -36,12 +36,12 @@
 - [ ] **1.20** Backtest metrics – total return, drawdown, win rate, Sharpe ratio, vs Buy & Hold
 - [ ] **1.21** Backtest reporting – output results to console + persist to Postgres
 - [ ] **1.22** Logging – structured logs for every decision (signal, order, fill, stop)
-- [ ] **1.23** MarketData multi-timeframe – extend model to support 15m + 1H candles/indicators
-- [ ] **1.24** Mean Reversion strategy – full signal logic (BUY / SELL 50% / SELL 100% / HOLD)
+- [x] **1.23** MarketData multi-timeframe – extend model to support 15m + 1H candles/indicators
+- [x] **1.24** Mean Reversion strategy – full signal logic (BUY / SELL 50% / SELL 100% / HOLD)
 - [ ] **1.25** Mean Reversion state machine – FLAT → POSITION → REDUCED → COOLDOWN (no cooldown on profit exits)
 - [ ] **1.26** Mean Reversion config – add `mean_reversion` section to `strategies.yaml`
 - [ ] **1.27** Mean Reversion time stop – exit after 16 candles if middle BB not reached
-- [ ] **1.28** Mean Reversion unit tests – signal logic, state transitions, regime filter
+- [x] **1.28** Mean Reversion unit tests – signal logic, state transitions, regime filter
 
 ---
 

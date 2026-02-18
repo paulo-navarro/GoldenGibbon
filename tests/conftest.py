@@ -192,3 +192,34 @@ def flat_market():
     }, index=dates)
     
     return df
+
+
+@pytest.fixture
+def sample_ohlcv_1h():
+    """
+    Sample 1H OHLCV data for multi-timeframe indicator testing.
+    
+    Returns 25 candles (≈ same time span as 100 × 15m candles) with
+    synthetic but realistic hourly data.
+    """
+    np.random.seed(42)  # Same seed for reproducibility
+    
+    dates = pd.date_range(start='2020-01-01', periods=25, freq='1h')
+    
+    # Random walk at hourly scale
+    close = 100 + np.cumsum(np.random.randn(25) * 1.0)
+    
+    high = close + np.abs(np.random.randn(25) * 0.6)
+    low = close - np.abs(np.random.randn(25) * 0.6)
+    open_price = close + np.random.randn(25) * 0.4
+    volume = np.abs(np.random.randn(25) * 4000 + 20000)
+    
+    df = pd.DataFrame({
+        'open': open_price,
+        'high': high,
+        'low': low,
+        'close': close,
+        'volume': volume
+    }, index=dates)
+    
+    return df

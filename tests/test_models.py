@@ -5,12 +5,15 @@ Unit tests for Pydantic models.
 from datetime import datetime
 from decimal import Decimal
 
+import numpy as np
+import pandas as pd
 import pytest
 from pydantic import ValidationError
 
 from core.models import (
     Candle,
     ExitReason,
+    MarketData,
     Order,
     OrderSide,
     OrderStatus,
@@ -279,6 +282,184 @@ class TestStrategyConditions:
             session_filter_pass=True,
         )
         assert conditions.all_buy_conditions_met is False
+
+
+# ── MarketData Tests ─────────────────────────────────────────────────────────
+
+def _make_ohlcv(periods: int = 20, freq: str = '15min') -> pd.DataFrame:
+    """Helper: build a minimal OHLCV DataFrame."""
+    np.random.seed(99)
+    dates = pd.date_range(start='2020-01-01', periods=periods, freq=freq)
+    close = 100 + np.cumsum(np.random.randn(periods) * 0.5)
+    return pd.DataFrame({
+        'open': close + np.random.randn(periods) * 0.1,
+        'high': close + np.abs(np.random.randn(periods) * 0.2),
+        'low':  close - np.abs(np.random.randn(periods) * 0.2),
+        'close': close,
+        'volume': np.abs(np.random.randn(periods) * 1000 + 5000),
+    }, index=dates)
+
+
+class TestMarketData:
+    """Tests for MarketData model."""
+
+    # ── Construction ──────────────────────────────────────────────────────
+
+    def test_primary_only(self):
+        """Create MarketData with only primary fields (backward compat)."""
+        df = _make_ohlcv()
+        md = MarketData(symbol="BTCUSDT", timeframe="15m", candles=df)
+        assert md.symbol == "BTCUSDT"
+        assert md.timeframe == "15m"
+        assert len(md.candles) == 20
+        assert md.indicators == {}
+        assert md.secondary_timeframe is None
+        assert md.secondary_candles is None
+        assert md.secondary_indicators == {}
+        assert md.has_secondary is False
+
+    def test_primary_with_indicators(self):
+        """Create MarketData with primary indicators."""
+        df = _make_ohlcv()
+        inds = {"ema_50": df['close'].ewm(span=10).mean()}
+        md = MarketData(symbol="ETHUSDT", timeframe="1h", candles=df, indicators=inds)
+        assert "ema_50" in md.indicators
+
+    def test_full_multi_timeframe(self):
+        """Create MarketData with both primary and secondary timeframes."""
+        df_15m = _make_ohlcv(80, '15min')
+        df_1h  = _make_ohlcv(20, '1h')
+        inds_15m = {"ema_50": df_15m['close'].ewm(span=50).mean()}
+        inds_1h  = {"ema_21": df_1h['close'].ewm(span=21).mean(), "rsi": df_1h['close']}
+
+        md = MarketData(
+            symbol="BTCUSDT",
+            timeframe="15m",
+            candles=df_15m,
+            indicators=inds_15m,
+            secondary_timeframe="1h",
+            secondary_candles=df_1h,
+            secondary_indicators=inds_1h,
+        )
+
+        assert md.has_secondary is True
+        assert md.secondary_timeframe == "1h"
+        assert len(md.secondary_candles) == 20
+        assert "ema_21" in md.secondary_indicators
+        assert "rsi" in md.secondary_indicators
+
+    # ── Validation ────────────────────────────────────────────────────────
+
+    def test_invalid_symbol_lowercase(self):
+        """Lowercase symbol is rejected."""
+        with pytest.raises(ValidationError, match="uppercase"):
+            MarketData(symbol="btcusdt", timeframe="15m", candles=_make_ohlcv())
+
+    def test_invalid_primary_timeframe(self):
+        """Invalid primary timeframe is rejected."""
+        with pytest.raises(ValidationError, match="Invalid timeframe"):
+            MarketData(symbol="BTCUSDT", timeframe="3m", candles=_make_ohlcv())
+
+    def test_invalid_secondary_timeframe(self):
+        """Invalid secondary timeframe is rejected."""
+        with pytest.raises(ValidationError, match="Invalid secondary timeframe"):
+            MarketData(
+                symbol="BTCUSDT",
+                timeframe="15m",
+                candles=_make_ohlcv(),
+                secondary_timeframe="3m",
+                secondary_candles=_make_ohlcv(10, '1h'),
+            )
+
+    def test_secondary_candles_without_timeframe(self):
+        """secondary_candles without secondary_timeframe raises."""
+        with pytest.raises(ValidationError, match="both be set or both be None"):
+            MarketData(
+                symbol="BTCUSDT",
+                timeframe="15m",
+                candles=_make_ohlcv(),
+                secondary_candles=_make_ohlcv(10, '1h'),
+            )
+
+    def test_secondary_timeframe_without_candles(self):
+        """secondary_timeframe without secondary_candles raises."""
+        with pytest.raises(ValidationError, match="both be set or both be None"):
+            MarketData(
+                symbol="BTCUSDT",
+                timeframe="15m",
+                candles=_make_ohlcv(),
+                secondary_timeframe="1h",
+            )
+
+    # ── get_indicator() ───────────────────────────────────────────────────
+
+    def test_get_indicator_primary_default(self):
+        """get_indicator without timeframe returns primary."""
+        df = _make_ohlcv()
+        ema = df['close'].ewm(span=50).mean()
+        md = MarketData(symbol="BTCUSDT", timeframe="15m", candles=df, indicators={"ema_50": ema})
+        result = md.get_indicator("ema_50")
+        assert (result == ema).all()
+
+    def test_get_indicator_primary_explicit(self):
+        """get_indicator with primary timeframe returns primary."""
+        df = _make_ohlcv()
+        ema = df['close'].ewm(span=50).mean()
+        md = MarketData(symbol="BTCUSDT", timeframe="15m", candles=df, indicators={"ema_50": ema})
+        result = md.get_indicator("ema_50", "15m")
+        assert (result == ema).all()
+
+    def test_get_indicator_secondary(self):
+        """get_indicator with secondary timeframe returns secondary."""
+        df_15m = _make_ohlcv(80, '15min')
+        df_1h  = _make_ohlcv(20, '1h')
+        rsi_1h = df_1h['close']  # Dummy series
+        md = MarketData(
+            symbol="BTCUSDT", timeframe="15m", candles=df_15m,
+            indicators={"ema_50": df_15m['close']},
+            secondary_timeframe="1h", secondary_candles=df_1h,
+            secondary_indicators={"rsi": rsi_1h},
+        )
+        result = md.get_indicator("rsi", "1h")
+        assert (result == rsi_1h).all()
+
+    def test_get_indicator_missing_key(self):
+        """get_indicator with unknown key raises KeyError."""
+        md = MarketData(symbol="BTCUSDT", timeframe="15m", candles=_make_ohlcv())
+        with pytest.raises(KeyError, match="not found in primary"):
+            md.get_indicator("nonexistent")
+
+    def test_get_indicator_missing_secondary_key(self):
+        """get_indicator for secondary with unknown key raises."""
+        df_15m = _make_ohlcv(80, '15min')
+        df_1h  = _make_ohlcv(20, '1h')
+        md = MarketData(
+            symbol="BTCUSDT", timeframe="15m", candles=df_15m,
+            secondary_timeframe="1h", secondary_candles=df_1h,
+        )
+        with pytest.raises(KeyError, match="not found in secondary"):
+            md.get_indicator("nonexistent", "1h")
+
+    def test_get_indicator_unknown_timeframe(self):
+        """get_indicator for an unknown timeframe raises."""
+        md = MarketData(symbol="BTCUSDT", timeframe="15m", candles=_make_ohlcv())
+        with pytest.raises(KeyError, match="not available"):
+            md.get_indicator("ema_50", "4h")
+
+    # ── has_secondary property ────────────────────────────────────────────
+
+    def test_has_secondary_false(self):
+        md = MarketData(symbol="BTCUSDT", timeframe="15m", candles=_make_ohlcv())
+        assert md.has_secondary is False
+
+    def test_has_secondary_true(self):
+        df_15m = _make_ohlcv(80, '15min')
+        df_1h  = _make_ohlcv(20, '1h')
+        md = MarketData(
+            symbol="BTCUSDT", timeframe="15m", candles=df_15m,
+            secondary_timeframe="1h", secondary_candles=df_1h,
+        )
+        assert md.has_secondary is True
 
 
 # ── Enum Tests ───────────────────────────────────────────────────────────────

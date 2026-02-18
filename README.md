@@ -14,6 +14,17 @@
 
 ---
 
+> ## ⚠️ Disclaimer
+>
+> *This project was built for a developer's amusement,*
+> *to risk our own money — code is the instrument.*
+> *We make no guarantee of profit, not a single cent,*
+> *nor bear responsibility for where your money went.*
+> *If you choose to use it, the risk is yours to own —*
+> *you trade at your own peril, you reap what you have sown.* 🎲
+
+---
+
 ## 🎯 Vision
 
 GoldenGibbon is not a simple trading bot — it's a **crypto quantitative trading platform** built for long-term research and execution. The system prioritizes:
@@ -92,19 +103,21 @@ GoldenGibbon follows a strict unidirectional data flow through isolated layers:
 ### Current (Phase 1 - Foundation ✅)
 
 - ✅ **Data Loader** — Fetch historical candles from Binance REST API with PostgreSQL caching
-- ✅ **Indicator Engine** — Pure functional indicators: EMA, SMA, ATR, RSI, ADX
+- ✅ **Indicator Engine** — Pure functional indicators: EMA, SMA, RSI, ADX, ATR, Bollinger Bands
 - ✅ **Config Layer** — YAML-based configuration for symbols, strategies, and settings
 - ✅ **Docker Environment** — Multi-stage builds with PostgreSQL and Redis
-- ✅ **Test Suite** — Comprehensive unit tests with 32 passing tests
+- ✅ **Strategy Base Class** — Abstract interface with `decide(market_data, portfolio) → Signal`
+- ✅ **MarketData Multi-Timeframe** — Support for 15m + 1H candles and indicators
+- ✅ **Mean Reversion Signal Logic** — BUY / SELL 50% / SELL 100% / HOLD with regime filter
+- ✅ **Test Suite** — Comprehensive unit tests across indicators, strategies, and data layer
 
 ### In Progress (Phase 1 - Backtest Engine 🚧)
 
-- 🚧 **Strategy Base Class** — Abstract interface for strategy implementations
-- 🚧 **Smart Hodler Strategy** — Trend-following 15m/1H strategy with tiered exits
-- 🚧 **Mean Reversion Strategy** — Bollinger Band fade in range-bound markets (regime-complementary to Smart Hodler)
-- 🚧 **Risk Engine** — Position sizing, trailing stops, hard stops
-- 🚧 **Portfolio Model** — Track balance, positions, equity curve
-- 🚧 **Backtest Runner** — Candle-by-candle simulation with metrics
+- 🚧 **Smart Hodler Strategy** — Signal logic, state machine, session filter (1.11–1.13)
+- 🚧 **Mean Reversion State Machine** — State transitions, config, time stop (1.25–1.27)
+- 🚧 **Risk Engine** — Position sizing, trailing stops, hard stops (1.14–1.16)
+- 🚧 **Portfolio Model** — Track balance, positions, equity curve (1.17)
+- 🚧 **Execution & Backtest** — PaperExecutor, backtest runner, metrics, reporting (1.18–1.22)
 
 ### Planned (Phase 2 - Real-Time Interface 📋)
 
@@ -307,9 +320,9 @@ Current test coverage: **32 passing tests** across indicators and data layer.
 
 Progress is tracked in [`kanban.md`](kanban.md). Current status:
 
-### Phase 1: Foundation & Backtest Engine (35% Complete)
-- ✅ Tasks 1.1–1.10 (Project setup, data layer, indicators, strategy base)
-- 🚧 Tasks 1.11–1.28 (Smart Hodler, Mean Reversion, risk, backtest runner)
+### Phase 1: Foundation & Backtest Engine (50% Complete)
+- ✅ Tasks 1.1–1.10, 1.23, 1.24, 1.28 (Project setup, data layer, indicators, strategy base, multi-timeframe, mean reversion signals & tests)
+- 🚧 Tasks 1.11–1.22, 1.25–1.27 (Smart Hodler, Mean Reversion state machine, risk, backtest runner)
 
 ### Phase 2: Real-Time Interface (0% Complete)
 - 📋 Tasks 2.1–2.52 (FastAPI backend, React frontend, WebSocket)
@@ -374,18 +387,6 @@ This is a personal trading platform under active development. Contributions, sug
 - Use type hints
 - Write docstrings for public functions
 - Keep functions pure when possible (no side effects)
-
----
-
-## ⚠️ Disclaimer
-
-**This software is for educational and research purposes.**
-
-- Cryptocurrency trading involves substantial risk of loss
-- Past performance does not guarantee future results
-- Never trade with money you cannot afford to lose
-- The authors are not responsible for any financial losses
-- Always test strategies thoroughly in paper trading before using real capital
 
 ---
 
