@@ -1,0 +1,130 @@
+services:
+  # ── App (dev) ──────────────────────────────────
+  app:
+    build:
+      context: .
+      target: dev
+    container_name: trade-app
+    env_file: .env
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles: [dev]
+    command: python main.py
+
+  # ── App (prod) ─────────────────────────────────
+  app-prod:
+    build:
+      context: .
+      target: prod
+    container_name: trade-app
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: [prod]
+    command: python main.py
+
+  # ── Celery Worker ──────────────────────────────
+  celery-worker:
+    build:
+      context: .
+      target: dev
+    container_name: trade-celery-worker
+    env_file: .env
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles: [dev]
+    command: celery -A core.celery_app worker --loglevel=info
+
+  celery-worker-prod:
+    build:
+      context: .
+      target: prod
+    container_name: trade-celery-worker
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: [prod]
+    command: celery -A core.celery_app worker --loglevel=info
+
+  # ── Celery Beat ────────────────────────────────
+  celery-beat:
+    build:
+      context: .
+      target: dev
+    container_name: trade-celery-beat
+    env_file: .env
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles: [dev]
+    command: celery -A core.celery_app beat --loglevel=info
+
+  celery-beat-prod:
+    build:
+      context: .
+      target: prod
+    container_name: trade-celery-beat
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: [prod]
+    command: celery -A core.celery_app beat --loglevel=info
+
+  # ── Postgres ───────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: trade-postgres
+    env_file: .env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Redis ──────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: trade-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:
+  redisdata:

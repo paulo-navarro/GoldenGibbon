@@ -1,0 +1,61 @@
+# Strategy Configurations
+# Parameters for each trading strategy
+
+strategies:
+  smart_hodler:
+    enabled: true
+    description: "Trend-following strategy for 15m timeframe with hourly confirmation"
+    
+    # Timeframes
+    timeframe_primary: "15m"
+    timeframe_confirmation: "1h"
+    
+    # Trend Detection (15m)
+    ema_fast: 50
+    ema_slow: 200
+    adx_period: 14
+    adx_threshold: 25
+    volume_sma_period: 20
+    
+    # Hourly Confirmation (1H)
+    ema_hourly: 21
+    rsi_period: 14
+    rsi_threshold: 45
+    
+    # Position Sizing (scaled entries)
+    entry_initial_pct: 0.50  # 50% of available capital
+    entry_scale_1_pct: 0.25  # +25% after 8 candles
+    entry_scale_2_pct: 0.25  # +25% after 16 candles
+    entry_scale_1_candles: 8   # ~2 hours
+    entry_scale_2_candles: 16  # ~4 hours
+    
+    # Exit Strategy
+    exit_momentum_fade_pct: 0.50  # Exit 50% on momentum fade
+    exit_confirmation_candles: 2   # Require 2 consecutive candles below EMA200
+    
+    # Stop-Loss
+    atr_period: 14
+    trailing_stop_atr_multiplier: 2.0
+    hard_stop_pct: 0.03  # 3% max drawdown per trade
+    
+    # Re-Entry / Cooldown
+    cooldown_candles: 16  # ~4 hours after exit/stop
+    
+    # Session Filter (dead zones - no new entries)
+    session_filter_enabled: true
+    session_dead_zones:
+      - name: "Weekend"
+        start_utc: "Saturday 21:00"
+        end_utc: "Sunday 20:00"
+      - name: "Overnight Gap"
+        start_utc: "21:00"  # Daily
+        end_utc: "01:00"    # Daily
+    
+    # ADX Momentum Detection
+    adx_falling_lookback: 3  # Compare current ADX to 3 bars ago
+
+# Add future strategies here
+# Example:
+# mean_reversion:
+#   enabled: false
+#   ...

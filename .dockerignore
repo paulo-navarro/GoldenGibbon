@@ -1,0 +1,16 @@
+# Ignore everything not needed in the Docker build context
+.git
+.venv
+venv
+__pycache__
+*.pyc
+.mypy_cache
+.pytest_cache
+.coverage
+htmlcov
+dist
+build
+*.egg-info
+.env
+docker-compose.override.yml
+*.md
