@@ -32,6 +32,7 @@ class MeanReversion(Strategy):
     def __init__(self, config: Dict[str, Any]) -> None:
         super().__init__(config)
         self._conditions: MeanReversionConditions = MeanReversionConditions()
+        self._cooldown_remaining: int = 0
 
     # ── Abstract interface ───────────────────────────────────────────────
 
@@ -51,15 +52,23 @@ class MeanReversion(Strategy):
         updates ``self._conditions``, and returns a signal gated by the
         current strategy state.
 
-        State routing (state is **not** mutated here — see task 1.25):
-            FLAT     → BUY / HOLD
-            POSITION → SELL_FULL / SELL_HALF / HOLD
-            REDUCED  → SELL_FULL / HOLD
-            COOLDOWN → HOLD (always)
+        State routing & transitions:
+            FLAT     → BUY → POSITION
+            POSITION → SELL_FULL → FLAT / SELL_HALF → REDUCED / HOLD
+            REDUCED  → SELL_FULL → FLAT / HOLD
+            COOLDOWN → countdown → FLAT (then re-evaluate)
+
+        No cooldown on profit exits (SELL_FULL / SELL_HALF go directly
+        to FLAT / REDUCED).  Cooldown is only entered via hard stop
+        (task 1.16) or time stop (task 1.27).
         """
-        # ── Cooldown short-circuit ───────────────────────────────────────
+        # ── Cooldown countdown ────────────────────────────────────────
         if self._state == StrategyState.COOLDOWN:
-            return Signal.HOLD
+            self._cooldown_remaining -= 1
+            if self._cooldown_remaining > 0:
+                return Signal.HOLD
+            # Cooldown expired → transition to FLAT, fall through to re-eval
+            self._state = StrategyState.FLAT
 
         # ── Data guard ───────────────────────────────────────────────────
         if not market_data.has_secondary:
@@ -141,19 +150,22 @@ class MeanReversion(Strategy):
         # ── Signal evaluation (priority order) ───────────────────────────
         in_position = self._state in (StrategyState.POSITION, StrategyState.REDUCED)
 
-        # 1. SELL_FULL – only when holding
+        # 1. SELL_FULL – only when holding → FLAT (no cooldown on profit)
         if in_position:
             if self._check_sell_full(close, bb_upper_val, rsi_val, adx_val):
+                self._state = StrategyState.FLAT
                 return Signal.SELL_FULL
 
         # 2. SELL_HALF – only from full POSITION (not REDUCED)
         if self._state == StrategyState.POSITION:
             if self._check_sell_half(close, bb_middle_val):
+                self._state = StrategyState.REDUCED
                 return Signal.SELL_HALF
 
         # 3. BUY – only from FLAT (no scale-in for mean reversion)
         if self._state == StrategyState.FLAT:
             if self._conditions.all_buy_conditions_met:
+                self._state = StrategyState.POSITION
                 return Signal.BUY
 
         # 4. Default
@@ -162,8 +174,18 @@ class MeanReversion(Strategy):
     def reset(self) -> None:  # noqa: D102
         super().reset()
         self._conditions = MeanReversionConditions()
+        self._cooldown_remaining = 0
 
     # ── Private helpers ──────────────────────────────────────────────────
+
+    def _enter_cooldown(self) -> None:
+        """Transition to COOLDOWN state and initialise the countdown.
+
+        Called by hard stop (task 1.16) and time stop (task 1.27).
+        Not used for profit exits — those go directly to FLAT.
+        """
+        self._state = StrategyState.COOLDOWN
+        self._cooldown_remaining = self.config.get("cooldown_candles", 8)
 
     def _check_sell_full(
         self,

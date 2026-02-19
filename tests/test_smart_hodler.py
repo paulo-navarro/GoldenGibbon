@@ -447,9 +447,10 @@ class TestStateRouting:
     """Verify signal gating per strategy state."""
 
     def test_cooldown_always_hold(self):
-        """COOLDOWN state always returns HOLD regardless of conditions."""
+        """COOLDOWN state returns HOLD while countdown > 0."""
         s = SmartHodler(DEFAULT_CONFIG)
         s._state = StrategyState.COOLDOWN
+        s._cooldown_remaining = 5  # still counting down
 
         # Conditions that would normally trigger BUY
         md = _make_market_data()
@@ -592,3 +593,189 @@ class TestConsecutiveCounter:
         s._consecutive_below_ema200 = 10
         s.reset()
         assert s._consecutive_below_ema200 == 0
+
+
+# ── State Transitions ────────────────────────────────────────────────────────
+
+
+class TestStateTransitions:
+    """Verify that decide() mutates self._state on signal emission."""
+
+    def test_flat_buy_transitions_to_position(self):
+        """FLAT + BUY signal → state becomes POSITION."""
+        s = SmartHodler(DEFAULT_CONFIG)
+        assert s.state == StrategyState.FLAT
+
+        md = _make_market_data()
+        signal = s.decide(md, _portfolio())
+        assert signal == Signal.BUY
+        assert s.state == StrategyState.POSITION
+
+    def test_position_sell_full_transitions_to_cooldown(self):
+        """POSITION + SELL_FULL → state becomes COOLDOWN."""
+        s = SmartHodler(DEFAULT_CONFIG)
+        s._state = StrategyState.POSITION
+
+        md = _make_market_data(ema_50=95.0, ema_200=100.0)
+        signal = s.decide(md, _portfolio())
+        assert signal == Signal.SELL_FULL
+        assert s.state == StrategyState.COOLDOWN
+
+    def test_position_sell_full_sets_cooldown_remaining(self):
+        """SELL_FULL from POSITION initialises cooldown counter."""
+        s = SmartHodler(DEFAULT_CONFIG)
+        s._state = StrategyState.POSITION
+
+        md = _make_market_data(ema_50=95.0, ema_200=100.0)
+        s.decide(md, _portfolio())
+        assert s._cooldown_remaining == DEFAULT_CONFIG["cooldown_candles"]
+
+    def test_position_sell_half_transitions_to_reduced(self):
+        """POSITION + SELL_HALF → state becomes REDUCED."""
+        s = SmartHodler(DEFAULT_CONFIG)
+        s._state = StrategyState.POSITION
+
+        adx_vals = _make_falling_series(35, 28)
+        md = _make_market_data(
+            close=100.0,
+            ema_50=105.0,
+            ema_200=95.0,
+            adx_series=adx_vals,
+        )
+        signal = s.decide(md, _portfolio())
+        assert signal == Signal.SELL_HALF
+        assert s.state == StrategyState.REDUCED
+
+    def test_reduced_buy_transitions_to_position(self):
+        """REDUCED + BUY → state becomes POSITION."""
+        s = SmartHodler(DEFAULT_CONFIG)
+        s._state = StrategyState.REDUCED
+
+        md = _make_market_data()
+        signal = s.decide(md, _portfolio())
+        assert signal == Signal.BUY
+        assert s.state == StrategyState.POSITION
+
+    def test_reduced_sell_full_transitions_to_cooldown(self):
+        """REDUCED + SELL_FULL → state becomes COOLDOWN."""
+        s = SmartHodler(DEFAULT_CONFIG)
+        s._state = StrategyState.REDUCED
+
+        md = _make_market_data(ema_50=95.0, ema_200=100.0)
+        signal = s.decide(md, _portfolio())
+        assert signal == Signal.SELL_FULL
+        assert s.state == StrategyState.COOLDOWN
+        assert s._cooldown_remaining == DEFAULT_CONFIG["cooldown_candles"]
+
+    def test_hold_does_not_change_state(self):
+        """HOLD signal leaves the state unchanged."""
+        for state in (StrategyState.FLAT, StrategyState.POSITION, StrategyState.REDUCED):
+            s = SmartHodler(DEFAULT_CONFIG)
+            s._state = state
+            md = _make_market_data(adx=10.0)  # ADX too low → HOLD
+            signal = s.decide(md, _portfolio())
+            assert signal == Signal.HOLD
+            assert s.state == state
+
+    def test_custom_cooldown_candles_config(self):
+        """Cooldown counter uses the configured cooldown_candles value."""
+        config = {**DEFAULT_CONFIG, "cooldown_candles": 8}
+        s = SmartHodler(config)
+        s._state = StrategyState.POSITION
+
+        md = _make_market_data(ema_50=95.0, ema_200=100.0)
+        s.decide(md, _portfolio())
+        assert s._cooldown_remaining == 8
+
+
+# ── Cooldown Countdown ───────────────────────────────────────────────────────
+
+
+class TestCooldownCountdown:
+    """Verify cooldown decrement, expiry, and re-evaluation behaviour."""
+
+    def test_cooldown_decrements_each_call(self):
+        """Each decide() in COOLDOWN decrements _cooldown_remaining by 1."""
+        s = SmartHodler(DEFAULT_CONFIG)
+        s._state = StrategyState.COOLDOWN
+        s._cooldown_remaining = 3
+
+        md = _make_market_data()
+        s.decide(md, _portfolio())
+        assert s._cooldown_remaining == 2
+        assert s.state == StrategyState.COOLDOWN
+
+        s.decide(md, _portfolio())
+        assert s._cooldown_remaining == 1
+        assert s.state == StrategyState.COOLDOWN
+
+    def test_cooldown_holds_during_countdown(self):
+        """Returns HOLD every call while cooldown is active."""
+        s = SmartHodler(DEFAULT_CONFIG)
+        s._state = StrategyState.COOLDOWN
+        s._cooldown_remaining = 3
+
+        md = _make_market_data()  # would trigger BUY if not in cooldown
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+    def test_cooldown_expires_to_flat(self):
+        """When _cooldown_remaining reaches 0, state transitions to FLAT."""
+        s = SmartHodler(DEFAULT_CONFIG)
+        s._state = StrategyState.COOLDOWN
+        s._cooldown_remaining = 1
+
+        # Conditions that DON'T trigger BUY (so we can check state without
+        # it immediately moving to POSITION)
+        md = _make_market_data(adx=10.0)
+        signal = s.decide(md, _portfolio())
+        assert signal == Signal.HOLD
+        assert s.state == StrategyState.FLAT
+
+    def test_cooldown_expiry_re_evaluates_signals(self):
+        """On the candle that expires cooldown, signals are re-evaluated."""
+        s = SmartHodler(DEFAULT_CONFIG)
+        s._state = StrategyState.COOLDOWN
+        s._cooldown_remaining = 1
+
+        # All BUY conditions met → should BUY and transition to POSITION
+        md = _make_market_data()
+        signal = s.decide(md, _portfolio())
+        assert signal == Signal.BUY
+        assert s.state == StrategyState.POSITION
+
+    def test_full_cooldown_cycle(self):
+        """Walk through all 16 candles of cooldown then re-entry."""
+        config = {**DEFAULT_CONFIG, "cooldown_candles": 4}  # shorter for the test
+        s = SmartHodler(config)
+        s._state = StrategyState.POSITION
+
+        # Trigger SELL_FULL → COOLDOWN
+        md_sell = _make_market_data(ema_50=95.0, ema_200=100.0)
+        assert s.decide(md_sell, _portfolio()) == Signal.SELL_FULL
+        assert s.state == StrategyState.COOLDOWN
+        assert s._cooldown_remaining == 4
+
+        # 3 HOLD candles (remaining goes 4→3→2→1 during cooldown)
+        md_buy = _make_market_data()  # conditions for BUY
+        assert s.decide(md_buy, _portfolio()) == Signal.HOLD  # rem 3
+        assert s.decide(md_buy, _portfolio()) == Signal.HOLD  # rem 2
+        assert s.decide(md_buy, _portfolio()) == Signal.HOLD  # rem 1
+
+        # 4th candle: cooldown expires, re-eval triggers BUY
+        assert s.decide(md_buy, _portfolio()) == Signal.BUY
+        assert s.state == StrategyState.POSITION
+
+    def test_reset_clears_cooldown_remaining(self):
+        """reset() zeroes _cooldown_remaining."""
+        s = SmartHodler(DEFAULT_CONFIG)
+        s._state = StrategyState.COOLDOWN
+        s._cooldown_remaining = 10
+        s.reset()
+        assert s._cooldown_remaining == 0
+        assert s.state == StrategyState.FLAT
+
+    def test_initial_cooldown_remaining_is_zero(self):
+        """Fresh strategy has _cooldown_remaining == 0."""
+        s = SmartHodler(DEFAULT_CONFIG)
+        assert s._cooldown_remaining == 0

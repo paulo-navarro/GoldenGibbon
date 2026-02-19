@@ -390,9 +390,10 @@ class TestStateRouting:
     """Verify signal gating per strategy state."""
 
     def test_cooldown_always_hold(self):
-        """COOLDOWN state always returns HOLD regardless of conditions."""
+        """COOLDOWN state returns HOLD while countdown > 0."""
         s = MeanReversion(DEFAULT_CONFIG)
         s._state = StrategyState.COOLDOWN
+        s._cooldown_remaining = 5  # still counting down
         md = _make_market_data()
         assert s.decide(md, _portfolio()) == Signal.HOLD
 
@@ -511,3 +512,215 @@ class TestRegimeComplementarity:
         md2 = _make_market_data(adx=20.0)
         s.decide(md2, _portfolio())
         assert s.conditions.adx_below_threshold is True
+
+
+# ── State Transitions ────────────────────────────────────────────────────────
+
+
+class TestStateTransitions:
+    """Verify that decide() mutates self._state on signal emission."""
+
+    def test_flat_buy_transitions_to_position(self):
+        """FLAT + BUY signal → state becomes POSITION."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        assert s.state == StrategyState.FLAT
+
+        md = _make_market_data()
+        signal = s.decide(md, _portfolio())
+        assert signal == Signal.BUY
+        assert s.state == StrategyState.POSITION
+
+    def test_position_sell_full_transitions_to_flat(self):
+        """POSITION + SELL_FULL → state becomes FLAT (no cooldown on profit)."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.POSITION
+
+        md = _make_market_data(close=106.0, bb_upper=105.0)
+        signal = s.decide(md, _portfolio())
+        assert signal == Signal.SELL_FULL
+        assert s.state == StrategyState.FLAT
+
+    def test_position_sell_half_transitions_to_reduced(self):
+        """POSITION + SELL_HALF → state becomes REDUCED."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.POSITION
+
+        md = _make_market_data(close=101.0, bb_middle=100.0)
+        signal = s.decide(md, _portfolio())
+        assert signal == Signal.SELL_HALF
+        assert s.state == StrategyState.REDUCED
+
+    def test_reduced_sell_full_transitions_to_flat(self):
+        """REDUCED + SELL_FULL → state becomes FLAT (no cooldown on profit)."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.REDUCED
+
+        md = _make_market_data(close=106.0, bb_upper=105.0)
+        signal = s.decide(md, _portfolio())
+        assert signal == Signal.SELL_FULL
+        assert s.state == StrategyState.FLAT
+
+    def test_hold_does_not_change_state(self):
+        """HOLD signal leaves the state unchanged."""
+        for state in (StrategyState.FLAT, StrategyState.POSITION, StrategyState.REDUCED):
+            s = MeanReversion(DEFAULT_CONFIG)
+            s._state = state
+            md = _make_market_data(rsi=50.0)  # RSI not oversold → neither BUY nor SELL
+            signal = s.decide(md, _portfolio())
+            assert signal == Signal.HOLD
+            assert s.state == state
+
+
+# ── No Cooldown on Profit Exits ──────────────────────────────────────────────
+
+
+class TestNoCooldownOnProfitExit:
+    """Mean Reversion profit exits go directly to FLAT, no cooldown."""
+
+    def test_sell_full_from_position_no_cooldown(self):
+        """SELL_FULL from POSITION → FLAT, cooldown_remaining stays 0."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.POSITION
+
+        md = _make_market_data(close=106.0, bb_upper=105.0)
+        s.decide(md, _portfolio())
+        assert s.state == StrategyState.FLAT
+        assert s._cooldown_remaining == 0
+
+    def test_sell_full_from_reduced_no_cooldown(self):
+        """SELL_FULL from REDUCED → FLAT, cooldown_remaining stays 0."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.REDUCED
+
+        md = _make_market_data(close=106.0, bb_upper=105.0)
+        s.decide(md, _portfolio())
+        assert s.state == StrategyState.FLAT
+        assert s._cooldown_remaining == 0
+
+    def test_immediate_rebuy_after_profit_exit(self):
+        """After profit SELL_FULL → FLAT, immediate BUY if conditions met."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.POSITION
+
+        # First call: SELL_FULL → FLAT
+        md_sell = _make_market_data(close=106.0, bb_upper=105.0)
+        assert s.decide(md_sell, _portfolio()) == Signal.SELL_FULL
+        assert s.state == StrategyState.FLAT
+
+        # Second call: all BUY conditions met → BUY → POSITION
+        md_buy = _make_market_data()
+        assert s.decide(md_buy, _portfolio()) == Signal.BUY
+        assert s.state == StrategyState.POSITION
+
+    def test_sell_half_does_not_enter_cooldown(self):
+        """SELL_HALF → REDUCED, cooldown_remaining stays 0."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.POSITION
+
+        md = _make_market_data(close=101.0, bb_middle=100.0)
+        s.decide(md, _portfolio())
+        assert s.state == StrategyState.REDUCED
+        assert s._cooldown_remaining == 0
+
+
+# ── Cooldown Countdown ───────────────────────────────────────────────────────
+
+
+class TestCooldownCountdown:
+    """Verify cooldown decrement, expiry, and re-evaluation behaviour."""
+
+    def test_cooldown_decrements_each_call(self):
+        """Each decide() in COOLDOWN decrements _cooldown_remaining by 1."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.COOLDOWN
+        s._cooldown_remaining = 3
+
+        md = _make_market_data()
+        s.decide(md, _portfolio())
+        assert s._cooldown_remaining == 2
+        assert s.state == StrategyState.COOLDOWN
+
+        s.decide(md, _portfolio())
+        assert s._cooldown_remaining == 1
+        assert s.state == StrategyState.COOLDOWN
+
+    def test_cooldown_holds_during_countdown(self):
+        """Returns HOLD every call while cooldown is active."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.COOLDOWN
+        s._cooldown_remaining = 3
+
+        md = _make_market_data()  # would trigger BUY if not in cooldown
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+
+    def test_cooldown_expires_to_flat(self):
+        """When _cooldown_remaining reaches 0, state transitions to FLAT."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.COOLDOWN
+        s._cooldown_remaining = 1
+
+        # Conditions that DON'T trigger BUY so we can verify the state
+        md = _make_market_data(rsi=50.0)
+        signal = s.decide(md, _portfolio())
+        assert signal == Signal.HOLD
+        assert s.state == StrategyState.FLAT
+
+    def test_cooldown_expiry_re_evaluates_signals(self):
+        """On the candle that expires cooldown, signals are re-evaluated."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.COOLDOWN
+        s._cooldown_remaining = 1
+
+        # All BUY conditions met → should BUY and transition to POSITION
+        md = _make_market_data()
+        signal = s.decide(md, _portfolio())
+        assert signal == Signal.BUY
+        assert s.state == StrategyState.POSITION
+
+    def test_full_cooldown_cycle(self):
+        """Walk through a full cooldown then re-entry."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        # Manually enter cooldown (as hard stop would in task 1.16)
+        s._enter_cooldown()
+        assert s.state == StrategyState.COOLDOWN
+        assert s._cooldown_remaining == 8  # default for mean reversion
+
+        md_buy = _make_market_data()  # conditions for BUY
+
+        # 7 HOLD candles
+        for i in range(7):
+            assert s.decide(md_buy, _portfolio()) == Signal.HOLD
+            assert s.state == StrategyState.COOLDOWN
+
+        # 8th candle: cooldown expires, re-eval triggers BUY
+        assert s.decide(md_buy, _portfolio()) == Signal.BUY
+        assert s.state == StrategyState.POSITION
+
+    def test_enter_cooldown_sets_state_and_counter(self):
+        """_enter_cooldown() sets COOLDOWN state and initialises counter."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._enter_cooldown()
+        assert s.state == StrategyState.COOLDOWN
+        assert s._cooldown_remaining == 8
+
+    def test_enter_cooldown_custom_config(self):
+        """_enter_cooldown() reads cooldown_candles from config."""
+        config = {**DEFAULT_CONFIG, "cooldown_candles": 4}
+        s = MeanReversion(config)
+        s._enter_cooldown()
+        assert s._cooldown_remaining == 4
+
+    def test_reset_clears_cooldown_remaining(self):
+        """reset() zeroes _cooldown_remaining."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        s._state = StrategyState.COOLDOWN
+        s._cooldown_remaining = 10
+        s.reset()
+        assert s._cooldown_remaining == 0
+        assert s.state == StrategyState.FLAT
+
+    def test_initial_cooldown_remaining_is_zero(self):
+        """Fresh strategy has _cooldown_remaining == 0."""
+        s = MeanReversion(DEFAULT_CONFIG)
+        assert s._cooldown_remaining == 0

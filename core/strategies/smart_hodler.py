@@ -27,6 +27,7 @@ class SmartHodler(Strategy):
     def __init__(self, config: Dict[str, Any]) -> None:
         super().__init__(config)
         self._consecutive_below_ema200: int = 0
+        self._cooldown_remaining: int = 0
 
     # ── Abstract interface ───────────────────────────────────────────────
 
@@ -42,15 +43,19 @@ class SmartHodler(Strategy):
         updates ``self._conditions``, and returns a signal gated by the
         current strategy state.
 
-        State routing (state is **not** mutated here — see task 1.12):
-            FLAT     → BUY / HOLD
-            POSITION → SELL_FULL / SELL_HALF / HOLD
-            REDUCED  → SELL_FULL / BUY / HOLD
-            COOLDOWN → HOLD (always)
+        State routing & transitions:
+            FLAT     → BUY → POSITION
+            POSITION → SELL_FULL → COOLDOWN / SELL_HALF → REDUCED / HOLD
+            REDUCED  → SELL_FULL → COOLDOWN / BUY → POSITION / HOLD
+            COOLDOWN → countdown → FLAT (then re-evaluate)
         """
-        # ── Cooldown short-circuit ───────────────────────────────────────
+        # ── Cooldown countdown ────────────────────────────────────────
         if self._state == StrategyState.COOLDOWN:
-            return Signal.HOLD
+            self._cooldown_remaining -= 1
+            if self._cooldown_remaining > 0:
+                return Signal.HOLD
+            # Cooldown expired → transition to FLAT, fall through to re-eval
+            self._state = StrategyState.FLAT
 
         # ── Data guard ───────────────────────────────────────────────────
         if not market_data.has_secondary:
@@ -125,16 +130,19 @@ class SmartHodler(Strategy):
         # 1. SELL_FULL – only when holding
         if in_position:
             if self._check_sell_full(ema_50_val, ema_200_val):
+                self._enter_cooldown()
                 return Signal.SELL_FULL
 
         # 2. SELL_HALF – only from full POSITION (not REDUCED)
         if self._state == StrategyState.POSITION:
             if self._check_sell_half(close, ema_50_val, adx):
+                self._state = StrategyState.REDUCED
                 return Signal.SELL_HALF
 
         # 3. BUY – only from FLAT or REDUCED
         if self._state in (StrategyState.FLAT, StrategyState.REDUCED):
             if self._conditions.all_buy_conditions_met:
+                self._state = StrategyState.POSITION
                 return Signal.BUY
 
         # 4. Default
@@ -143,8 +151,14 @@ class SmartHodler(Strategy):
     def reset(self) -> None:  # noqa: D102
         super().reset()
         self._consecutive_below_ema200 = 0
+        self._cooldown_remaining = 0
 
     # ── Private helpers ──────────────────────────────────────────────────
+
+    def _enter_cooldown(self) -> None:
+        """Transition to COOLDOWN state and initialise the countdown."""
+        self._state = StrategyState.COOLDOWN
+        self._cooldown_remaining = self.config.get("cooldown_candles", 16)
 
     def _check_sell_full(self, ema_50_val: float, ema_200_val: float) -> bool:
         """

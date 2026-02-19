@@ -1,6 +1,6 @@
 # Kanban – Crypto Trading Platform
 
-> Updated: 2026-02-18
+> Updated: 2026-02-19
 
 ---
 
@@ -24,8 +24,8 @@
 - [x] **1.8b** Bollinger Bands unit tests – validate against known values
 - [x] **1.9** Indicator unit tests – validate outputs against known values
 - [x] **1.10** Strategy base class – `Strategy.decide(market_data, portfolio) → Signal`
-- [ ] **1.11** Smart Hodler strategy – full signal logic (BUY / SELL 100% / SELL 50% / HOLD)
-- [ ] **1.12** Smart Hodler state machine – FLAT → POSITION → REDUCED → COOLDOWN
+- [x] **1.11** Smart Hodler strategy – full signal logic (BUY / SELL 100% / SELL 50% / HOLD)
+- [x] **1.12** Smart Hodler state machine – FLAT → POSITION → REDUCED → COOLDOWN
 - [ ] **1.13** Smart Hodler session filter – dead zone logic (weekends + overnight UTC)
 - [ ] **1.14** Risk Engine – position sizing (scaled entries 50/75/100%), stop-loss rules
 - [ ] **1.15** Trailing stop – ATR-based (2×ATR below highest close since entry)
@@ -38,7 +38,7 @@
 - [ ] **1.22** Logging – structured logs for every decision (signal, order, fill, stop)
 - [x] **1.23** MarketData multi-timeframe – extend model to support 15m + 1H candles/indicators
 - [x] **1.24** Mean Reversion strategy – full signal logic (BUY / SELL 50% / SELL 100% / HOLD)
-- [ ] **1.25** Mean Reversion state machine – FLAT → POSITION → REDUCED → COOLDOWN (no cooldown on profit exits)
+- [x] **1.25** Mean Reversion state machine – FLAT → POSITION → REDUCED → COOLDOWN (no cooldown on profit exits)
 - [ ] **1.26** Mean Reversion config – add `mean_reversion` section to `strategies.yaml`
 - [ ] **1.27** Mean Reversion time stop – exit after 16 candles if middle BB not reached
 - [x] **1.28** Mean Reversion unit tests – signal logic, state transitions, regime filter
@@ -143,16 +143,16 @@
 
 ### Tasks
 
-- [ ] **3.1** BinanceExecutor – real `buy()` / `sell()` with order lifecycle (PENDING → FILLED / REJECTED / CANCELLED)
-- [ ] **3.2** Order model – MARKET + LIMIT support, status tracking
-- [ ] **3.3** Retry logic – exponential backoff on executor failures
-- [ ] **3.4** Capital limits – max position size, max daily trades
-- [ ] **3.5** Max drawdown kill-switch – global emergency stop
-- [ ] **3.6** Trade size limits – per-trade and per-symbol caps
-- [ ] **3.7** Crash recovery – restore state from Postgres after unexpected restart
-- [ ] **3.8** Reconciliation job – compare local portfolio vs Binance account on startup
-- [ ] **3.9** Alerting – notifications on trades, stops hit, kill-switch activation
-- [ ] **3.10** Deployment – docker-compose production profile, env-based config, restart policies
+- [ ] **4.1** BinanceExecutor – real `buy()` / `sell()` with order lifecycle (PENDING → FILLED / REJECTED / CANCELLED)
+- [ ] **4.2** Order model – MARKET + LIMIT support, status tracking
+- [ ] **4.3** Retry logic – exponential backoff on executor failures
+- [ ] **4.4** Capital limits – max position size, max daily trades
+- [ ] **4.5** Max drawdown kill-switch – global emergency stop
+- [ ] **4.6** Trade size limits – per-trade and per-symbol caps
+- [ ] **4.7** Crash recovery – restore state from Postgres after unexpected restart
+- [ ] **4.8** Reconciliation job – compare local portfolio vs Binance account on startup
+- [ ] **4.9** Alerting – notifications on trades, stops hit, kill-switch activation
+- [ ] **4.10** Deployment – docker-compose production profile, env-based config, restart policies
 
 ---
 
