@@ -105,7 +105,7 @@ def _make_market_data(
         4. volume_above_average:     volume (6000) > volume_sma (5000) ✓
         5. hourly_ema_rising:        ema_21_1h rising              ✓
         6. hourly_rsi_above_threshold: rsi_1h (55) > 45            ✓
-        7. session_filter_pass:      stubbed True                  ✓
+        7. session_filter_pass:      True (no dead zones in default config)
     """
     candles = _make_candles(close_val=close, volume_val=volume)
 
@@ -779,3 +779,110 @@ class TestCooldownCountdown:
         """Fresh strategy has _cooldown_remaining == 0."""
         s = SmartHodler(DEFAULT_CONFIG)
         assert s._cooldown_remaining == 0
+
+
+# ── Session Filter ───────────────────────────────────────────────────────────
+
+_DEAD_ZONES = [
+    {"name": "Weekend", "start_utc": "Saturday 21:00", "end_utc": "Sunday 20:00"},
+    {"name": "Overnight Gap", "start_utc": "21:00", "end_utc": "01:00"},
+]
+
+
+def _make_candles_at(start_dt, close_val=110.0, volume_val=6000.0, length=N):
+    """Create candles whose *last* bar opens at *start_dt*."""
+    dates = pd.date_range(end=start_dt, periods=length, freq="15min")
+    return pd.DataFrame(
+        {
+            "open": [close_val] * length,
+            "high": [close_val + 1] * length,
+            "low": [close_val - 1] * length,
+            "close": [close_val] * length,
+            "volume": [volume_val] * length,
+        },
+        index=dates,
+    )
+
+
+def _make_md_at_time(start_str, **kwargs):
+    """Build a default-BUY MarketData with the last candle at *start_str*."""
+    from datetime import datetime as _dt
+    candle_time = pd.Timestamp(_dt.fromisoformat(start_str))
+    candles = _make_candles_at(
+        candle_time,
+        close_val=kwargs.get("close", 110.0),
+        volume_val=kwargs.get("volume", 6000.0),
+    )
+    candles_1h = _make_candles_1h()
+    return MarketData(
+        symbol="BTCUSDT",
+        timeframe="15m",
+        candles=candles,
+        indicators={
+            "ema_50": _make_series(kwargs.get("ema_50", 105.0)),
+            "ema_200": _make_series(kwargs.get("ema_200", 100.0)),
+            "adx": _make_series(kwargs.get("adx", 30.0)),
+            "volume_sma": _make_series(kwargs.get("volume_sma", 5000.0)),
+        },
+        secondary_timeframe="1h",
+        secondary_candles=candles_1h,
+        secondary_indicators={
+            "ema_21": _make_rising_series(100, 110, N_1H),
+            "rsi": _make_series(55.0, N_1H),
+        },
+    )
+
+
+class TestSessionFilter:
+    """Verify session filter blocks BUY but not SELL during dead zones."""
+
+    def _config_with_filter(self):
+        return {
+            **DEFAULT_CONFIG,
+            "session_filter_enabled": True,
+            "session_dead_zones": _DEAD_ZONES,
+        }
+
+    def test_buy_blocked_during_weekend_dead_zone(self):
+        """Saturday 22:00 → dead zone → BUY conditions met but HOLD."""
+        s = SmartHodler(self._config_with_filter())
+        md = _make_md_at_time("2026-02-21T22:00:00")  # Saturday
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+        assert s.conditions.session_filter_pass is False
+
+    def test_buy_blocked_during_overnight_dead_zone(self):
+        """Monday 22:00 → dead zone → BUY blocked."""
+        s = SmartHodler(self._config_with_filter())
+        md = _make_md_at_time("2026-02-16T22:00:00")  # Monday
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+        assert s.conditions.session_filter_pass is False
+
+    def test_buy_allowed_outside_dead_zone(self):
+        """Wednesday 14:00 → open session → BUY fires."""
+        s = SmartHodler(self._config_with_filter())
+        md = _make_md_at_time("2026-02-18T14:00:00")  # Wednesday
+        assert s.decide(md, _portfolio()) == Signal.BUY
+        assert s.conditions.session_filter_pass is True
+
+    def test_sell_not_blocked_during_dead_zone(self):
+        """SELL signals fire even inside dead zones (protect capital)."""
+        cfg = self._config_with_filter()
+        s = SmartHodler(cfg)
+        s._state = StrategyState.POSITION
+        # Saturday 22:00: EMA death cross → SELL_FULL regardless of dead zone
+        md = _make_md_at_time("2026-02-21T22:00:00", ema_50=95.0, ema_200=100.0)
+        assert s.decide(md, _portfolio()) == Signal.SELL_FULL
+
+    def test_filter_disabled_allows_buy_in_dead_zone(self):
+        """session_filter_enabled=False → session_filter_pass=True always."""
+        cfg = {**DEFAULT_CONFIG, "session_filter_enabled": False, "session_dead_zones": _DEAD_ZONES}
+        s = SmartHodler(cfg)
+        md = _make_md_at_time("2026-02-21T22:00:00")  # Saturday
+        assert s.decide(md, _portfolio()) == Signal.BUY
+        assert s.conditions.session_filter_pass is True
+
+    def test_no_dead_zones_allows_buy(self):
+        """No dead zones configured → session_filter_pass=True."""
+        s = SmartHodler(DEFAULT_CONFIG)
+        md = _make_md_at_time("2026-02-21T22:00:00")  # Saturday
+        assert s.decide(md, _portfolio()) == Signal.BUY

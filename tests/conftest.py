@@ -223,3 +223,17 @@ def sample_ohlcv_1h():
     }, index=dates)
     
     return df
+
+
+# ── Portfolio Fixtures ───────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def portfolio_manager():
+    """
+    Fresh PortfolioManager with 10 000 USDT and default 0.1 % taker fee.
+    """
+    from decimal import Decimal
+    from core.portfolio import PortfolioManager
+
+    return PortfolioManager(initial_capital=Decimal("10000"))

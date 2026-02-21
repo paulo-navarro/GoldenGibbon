@@ -100,24 +100,19 @@ GoldenGibbon follows a strict unidirectional data flow through isolated layers:
 
 ## ✨ Features
 
-### Current (Phase 1 - Foundation ✅)
+### Current (Phase 1 - Foundation & Backtest Engine ✅)
 
 - ✅ **Data Loader** — Fetch historical candles from Binance REST API with PostgreSQL caching
 - ✅ **Indicator Engine** — Pure functional indicators: EMA, SMA, RSI, ADX, ATR, Bollinger Bands
 - ✅ **Config Layer** — YAML-based configuration for symbols, strategies, and settings
 - ✅ **Docker Environment** — Multi-stage builds with PostgreSQL and Redis
-- ✅ **Strategy Base Class** — Abstract interface with `decide(market_data, portfolio) → Signal`
-- ✅ **MarketData Multi-Timeframe** — Support for 15m + 1H candles and indicators
-- ✅ **Mean Reversion Signal Logic** — BUY / SELL 50% / SELL 100% / HOLD with regime filter
-- ✅ **Test Suite** — Comprehensive unit tests across indicators, strategies, and data layer
-
-### In Progress (Phase 1 - Backtest Engine 🚧)
-
-- 🚧 **Smart Hodler Strategy** — Signal logic, state machine, session filter (1.11–1.13)
-- 🚧 **Mean Reversion State Machine** — State transitions, config, time stop (1.25–1.27)
-- 🚧 **Risk Engine** — Position sizing, trailing stops, hard stops (1.14–1.16)
-- 🚧 **Portfolio Model** — Track balance, positions, equity curve (1.17)
-- 🚧 **Execution & Backtest** — PaperExecutor, backtest runner, metrics, reporting (1.18–1.22)
+- ✅ **Strategy Engine** — Abstract interface supporting Smart Hodler (Trend) and Mean Reversion (Counter-trend)
+- ✅ **Risk Engine** — Sizing logic, hard stops, trailing stops (ATR-based), and time-based exits
+- ✅ **Portfolio Manager** — Full accounting of balance, positions, trade history, and equity curve
+- ✅ **Backtest Runner** — Fast candle-by-candle simulation loop with orderbook replay
+- ✅ **Reporting** — Rich console output tables and PostgreSQL persistence of backtest results
+- ✅ **Logging** — Structured JSON logs (structlog) for full observability of every decision
+- ✅ **Test Suite** — 550+ unit tests covering the entire pipeline
 
 ### Planned (Phase 2 - Real-Time Interface 📋)
 
@@ -312,7 +307,7 @@ docker compose run --rm -e PYTHONPATH=/app app pytest tests/test_indicators.py -
 docker compose run --rm -e PYTHONPATH=/app app pytest tests/test_database.py -v
 ```
 
-Current test coverage: **32 passing tests** across indicators and data layer.
+Current test coverage: **550+ passing tests** across indicators, strategies, and execution engine.
 
 ---
 
@@ -320,9 +315,8 @@ Current test coverage: **32 passing tests** across indicators and data layer.
 
 Progress is tracked in [`kanban.md`](kanban.md). Current status:
 
-### Phase 1: Foundation & Backtest Engine (50% Complete)
-- ✅ Tasks 1.1–1.10, 1.23, 1.24, 1.28 (Project setup, data layer, indicators, strategy base, multi-timeframe, mean reversion signals & tests)
-- 🚧 Tasks 1.11–1.22, 1.25–1.27 (Smart Hodler, Mean Reversion state machine, risk, backtest runner)
+### Phase 1: Foundation & Backtest Engine (100% Complete)
+- ✅ **Tasks 1.1–1.28** — Fully implemented (Data, Indicators, Strategy engine, Risk manager, Portfolio tracking, Execution simulation, Backtesting loop, Logging)
 
 ### Phase 2: Real-Time Interface (0% Complete)
 - 📋 Tasks 2.1–2.52 (FastAPI backend, React frontend, WebSocket)

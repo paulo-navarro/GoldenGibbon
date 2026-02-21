@@ -5,11 +5,6 @@
 ---
 
 ## Phase 1 – Foundation & Backtest Engine
-
-| TODO | IN PROGRESS | DONE |
-|------|-------------|------|
-| | | |
-
 ### Tasks
 
 - [x] **1.1** Project scaffolding (folder structure, `pyproject.toml`, virtual env)
@@ -26,31 +21,26 @@
 - [x] **1.10** Strategy base class – `Strategy.decide(market_data, portfolio) → Signal`
 - [x] **1.11** Smart Hodler strategy – full signal logic (BUY / SELL 100% / SELL 50% / HOLD)
 - [x] **1.12** Smart Hodler state machine – FLAT → POSITION → REDUCED → COOLDOWN
-- [ ] **1.13** Smart Hodler session filter – dead zone logic (weekends + overnight UTC)
-- [ ] **1.14** Risk Engine – position sizing (scaled entries 50/75/100%), stop-loss rules
-- [ ] **1.15** Trailing stop – ATR-based (2×ATR below highest close since entry)
-- [ ] **1.16** Hard stop – 3% max drawdown per trade + cooldown trigger
-- [ ] **1.17** Portfolio model – USDT balance, open positions, equity curve, trade history
-- [ ] **1.18** PaperExecutor – simulated `buy()` / `sell()` with slippage + fees
-- [ ] **1.19** Backtest runner – candle-by-candle loop: load → indicators → strategy → risk → execute → update
-- [ ] **1.20** Backtest metrics – total return, drawdown, win rate, Sharpe ratio, vs Buy & Hold
-- [ ] **1.21** Backtest reporting – output results to console + persist to Postgres
-- [ ] **1.22** Logging – structured logs for every decision (signal, order, fill, stop)
+- [x] **1.13** Smart Hodler session filter – dead zone logic (weekends + overnight UTC)
+- [x] **1.14** Risk Engine – position sizing (scaled entries 50/75/100%), stop-loss rules
+- [x] **1.15** Trailing stop – ATR-based (2×ATR below highest close since entry)
+- [x] **1.16** Hard stop – 3% max drawdown per trade + cooldown trigger
+- [x] **1.17** Portfolio model – USDT balance, open positions, equity curve, trade history
+- [x] **1.18** PaperExecutor – simulated `buy()` / `sell()` with slippage + fees
+- [x] **1.19** Backtest runner – candle-by-candle loop: load → indicators → strategy → risk → execute → update
+- [x] **1.20** Backtest metrics – total return, drawdown, win rate, Sharpe ratio, vs Buy & Hold
+- [x] **1.21** Backtest reporting – output results to console + persist to Postgres
+- [x] **1.22** Logging – structured logs for every decision (signal, order, fill, stop)
 - [x] **1.23** MarketData multi-timeframe – extend model to support 15m + 1H candles/indicators
 - [x] **1.24** Mean Reversion strategy – full signal logic (BUY / SELL 50% / SELL 100% / HOLD)
 - [x] **1.25** Mean Reversion state machine – FLAT → POSITION → REDUCED → COOLDOWN (no cooldown on profit exits)
-- [ ] **1.26** Mean Reversion config – add `mean_reversion` section to `strategies.yaml`
-- [ ] **1.27** Mean Reversion time stop – exit after 16 candles if middle BB not reached
+- [x] **1.26** Mean Reversion config – add `mean_reversion` section to `strategies.yaml`
+- [x] **1.27** Mean Reversion time stop – exit after 16 candles if middle BB not reached
 - [x] **1.28** Mean Reversion unit tests – signal logic, state transitions, regime filter
 
 ---
 
 ## Phase 2 – Real-Time Interface
-
-| TODO | IN PROGRESS | DONE |
-|------|-------------|------|
-| | | |
-
 ### Tasks – Backend (FastAPI + Event System)
 
 - [ ] **2.1** Add FastAPI to dependencies (`pyproject.toml`)
@@ -115,11 +105,6 @@
 ---
 
 ## Phase 3 – Infrastructure & Paper Trading
-
-| TODO | IN PROGRESS | DONE |
-|------|-------------|------|
-| | | |
-
 ### Tasks
 
 - [ ] **3.1** Add Redis + Celery worker + Celery Beat services to docker-compose

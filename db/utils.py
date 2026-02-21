@@ -181,17 +181,22 @@ def orm_to_position(record: orm_models.PositionRecord) -> pydantic_models.Positi
 
 # ── Trade Conversions ────────────────────────────────────────────────────────
 
-def trade_to_orm(trade: pydantic_models.Trade) -> orm_models.TradeRecord:
+def trade_to_orm(
+    trade: pydantic_models.Trade,
+    run_id: str | None = None,
+) -> orm_models.TradeRecord:
     """
     Convert Pydantic Trade to ORM TradeRecord.
     
     Args:
         trade: Pydantic Trade model
+        run_id: Optional backtest run_id to link this trade to.
     
     Returns:
         ORM TradeRecord
     """
     return orm_models.TradeRecord(
+        run_id=run_id,
         symbol=trade.symbol,
         strategy=trade.strategy,
         entry_price=trade.entry_price,
@@ -295,17 +300,22 @@ def orm_to_order(record: orm_models.OrderRecord) -> pydantic_models.Order:
 
 # ── Portfolio Snapshot Conversions ───────────────────────────────────────────
 
-def portfolio_snapshot_to_orm(snapshot: pydantic_models.PortfolioSnapshot) -> orm_models.PortfolioSnapshot:
+def portfolio_snapshot_to_orm(
+    snapshot: pydantic_models.PortfolioSnapshot,
+    run_id: str | None = None,
+) -> orm_models.PortfolioSnapshot:
     """
     Convert Pydantic PortfolioSnapshot to ORM PortfolioSnapshot.
     
     Args:
         snapshot: Pydantic PortfolioSnapshot model
+        run_id: Optional backtest run_id to link this snapshot to.
     
     Returns:
         ORM PortfolioSnapshot
     """
     return orm_models.PortfolioSnapshot(
+        run_id=run_id,
         timestamp=snapshot.timestamp,
         usdt_balance=snapshot.usdt_balance,
         positions_value=snapshot.positions_value,
@@ -370,6 +380,8 @@ def backtest_metrics_to_orm(metrics: pydantic_models.BacktestMetrics) -> orm_mod
         avg_trade_duration_minutes=metrics.avg_trade_duration_minutes,
         max_consecutive_wins=metrics.max_consecutive_wins,
         max_consecutive_losses=metrics.max_consecutive_losses,
+        buy_hold_return=metrics.buy_hold_return,
+        buy_hold_vs_strategy=metrics.buy_hold_vs_strategy,
     )
 
 
@@ -404,6 +416,8 @@ def orm_to_backtest_metrics(record: orm_models.BacktestResult) -> pydantic_model
         avg_trade_duration_minutes=record.avg_trade_duration_minutes,
         max_consecutive_wins=record.max_consecutive_wins,
         max_consecutive_losses=record.max_consecutive_losses,
+        buy_hold_return=record.buy_hold_return,
+        buy_hold_vs_strategy=record.buy_hold_vs_strategy,
     )
 
 

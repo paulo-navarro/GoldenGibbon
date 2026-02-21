@@ -103,7 +103,7 @@ def _make_market_data(
         4. volume_spike:           volume (8000) > 1.5 × 5000      ✓
         5. hourly_rsi_ok:          rsi_1h (50) > 35                ✓
         6. hourly_close_above_ema: close_1h (110) > ema_50_1h (100)✓
-        7. session_filter_pass:    stubbed True                    ✓
+        7. session_filter_pass:    True (no dead zones in default config)
     """
     candles = _make_candles(close_val=close, volume_val=volume)
 
@@ -724,3 +724,105 @@ class TestCooldownCountdown:
         """Fresh strategy has _cooldown_remaining == 0."""
         s = MeanReversion(DEFAULT_CONFIG)
         assert s._cooldown_remaining == 0
+
+
+# ── Session Filter ───────────────────────────────────────────────────────────
+
+_DEAD_ZONES = [
+    {"name": "Weekend", "start_utc": "Saturday 21:00", "end_utc": "Sunday 20:00"},
+    {"name": "Overnight Gap", "start_utc": "21:00", "end_utc": "01:00"},
+]
+
+
+def _make_candles_at(start_dt, close_val=90.0, volume_val=8000.0, length=N):
+    """Create candles whose *last* bar opens at *start_dt*."""
+    dates = pd.date_range(end=start_dt, periods=length, freq="15min")
+    return pd.DataFrame(
+        {
+            "open": [close_val] * length,
+            "high": [close_val + 1] * length,
+            "low": [close_val - 1] * length,
+            "close": [close_val] * length,
+            "volume": [volume_val] * length,
+        },
+        index=dates,
+    )
+
+
+def _make_md_at_time(start_str, **kwargs):
+    """Build a default-BUY MarketData with last candle at *start_str*."""
+    from datetime import datetime as _dt
+    candle_time = pd.Timestamp(_dt.fromisoformat(start_str))
+    candles = _make_candles_at(
+        candle_time,
+        close_val=kwargs.get("close", 90.0),
+        volume_val=kwargs.get("volume", 8000.0),
+    )
+    candles_1h = _make_candles_1h(close_val=kwargs.get("close_1h", 110.0))
+    return MarketData(
+        symbol="BTCUSDT",
+        timeframe="15m",
+        candles=candles,
+        indicators={
+            "bb_lower": _make_series(kwargs.get("bb_lower", 95.0)),
+            "bb_middle": _make_series(kwargs.get("bb_middle", 100.0)),
+            "bb_upper": _make_series(kwargs.get("bb_upper", 105.0)),
+            "rsi": _make_series(kwargs.get("rsi", 25.0)),
+            "adx": _make_series(kwargs.get("adx", 20.0)),
+            "volume_sma": _make_series(kwargs.get("volume_sma", 5000.0)),
+        },
+        secondary_timeframe="1h",
+        secondary_candles=candles_1h,
+        secondary_indicators={
+            "rsi": _make_series(kwargs.get("rsi_1h", 50.0), N_1H),
+            "ema_50": _make_series(kwargs.get("ema_50_1h", 100.0), N_1H),
+        },
+    )
+
+
+class TestMRSessionFilter:
+    """Verify session filter blocks BUY but not SELL during dead zones."""
+
+    def _config_with_filter(self):
+        return {
+            **DEFAULT_CONFIG,
+            "session_filter_enabled": True,
+            "session_dead_zones": _DEAD_ZONES,
+        }
+
+    def test_buy_blocked_during_weekend_dead_zone(self):
+        """Saturday 22:00 → dead zone → BUY conditions met but HOLD."""
+        s = MeanReversion(self._config_with_filter())
+        md = _make_md_at_time("2026-02-21T22:00:00")
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+        assert s.conditions.session_filter_pass is False
+
+    def test_buy_blocked_during_overnight_dead_zone(self):
+        """Monday 22:00 → dead zone → BUY blocked."""
+        s = MeanReversion(self._config_with_filter())
+        md = _make_md_at_time("2026-02-16T22:00:00")
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+        assert s.conditions.session_filter_pass is False
+
+    def test_buy_allowed_outside_dead_zone(self):
+        """Wednesday 14:00 → open session → BUY fires."""
+        s = MeanReversion(self._config_with_filter())
+        md = _make_md_at_time("2026-02-18T14:00:00")
+        assert s.decide(md, _portfolio()) == Signal.BUY
+        assert s.conditions.session_filter_pass is True
+
+    def test_sell_not_blocked_during_dead_zone(self):
+        """SELL signals fire even inside dead zones."""
+        cfg = self._config_with_filter()
+        s = MeanReversion(cfg)
+        s._state = StrategyState.POSITION
+        # Saturday 22:00: RSI overbought → SELL_FULL regardless
+        md = _make_md_at_time("2026-02-21T22:00:00", rsi=75.0, adx=35.0)
+        assert s.decide(md, _portfolio()) == Signal.SELL_FULL
+
+    def test_filter_disabled_allows_buy_in_dead_zone(self):
+        cfg = {**DEFAULT_CONFIG, "session_filter_enabled": False, "session_dead_zones": _DEAD_ZONES}
+        s = MeanReversion(cfg)
+        md = _make_md_at_time("2026-02-21T22:00:00")
+        assert s.decide(md, _portfolio()) == Signal.BUY
+        assert s.conditions.session_filter_pass is True

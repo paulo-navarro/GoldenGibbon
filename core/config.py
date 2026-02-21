@@ -136,10 +136,66 @@ class SmartHodlerConfig(BaseModel):
         return v
 
 
+class MeanReversionStrategyConfig(BaseModel):
+    """Configuration for the Mean Reversion strategy."""
+
+    enabled: bool = Field(default=True)
+    description: Optional[str] = None
+
+    # Timeframes
+    timeframe_primary: str = Field(default="15m")
+    timeframe_confirmation: str = Field(default="1h")
+
+    # Bollinger Bands (15m)
+    bb_period: int = Field(default=20, ge=1)
+    bb_std_dev: float = Field(default=2.0, gt=0)
+
+    # RSI (15m)
+    rsi_period: int = Field(default=14, ge=1)
+    rsi_oversold: float = Field(default=30, ge=0, le=100)
+    rsi_overbought: float = Field(default=70, ge=0, le=100)
+
+    # ADX regime filter (15m)
+    adx_period: int = Field(default=14, ge=1)
+    adx_threshold: float = Field(default=25, ge=0, le=100)
+
+    # Volume confirmation
+    volume_sma_period: int = Field(default=20, ge=1)
+    volume_spike_multiplier: float = Field(default=1.5, gt=0)
+
+    # Hourly confirmation (1H)
+    ema_hourly: int = Field(default=21, ge=1)
+    rsi_hourly_floor: float = Field(default=35, ge=0, le=100)
+
+    # Position Sizing (single entry, no scale-in)
+    entry_pct: float = Field(default=0.75, gt=0, le=1)
+
+    # Exit Strategy
+    exit_partial_pct: float = Field(default=0.50, gt=0, le=1)
+
+    # Stop-Loss
+    hard_stop_pct: float = Field(default=0.02, gt=0, le=1)
+    atr_period: int = Field(default=14, ge=1)
+
+    # Time Stop
+    time_stop_candles: int = Field(default=16, ge=1)
+    time_stop_cooldown_candles: int = Field(default=4, ge=0)
+
+    # Cooldown
+    cooldown_candles: int = Field(default=8, ge=0)
+
+    # Session Filter
+    session_filter_enabled: bool = Field(default=True)
+    session_dead_zones: List[SessionDeadZone] = Field(default_factory=list)
+
+
 class StrategiesConfig(BaseModel):
     """Root configuration for all strategies."""
-    
+
     smart_hodler: SmartHodlerConfig
+    mean_reversion: MeanReversionStrategyConfig = Field(
+        default_factory=MeanReversionStrategyConfig
+    )
 
 
 # ── Risk Configuration ────────────────────────────────────────────────────────

@@ -124,6 +124,7 @@ class TradeRecord(Base):
     __tablename__ = "trade_records"
     
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    run_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
     symbol: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     strategy: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     side: Mapped[str] = mapped_column(String(10), nullable=False, default="long")
@@ -213,6 +214,7 @@ class PortfolioSnapshot(Base):
     __tablename__ = "portfolio_snapshots"
     
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    run_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -266,6 +268,8 @@ class BacktestResult(Base):
     avg_trade_duration_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     max_consecutive_wins: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     max_consecutive_losses: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    buy_hold_return: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 4), nullable=True)
+    buy_hold_vs_strategy: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 4), nullable=True)
     
     # Store full config as JSONB for reproducibility
     config_snapshot: Mapped[Optional[Dict]] = mapped_column(JSONB, nullable=True)

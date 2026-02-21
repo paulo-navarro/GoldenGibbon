@@ -19,6 +19,7 @@ import pandas as pd
 
 from core.models import MarketData, Portfolio, Signal, StrategyConditions, StrategyState
 from core.strategies.base import Strategy
+from core.strategies.session_filter import is_in_dead_zone
 
 
 class SmartHodler(Strategy):
@@ -115,7 +116,7 @@ class SmartHodler(Strategy):
             volume_above_average=volume > vol_sma_val,
             hourly_ema_rising=hourly_ema_rising,
             hourly_rsi_above_threshold=hourly_rsi_ok,
-            session_filter_pass=True,  # Stubbed until task 1.13
+            session_filter_pass=self._check_session_filter(market_data),
         )
 
         # ── Consecutive-below-EMA200 counter ─────────────────────────────
@@ -154,6 +155,16 @@ class SmartHodler(Strategy):
         self._cooldown_remaining = 0
 
     # ── Private helpers ──────────────────────────────────────────────────
+
+    def _check_session_filter(self, market_data: MarketData) -> bool:
+        """Return True when trading is allowed (outside dead zones)."""
+        if not self.config.get("session_filter_enabled", True):
+            return True
+        dead_zones = self.config.get("session_dead_zones", [])
+        if not dead_zones:
+            return True
+        candle_time = market_data.candles.index[-1].to_pydatetime()
+        return not is_in_dead_zone(candle_time, dead_zones)
 
     def _enter_cooldown(self) -> None:
         """Transition to COOLDOWN state and initialise the countdown."""

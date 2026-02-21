@@ -62,6 +62,68 @@ class ExitReason(str, Enum):
     TRAILING_STOP = "trailing_stop"            # Hit trailing stop
     HARD_STOP = "hard_stop"                    # Hit 3% max drawdown
     MANUAL = "manual"                          # Manual intervention
+    TIME_STOP = "time_stop"                    # Mean Reversion: 16-candle timeout
+    MIDDLE_BB = "middle_bb"                    # Mean Reversion: partial exit at middle BB
+
+
+class RiskAction(str, Enum):
+    """Actions authorised by the risk engine."""
+    OPEN = "open"          # Open a new position
+    SCALE_IN = "scale_in"  # Add to existing position
+    REDUCE = "reduce"      # Partial close
+    CLOSE = "close"        # Full close
+    HOLD = "hold"          # No action
+
+
+class RiskDecision(BaseModel):
+    """
+    Output of the risk engine for a single evaluation tick.
+
+    Translates a raw strategy Signal into a concrete, sized instruction
+    that the executor can act on.
+    """
+    action: RiskAction
+    symbol: str = ""
+    size: Decimal = Decimal("0")           # Base-asset amount (e.g. BTC qty)
+    price: Decimal = Decimal("0")          # Reference price (current close)
+    exit_reason: Optional[ExitReason] = None
+    sell_fraction: Optional[Decimal] = None
+    hard_stop_price: Optional[Decimal] = None
+    trailing_stop_price: Optional[Decimal] = None
+
+    model_config = ConfigDict(
+        json_encoders={
+            Decimal: lambda v: str(v),
+        }
+    )
+
+
+class StopCheckResult(BaseModel):
+    """
+    Return value of ``RiskEngine.check_stops()``.
+
+    Carries both a potential exit decision *and* updated stop-level
+    values so the caller can persist them via
+    ``PortfolioManager.update_stops()``.
+
+    When a hard stop fires, ``cooldown_candles`` signals how many
+    candles the caller should block re-entry for this symbol.
+    """
+    decision: Optional[RiskDecision] = None
+    highest_close: Optional[Decimal] = None
+    trailing_stop_price: Optional[Decimal] = None
+    cooldown_candles: Optional[int] = None
+
+    @property
+    def stop_hit(self) -> bool:
+        """True when a stop triggered an exit."""
+        return self.decision is not None and self.decision.action == RiskAction.CLOSE
+
+    model_config = ConfigDict(
+        json_encoders={
+            Decimal: lambda v: str(v),
+        }
+    )
 
 
 # ── Core Data Models ─────────────────────────────────────────────────────────
@@ -313,17 +375,40 @@ class Order(BaseModel):
     )
 
 
+class ExecutionResult(BaseModel):
+    """
+    Return value of ``Executor.execute()``.
+
+    Bundles the filled Order with the resulting Position (buy-side)
+    or Trade (sell-side) so the backtest runner has a single return
+    value.
+    """
+    order: 'Order'
+    position: Optional['Position'] = None   # set for OPEN / SCALE_IN
+    trade: Optional['Trade'] = None         # set for REDUCE / CLOSE
+
+    model_config = ConfigDict(
+        json_encoders={
+            Decimal: lambda v: str(v),
+            datetime: lambda v: v.isoformat(),
+        }
+    )
+
+
 class Portfolio(BaseModel):
     """
     Portfolio state.
     
-    Tracks USDT balance, open positions, and equity.
+    Tracks USDT balance, open positions, equity, trade history,
+    and equity curve snapshots.
     """
     usdt_balance: Decimal
     positions: Dict[str, Position] = Field(default_factory=dict)  # symbol -> Position
     equity: Decimal  # Total equity (balance + positions value)
     total_pnl: Decimal = Decimal("0")
     open_trades_count: int = 0
+    trade_history: List['Trade'] = Field(default_factory=list)
+    equity_curve: List['PortfolioSnapshot'] = Field(default_factory=list)
     
     @property
     def available_capital(self) -> Decimal:
@@ -442,6 +527,8 @@ class BacktestMetrics(BaseModel):
     avg_trade_duration_minutes: Optional[int] = None
     max_consecutive_wins: Optional[int] = None
     max_consecutive_losses: Optional[int] = None
+    buy_hold_return: Optional[Decimal] = None
+    buy_hold_vs_strategy: Optional[Decimal] = None
     
     model_config = ConfigDict(
         json_encoders={
@@ -473,6 +560,34 @@ class PortfolioSnapshot(BaseModel):
     )
 
 
+class BacktestResult(BaseModel):
+    """
+    Raw output of a single backtest run.
+
+    Carries the final portfolio state, closed trades, and the
+    candle-by-candle equity curve.  ``BacktestMetrics`` is computed
+    *from* this result via ``compute_metrics()``.
+    """
+    strategy_name: str
+    symbol: str
+    timeframe: str
+    start_time: datetime
+    end_time: datetime
+    candles_processed: int
+    portfolio: 'Portfolio'
+    trades: List['Trade'] = Field(default_factory=list)
+    equity_curve: List['PortfolioSnapshot'] = Field(default_factory=list)
+    benchmark_first_price: Optional[Decimal] = None
+    benchmark_last_price: Optional[Decimal] = None
+
+    model_config = ConfigDict(
+        json_encoders={
+            Decimal: lambda v: str(v),
+            datetime: lambda v: v.isoformat(),
+        }
+    )
+
+
 # ── Exports ──────────────────────────────────────────────────────────────────
 
 __all__ = [
@@ -482,14 +597,19 @@ __all__ = [
     "OrderType",
     "OrderStatus",
     "ExitReason",
+    "RiskAction",
+    "RiskDecision",
+    "StopCheckResult",
     "Candle",
     "MarketData",
     "Position",
     "Trade",
     "Order",
+    "ExecutionResult",
     "Portfolio",
     "StrategyConditions",
     "MeanReversionConditions",
     "BacktestMetrics",
+    "BacktestResult",
     "PortfolioSnapshot",
 ]

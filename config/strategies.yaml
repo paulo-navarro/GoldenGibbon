@@ -54,8 +54,59 @@ strategies:
     # ADX Momentum Detection
     adx_falling_lookback: 3  # Compare current ADX to 3 bars ago
 
-# Add future strategies here
-# Example:
-# mean_reversion:
-#   enabled: false
-#   ...
+  mean_reversion:
+    enabled: true
+    description: "Mean-reversion strategy for 15m timeframe with hourly confirmation"
+
+    # Timeframes
+    timeframe_primary: "15m"
+    timeframe_confirmation: "1h"
+
+    # Bollinger Bands (15m)
+    bb_period: 20
+    bb_std_dev: 2.0
+
+    # RSI (15m)
+    rsi_period: 14
+    rsi_oversold: 30
+    rsi_overbought: 70
+
+    # ADX regime filter (15m)
+    adx_period: 14
+    adx_threshold: 25  # Below = ranging (good for mean reversion)
+
+    # Volume confirmation
+    volume_sma_period: 20
+    volume_spike_multiplier: 1.5
+
+    # Hourly confirmation (1H)
+    ema_hourly: 21
+    rsi_hourly_floor: 35
+
+    # Position Sizing (single entry, no scale-in)
+    entry_pct: 0.75  # 75% of available capital
+
+    # Exit Strategy
+    exit_partial_pct: 0.50  # Sell 50% at middle BB
+
+    # Stop-Loss
+    hard_stop_pct: 0.02  # 2% max drawdown per trade
+    atr_period: 14
+
+    # Time Stop
+    time_stop_candles: 16  # Exit after 16 candles if middle BB not reached
+    time_stop_cooldown_candles: 4  # ~1h cooldown after time stop
+
+    # Cooldown
+    cooldown_candles: 8  # ~2h after hard stop exit
+    # Note: No cooldown on profit exits (immediate re-entry allowed)
+
+    # Session Filter (dead zones - no new entries)
+    session_filter_enabled: true
+    session_dead_zones:
+      - name: "Weekend"
+        start_utc: "Saturday 21:00"
+        end_utc: "Sunday 20:00"
+      - name: "Overnight Gap"
+        start_utc: "21:00"
+        end_utc: "01:00"

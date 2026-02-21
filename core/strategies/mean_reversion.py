@@ -24,6 +24,7 @@ from core.models import (
     StrategyState,
 )
 from core.strategies.base import Strategy
+from core.strategies.session_filter import is_in_dead_zone
 
 
 class MeanReversion(Strategy):
@@ -144,7 +145,7 @@ class MeanReversion(Strategy):
             volume_spike=volume > volume_spike_multiplier * vol_sma_val,
             hourly_rsi_ok=hourly_rsi_ok,
             hourly_close_above_ema=hourly_close_above_ema,
-            session_filter_pass=True,  # Stubbed until session filter task
+            session_filter_pass=self._check_session_filter(market_data),
         )
 
         # ── Signal evaluation (priority order) ───────────────────────────
@@ -177,6 +178,16 @@ class MeanReversion(Strategy):
         self._cooldown_remaining = 0
 
     # ── Private helpers ──────────────────────────────────────────────────
+
+    def _check_session_filter(self, market_data: MarketData) -> bool:
+        """Return True when trading is allowed (outside dead zones)."""
+        if not self.config.get("session_filter_enabled", True):
+            return True
+        dead_zones = self.config.get("session_dead_zones", [])
+        if not dead_zones:
+            return True
+        candle_time = market_data.candles.index[-1].to_pydatetime()
+        return not is_in_dead_zone(candle_time, dead_zones)
 
     def _enter_cooldown(self) -> None:
         """Transition to COOLDOWN state and initialise the countdown.
