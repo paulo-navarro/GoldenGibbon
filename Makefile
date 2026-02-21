@@ -1,4 +1,4 @@
-.PHONY: dev prod down logs ps build test test-cov migrate migrate-create seed db-shell
+.PHONY: dev prod down logs ps build test test-cov migrate migrate-create seed db-shell test-indicators test-loader
 
 # ── Development (hot-reload via volume mount) ──
 dev:
@@ -28,6 +28,13 @@ test:
 
 test-cov:
 	docker compose run --rm app python -m pytest tests/ -v --cov=core --cov-report=term-missing
+
+# ── Scripts ────────────────────────────────────
+test-indicators:
+	docker compose run --rm -e PYTHONPATH=/app app python scripts/test_indicators.py
+
+test-loader:
+	docker compose run --rm -e PYTHONPATH=/app app python scripts/test_data_loader.py
 
 # ── Database ───────────────────────────────────
 migrate:
