@@ -43,12 +43,12 @@
 ## Phase 2 – Real-Time Interface
 ### Tasks – Backend (FastAPI + Event System)
 
-- [ ] **2.1** Add FastAPI to dependencies (`pyproject.toml`)
-- [ ] **2.2** Create Pydantic models in `core/models.py` (MarketData, Portfolio, Signal, Order, Trade, StrategyState, StrategyConditions)
-- [ ] **2.3** Database ORM models in `db/models.py` (Candle, Position, TradeRecord, OrderRecord, PortfolioSnapshot)
-- [ ] **2.4** Alembic migration – initial schema (tables, indexes for symbol+timestamp)
-- [ ] **2.5** Event publisher in `core/events.py` (Redis pub/sub client, publish_event method)
-- [ ] **2.6** Event channels – market_data, strategy, risk, execution, portfolio, system
+- [x] **2.1** Add FastAPI to dependencies (`pyproject.toml`)
+- [x] **2.2** Create Pydantic models in `core/models.py` (MarketData, Portfolio, Signal, Order, Trade, StrategyState, StrategyConditions)
+- [x] **2.3** Database ORM models in `db/models.py` (Candle, Position, TradeRecord, OrderRecord, PortfolioSnapshot)
+- [x] **2.4** Alembic migration – initial schema (tables, indexes for symbol+timestamp)
+- [x] **2.5** Event publisher in `core/events.py` (Redis pub/sub client, publish_event method)
+- [x] **2.6** Event channels – market_data, strategy, risk, execution, portfolio, system
 - [ ] **2.7** FastAPI app setup in `api/main.py` (CORS, DB connection pool, Redis client, startup/shutdown hooks)
 - [ ] **2.8** REST endpoints – `api/routes/market.py` (GET /candles/{symbol}, GET /price/{symbol})
 - [ ] **2.9** REST endpoints – `api/routes/portfolio.py` (GET /portfolio, GET /equity-curve)

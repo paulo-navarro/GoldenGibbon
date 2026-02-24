@@ -112,13 +112,14 @@ GoldenGibbon follows a strict unidirectional data flow through isolated layers:
 - ✅ **Backtest Runner** — Fast candle-by-candle simulation loop with orderbook replay
 - ✅ **Reporting** — Rich console output tables and PostgreSQL persistence of backtest results
 - ✅ **Logging** — Structured JSON logs (structlog) for full observability of every decision
-- ✅ **Test Suite** — 550+ unit tests covering the entire pipeline
+- ✅ **Test Suite** — 600+ unit tests covering the entire pipeline
 
-### Planned (Phase 2 - Real-Time Interface 📋)
+### In Progress (Phase 2 - Real-Time Interface 🚧)
 
+- ✅ **FastAPI + Uvicorn** — Added to dependencies with production extras
+- ✅ **Event System** — Redis pub/sub publisher with 6 channels and 23 event types
 - 📋 **FastAPI Backend** — REST endpoints + WebSocket event streaming
 - 📋 **React Dashboard** — Real-time charts, portfolio tracking, trade history
-- 📋 **Event System** — Redis pub/sub for live updates
 - 📋 **WebSocket Client** — Auto-reconnecting client with state management
 
 ### Future (Phase 3+ - Production 🔮)
@@ -255,6 +256,7 @@ GoldenGibbon/
 ├── core/               # Core trading engine
 │   ├── config.py       # YAML config loaders
 │   ├── models.py       # Pydantic models (MarketData, Candle)
+│   ├── events.py       # Event publisher (Redis pub/sub)
 │   ├── data/           # Data fetching and caching
 │   │   ├── binance_client.py
 │   │   └── loader.py
@@ -307,7 +309,7 @@ docker compose run --rm -e PYTHONPATH=/app app pytest tests/test_indicators.py -
 docker compose run --rm -e PYTHONPATH=/app app pytest tests/test_database.py -v
 ```
 
-Current test coverage: **550+ passing tests** across indicators, strategies, and execution engine.
+Current test coverage: **600+ passing tests** across indicators, strategies, events, and execution engine.
 
 ---
 
@@ -318,8 +320,9 @@ Progress is tracked in [`kanban.md`](kanban.md). Current status:
 ### Phase 1: Foundation & Backtest Engine (100% Complete)
 - ✅ **Tasks 1.1–1.28** — Fully implemented (Data, Indicators, Strategy engine, Risk manager, Portfolio tracking, Execution simulation, Backtesting loop, Logging)
 
-### Phase 2: Real-Time Interface (0% Complete)
-- 📋 Tasks 2.1–2.52 (FastAPI backend, React frontend, WebSocket)
+### Phase 2: Real-Time Interface (12% Complete)
+- ✅ **Tasks 2.1–2.6** — FastAPI dependencies, Pydantic models, ORM models, Alembic migrations, event publisher, event channels
+- 📋 Tasks 2.7–2.52 (FastAPI app, REST endpoints, WebSocket, React frontend)
 
 ### Phase 3: Infrastructure & Paper Trading (0% Complete)
 - 📋 Tasks 3.1–3.10 (Celery, live data feeds, state persistence)
@@ -336,10 +339,10 @@ Progress is tracked in [`kanban.md`](kanban.md). Current status:
 
 **Backend:**
 - Python 3.12
-- FastAPI (planned)
+- FastAPI + Uvicorn
 - SQLAlchemy 2.x + Alembic
 - PostgreSQL 16
-- Redis 7
+- Redis 7 (event pub/sub)
 - pandas + numpy
 
 **Data Sources:**
