@@ -121,6 +121,7 @@ GoldenGibbon follows a strict unidirectional data flow through isolated layers:
 - ✅ **FastAPI App** — Application factory with lifespan, CORS, health check
 - ✅ **Market Routes** — `GET /candles/{symbol}`, `GET /price/{symbol}` with filtering
 - ✅ **Portfolio Routes** — `GET /portfolio`, `GET /equity-curve` with run_id/date filters
+- ✅ **Trade Routes** — `GET /trades` with symbol/strategy/exit_reason filters, `GET /trades/stats`
 - ✅ **Docker API Service** — `api` + `api-prod` in docker-compose with healthcheck, `make api`
 - 📋 **More REST Routes** — Trades, orders, strategy, system endpoints
 - 📋 **WebSocket Streaming** — Real-time event broadcasting to frontend
@@ -328,7 +329,7 @@ docker compose run --rm -e PYTHONPATH=/app app pytest tests/test_indicators.py -
 docker compose run --rm -e PYTHONPATH=/app app pytest tests/test_database.py -v
 ```
 
-Current test coverage: **683 passing tests** across indicators, strategies, events, API routes, and execution engine.
+Current test coverage: **715 passing tests** across indicators, strategies, events, API routes, and execution engine.
 
 ---
 
@@ -428,12 +429,12 @@ This is a personal trading platform under active development. Contributions, sug
 
 ```
 Phase 1  ██████████████████████████████  30/30  100%
-Phase 2  █████░░░░░░░░░░░░░░░░░░░░░░░░░  11/52   21%
+Phase 2  ██████░░░░░░░░░░░░░░░░░░░░░░░░  12/52   23%
 ─────────────────────────────────────────────────────
-Overall  ███████████████░░░░░░░░░░░░░░░  41/82   50%
+Overall  ███████████████░░░░░░░░░░░░░░░  42/82   51%
 ```
 
-> *Last updated: 25 Feb 2026 · 683 tests passing*
+> *Last updated: 25 Feb 2026 · 715 tests passing*
 
 ---
 

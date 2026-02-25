@@ -52,18 +52,18 @@
 - [x] **2.7** FastAPI app setup in `api/main.py` (CORS, DB connection pool, Redis client, startup/shutdown hooks)
 - [x] **2.8** REST endpoints – `api/routes/market.py` (GET /candles/{symbol}, GET /price/{symbol})
 - [x] **2.9** REST endpoints – `api/routes/portfolio.py` (GET /portfolio, GET /equity-curve)
-- [ ] **2.10** REST endpoints – `api/routes/trades.py` (GET /trades with filters, GET /trades/stats)
-- [ ] **2.11** REST endpoints – `api/routes/orders.py` (GET /orders, GET /orders/{id})
-- [ ] **2.12** REST endpoints – `api/routes/strategy.py` (GET /strategy/state, GET /strategy/signals)
-- [ ] **2.13** REST endpoints – `api/routes/system.py` (GET /health, GET /logs)
-- [ ] **2.14** WebSocket endpoint in `api/websocket.py` (WS /ws, subscribe to Redis pub/sub, forward events)
-- [ ] **2.15** WebSocket connection manager (multiple clients, heartbeat, reconnection handling)
+- [x] **2.10** REST endpoints – `api/routes/trades.py` (GET /trades with filters, GET /trades/stats)
+- [x] **2.11** REST endpoints – `api/routes/orders.py` (GET /orders, GET /orders/{id})
+- [x] **2.12** REST endpoints – `api/routes/strategy.py` (GET /strategy/state, GET /strategy/signals)
+- [x] **2.13** REST endpoints – `api/routes/system.py` (GET /health, GET /logs)
+- [x] **2.14** WebSocket endpoint in `api/websocket.py` (WS /ws, subscribe to Redis pub/sub, forward events)
+- [x] **2.15** WebSocket connection manager (multiple clients, heartbeat, reconnection handling)
 - [ ] **2.16** Integrate event publishing into strategy (publish SIGNAL_GENERATED, STATE_CHANGED events)
 - [ ] **2.17** Integrate event publishing into execution (publish ORDER_CREATED, ORDER_FILLED events)
 - [ ] **2.18** Integrate event publishing into portfolio (publish POSITION_UPDATED, TRADE_CLOSED events)
 - [x] **2.19** API Dockerfile – folded into existing Dockerfile (`COPY api/ api/` added to prod stage)
 - [x] **2.20** Add `api` service to docker-compose.yml (expose port 8000, connect to Postgres + Redis)
-- [ ] **2.21** Environment config (`api/.env.example` with DATABASE_URL, REDIS_URL, CORS_ORIGINS)
+- [x] **2.21** Environment config (`api/.env.example` with DATABASE_URL, REDIS_URL, CORS_ORIGINS)
 
 ### Tasks – Frontend (React + WebSocket)
 
@@ -114,7 +114,7 @@
 - [ ] **3.5** Strategy tick task – Celery task to run indicator → strategy → risk → execute pipeline
 - [ ] **3.6** Live data feed – real-time candle ingestion from Binance (REST or WebSocket)
 - [ ] **3.7** Paper trading mode – PaperExecutor driven by live data via Celery tasks
-- [ ] **3.8** State persistence – save/load strategy state + portfolio between ticks
+- [ ] **3.8** State persistence – save/load strategy state + portfolio between ticks (also: enrich `/api/strategy/signals` with live conditions from `state_data`)
 - [ ] **3.9** Reconciliation task – compare local state vs expected state on startup
 - [ ] **3.10** Monitoring – health checks for workers, beat, Redis connectivity
 

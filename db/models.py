@@ -166,6 +166,7 @@ class OrderRecord(Base):
     __tablename__ = "order_records"
     
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    run_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
     symbol: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     side: Mapped[str] = mapped_column(String(10), nullable=False)  # buy, sell
     order_type: Mapped[str] = mapped_column(String(10), nullable=False)  # market, limit

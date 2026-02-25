@@ -145,6 +145,15 @@ def create_app() -> FastAPI:
     # ── Routes ───────────────────────────────────────────────────────
     _include_routes(application)
 
+    # ── WebSocket ────────────────────────────────────────────────────
+    try:
+        from api.websocket import router as ws_router
+
+        application.include_router(ws_router)
+        logger.debug("api.ws_mounted")
+    except (ImportError, AttributeError):
+        logger.debug("api.ws_skipped")
+
     return application
 
 
@@ -175,29 +184,6 @@ def _include_routes(application: FastAPI) -> None:
                 logger.debug("api.route_mounted", module=module_path, prefix=prefix)
         except (ImportError, AttributeError):
             logger.debug("api.route_skipped", module=module_path)
-
-    # ── Health Endpoint ──────────────────────────────────────────────
-
-    @application.get("/health", tags=["system"])
-    async def health() -> dict:
-        """
-        Liveness / readiness probe.
-
-        Returns the connection status of Postgres and Redis.
-        """
-        redis_ok = False
-        if hasattr(application.state, "redis") and application.state.redis is not None:
-            try:
-                await application.state.redis.ping()
-                redis_ok = True
-            except Exception:
-                pass
-
-        return {
-            "status": "ok",
-            "db": check_connection(),
-            "redis": redis_ok,
-        }
 
 
 # ── Module-level app instance (uvicorn api.main:app) ────────────────────────

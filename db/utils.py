@@ -281,6 +281,7 @@ def orm_to_order(record: orm_models.OrderRecord) -> pydantic_models.Order:
         Pydantic Order model
     """
     return pydantic_models.Order(
+        run_id=record.run_id,
         symbol=record.symbol,
         side=pydantic_models.OrderSide(record.side),
         order_type=pydantic_models.OrderType(record.order_type),
@@ -421,6 +422,47 @@ def orm_to_backtest_metrics(record: orm_models.BacktestResult) -> pydantic_model
     )
 
 
+# ── Strategy State Conversions ───────────────────────────────────────────────
+
+
+def orm_to_strategy_state(
+    record: orm_models.StrategyStateRecord,
+) -> pydantic_models.StrategyStateResponse:
+    """
+    Convert ORM StrategyStateRecord to Pydantic StrategyStateResponse.
+    """
+    return pydantic_models.StrategyStateResponse(
+        symbol=record.symbol,
+        strategy=record.strategy,
+        state=pydantic_models.StrategyState(record.state),
+        cooldown_until=record.cooldown_until,
+        consecutive_buy_candles=record.consecutive_buy_candles,
+        last_exit_time=record.last_exit_time,
+        state_data=record.state_data,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def orm_to_signal_snapshot(
+    record: orm_models.StrategyStateRecord,
+) -> pydantic_models.StrategySignalSnapshot:
+    """
+    Derive a signal snapshot from a StrategyStateRecord.
+
+    Signal is always HOLD until live conditions are persisted
+    to ``state_data`` (Phase 3, task 3.8).
+    """
+    return pydantic_models.StrategySignalSnapshot(
+        symbol=record.symbol,
+        strategy=record.strategy,
+        state=pydantic_models.StrategyState(record.state),
+        signal=pydantic_models.Signal.HOLD,
+        conditions=record.state_data,
+        updated_at=record.updated_at,
+    )
+
+
 # ── Exports ──────────────────────────────────────────────────────────────────
 
 __all__ = [
@@ -438,4 +480,6 @@ __all__ = [
     "orm_to_portfolio_snapshot",
     "backtest_metrics_to_orm",
     "orm_to_backtest_metrics",
+    "orm_to_strategy_state",
+    "orm_to_signal_snapshot",
 ]

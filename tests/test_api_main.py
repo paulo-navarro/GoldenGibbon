@@ -3,7 +3,7 @@ Tests for ``api.main`` – FastAPI application setup.
 
 Verifies:
   - App factory returns a properly configured FastAPI instance
-  - ``GET /health`` returns 200 with connection statuses
+  - ``GET /api/system/health`` returns 200 with connection statuses
   - CORS middleware allows configured origins
   - Lifespan initialises and tears down the event publisher
   - Route modules are mounted (or gracefully skipped when absent)
@@ -82,6 +82,7 @@ def client_no_db():
         patch("api.main.init_publisher") as mock_init,
         patch("api.main.reset_publisher"),
         patch("api.main.check_connection", return_value=False),
+        patch("api.routes.system.check_connection", return_value=False),
         patch("redis.asyncio.from_url", return_value=mock_async_redis),
     ):
         mock_pub = MagicMock()
@@ -134,30 +135,30 @@ class TestCreateApp:
 
 
 class TestHealth:
-    """GET /health returns system connectivity status."""
+    """GET /api/system/health returns system connectivity status."""
 
     def test_health_returns_200(self, client):
-        resp = client.get("/health")
+        resp = client.get("/api/system/health")
         assert resp.status_code == 200
 
     def test_health_status_ok(self, client):
-        data = client.get("/health").json()
+        data = client.get("/api/system/health").json()
         assert data["status"] == "ok"
 
     def test_health_db_true_when_connected(self, client):
-        data = client.get("/health").json()
+        data = client.get("/api/system/health").json()
         assert data["db"] is True
 
     def test_health_redis_true_when_connected(self, client):
-        data = client.get("/health").json()
+        data = client.get("/api/system/health").json()
         assert data["redis"] is True
 
     def test_health_db_false_when_down(self, client_no_db):
-        data = client_no_db.get("/health").json()
+        data = client_no_db.get("/api/system/health").json()
         assert data["db"] is False
 
     def test_health_redis_false_when_down(self, client_no_redis):
-        data = client_no_redis.get("/health").json()
+        data = client_no_redis.get("/api/system/health").json()
         assert data["redis"] is False
 
 
@@ -169,7 +170,7 @@ class TestCORS:
 
     def test_allows_default_origin(self, client):
         resp = client.options(
-            "/health",
+            "/api/system/health",
             headers={
                 "Origin": "http://localhost:5173",
                 "Access-Control-Request-Method": "GET",
@@ -179,7 +180,7 @@ class TestCORS:
 
     def test_rejects_unknown_origin(self, client):
         resp = client.options(
-            "/health",
+            "/api/system/health",
             headers={
                 "Origin": "http://evil.example.com",
                 "Access-Control-Request-Method": "GET",
@@ -203,7 +204,7 @@ class TestCORS:
             app = create_app()
             with TestClient(app) as tc:
                 resp = tc.options(
-                    "/health",
+                    "/api/system/health",
                     headers={
                         "Origin": "http://b.com",
                         "Access-Control-Request-Method": "GET",
@@ -315,7 +316,7 @@ class TestLifespan:
 
             app = create_app()
             with TestClient(app) as tc:
-                resp = tc.get("/health")
+                resp = tc.get("/api/system/health")
                 assert resp.status_code == 200
 
     def test_survives_db_unavailable(self):
@@ -332,7 +333,7 @@ class TestLifespan:
         ):
             app = create_app()
             with TestClient(app) as tc:
-                resp = tc.get("/health")
+                resp = tc.get("/api/system/health")
                 assert resp.status_code == 200
 
 
@@ -354,5 +355,5 @@ class TestRouteMounting:
 
     def test_health_always_available(self, client):
         """Health endpoint is always present regardless of route modules."""
-        resp = client.get("/health")
+        resp = client.get("/api/system/health")
         assert resp.status_code == 200

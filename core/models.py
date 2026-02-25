@@ -352,6 +352,7 @@ class Order(BaseModel):
     
     Represents a buy or sell order with execution details.
     """
+    run_id: Optional[str] = None
     symbol: str
     side: OrderSide
     order_type: OrderType
@@ -501,6 +502,51 @@ class MeanReversionConditions(BaseModel):
         ])
 
 
+class StrategyStateResponse(BaseModel):
+    """
+    API response for a strategy state record.
+
+    Wraps ``StrategyStateRecord`` for JSON serialisation.
+    """
+    symbol: str
+    strategy: str
+    state: StrategyState
+    cooldown_until: Optional[datetime] = None
+    consecutive_buy_candles: int = 0
+    last_exit_time: Optional[datetime] = None
+    state_data: Optional[Dict[str, Any]] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(
+        json_encoders={
+            datetime: lambda v: v.isoformat(),
+        }
+    )
+
+
+class StrategySignalSnapshot(BaseModel):
+    """
+    Derived signal snapshot for a symbol/strategy pair.
+
+    ``signal`` is derived from the current state column.
+    ``conditions`` is the raw ``state_data`` JSONB (populated by
+    task 3.8 when state persistence is implemented).
+    """
+    symbol: str
+    strategy: str
+    state: StrategyState
+    signal: Signal
+    conditions: Optional[Dict[str, Any]] = None
+    updated_at: datetime
+
+    model_config = ConfigDict(
+        json_encoders={
+            datetime: lambda v: v.isoformat(),
+        }
+    )
+
+
 class BacktestMetrics(BaseModel):
     """
     Backtest results and metrics.
@@ -609,6 +655,8 @@ __all__ = [
     "Portfolio",
     "StrategyConditions",
     "MeanReversionConditions",
+    "StrategyStateResponse",
+    "StrategySignalSnapshot",
     "BacktestMetrics",
     "BacktestResult",
     "PortfolioSnapshot",
