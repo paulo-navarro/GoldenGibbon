@@ -41,7 +41,7 @@ requires = ["setuptools>=75.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["core*", "config*"]
+include = ["core*", "config*", "api*", "db*"]
 
 [tool.ruff]
 target-version = "py312"

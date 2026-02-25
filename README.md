@@ -118,9 +118,13 @@ GoldenGibbon follows a strict unidirectional data flow through isolated layers:
 
 - ✅ **FastAPI + Uvicorn** — Added to dependencies with production extras
 - ✅ **Event System** — Redis pub/sub publisher with 6 channels and 23 event types
-- 📋 **FastAPI Backend** — REST endpoints + WebSocket event streaming
+- ✅ **FastAPI App** — Application factory with lifespan, CORS, health check
+- ✅ **Market Routes** — `GET /candles/{symbol}`, `GET /price/{symbol}` with filtering
+- ✅ **Portfolio Routes** — `GET /portfolio`, `GET /equity-curve` with run_id/date filters
+- ✅ **Docker API Service** — `api` + `api-prod` in docker-compose with healthcheck, `make api`
+- 📋 **More REST Routes** — Trades, orders, strategy, system endpoints
+- 📋 **WebSocket Streaming** — Real-time event broadcasting to frontend
 - 📋 **React Dashboard** — Real-time charts, portfolio tracking, trade history
-- 📋 **WebSocket Client** — Auto-reconnecting client with state management
 
 ### Future (Phase 3+ - Production 🔮)
 
@@ -224,18 +228,26 @@ See [`strategy_mean_reversion.md`](strategy_mean_reversion.md) for full specific
 
 3. **Start services:**
    ```bash
-   docker compose up -d postgres redis
+   make dev    # Full stack (app + API + workers + postgres + redis)
+   # Or just the API:
+   make api    # API server + postgres + redis only
    ```
 
 4. **Run database migrations:**
    ```bash
-   docker compose run --rm app alembic upgrade head
+   make migrate
    ```
 
 5. **Test the setup:**
    ```bash
    make test
    ```
+
+6. **Access the API:**
+   - Health: http://localhost:8000/health
+   - Swagger docs: http://localhost:8000/docs
+   - Candles: http://localhost:8000/api/market/candles/BTCUSDT
+   - Portfolio: http://localhost:8000/api/portfolio/
 
 ### Running a Backtest
 
@@ -267,18 +279,25 @@ GoldenGibbon/
 │   ├── risk/           # Risk management
 │   ├── execution/      # Order execution (paper/live)
 │   └── portfolio/      # Portfolio tracking
+├── api/                # FastAPI REST API
+│   ├── main.py         # App factory, lifespan, health endpoint
+│   └── routes/         # Route modules
+│       ├── market.py   # Candle & price endpoints
+│       └── portfolio.py # Portfolio & equity-curve endpoints
 ├── db/                 # Database layer
 │   ├── models.py       # SQLAlchemy ORM models
-│   ├── utils.py        # DB helpers
+│   ├── utils.py        # Bidirectional ORM ↔ Pydantic converters
 │   └── seeds.py        # Test data generation
 ├── config/             # Configuration files
 │   ├── symbols.yaml    # Trading pairs
 │   ├── strategies.yaml # Strategy parameters
 │   └── settings.yaml   # System settings
-├── tests/              # Test suite
+├── tests/              # Test suite (683 tests)
 │   ├── conftest.py     # Shared fixtures
 │   ├── test_indicators.py
-│   └── test_database.py
+│   ├── test_market_routes.py
+│   ├── test_portfolio_routes.py
+│   └── ...             # 20+ test modules
 ├── scripts/            # Utility scripts
 ├── alembic/            # Database migrations
 ├── docker-compose.yml  # Services orchestration
@@ -309,7 +328,7 @@ docker compose run --rm -e PYTHONPATH=/app app pytest tests/test_indicators.py -
 docker compose run --rm -e PYTHONPATH=/app app pytest tests/test_database.py -v
 ```
 
-Current test coverage: **600+ passing tests** across indicators, strategies, events, and execution engine.
+Current test coverage: **683 passing tests** across indicators, strategies, events, API routes, and execution engine.
 
 ---
 
@@ -320,9 +339,10 @@ Progress is tracked in [`kanban.md`](kanban.md). Current status:
 ### Phase 1: Foundation & Backtest Engine (100% Complete)
 - ✅ **Tasks 1.1–1.28** — Fully implemented (Data, Indicators, Strategy engine, Risk manager, Portfolio tracking, Execution simulation, Backtesting loop, Logging)
 
-### Phase 2: Real-Time Interface (12% Complete)
-- ✅ **Tasks 2.1–2.6** — FastAPI dependencies, Pydantic models, ORM models, Alembic migrations, event publisher, event channels
-- 📋 Tasks 2.7–2.52 (FastAPI app, REST endpoints, WebSocket, React frontend)
+### Phase 2: Real-Time Interface (21% Complete)
+- ✅ **Tasks 2.1–2.9** — FastAPI dependencies, Pydantic models, ORM models, Alembic migrations, event publisher, event channels, FastAPI app, market routes, portfolio routes
+- ✅ **Tasks 2.19–2.20** — Dockerfile prod fix, API docker-compose service with healthcheck
+- 📋 Tasks 2.10–2.18, 2.21–2.52 (More REST routes, WebSocket, React frontend)
 
 ### Phase 3: Infrastructure & Paper Trading (0% Complete)
 - 📋 Tasks 3.1–3.10 (Celery, live data feeds, state persistence)
@@ -399,6 +419,21 @@ This is a personal trading platform under active development. Contributions, sug
 - [Kanban](kanban.md) — Development roadmap and task tracking
 - [Smart Hodler Strategy](strategy_smart_hodler.md) — Trend-following strategy specification
 - [Mean Reversion Strategy](strategy_mean_reversion.md) — Mean-reversion strategy specification
+
+---
+
+## 📈 MVP Progress
+
+**Phase 1** (Foundation & Backtest Engine) and **Phase 2** (Real-Time Interface) make up the MVP.
+
+```
+Phase 1  ██████████████████████████████  30/30  100%
+Phase 2  █████░░░░░░░░░░░░░░░░░░░░░░░░░  11/52   21%
+─────────────────────────────────────────────────────
+Overall  ███████████████░░░░░░░░░░░░░░░  41/82   50%
+```
+
+> *Last updated: 25 Feb 2026 · 683 tests passing*
 
 ---
 

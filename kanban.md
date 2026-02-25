@@ -49,9 +49,9 @@
 - [x] **2.4** Alembic migration – initial schema (tables, indexes for symbol+timestamp)
 - [x] **2.5** Event publisher in `core/events.py` (Redis pub/sub client, publish_event method)
 - [x] **2.6** Event channels – market_data, strategy, risk, execution, portfolio, system
-- [ ] **2.7** FastAPI app setup in `api/main.py` (CORS, DB connection pool, Redis client, startup/shutdown hooks)
-- [ ] **2.8** REST endpoints – `api/routes/market.py` (GET /candles/{symbol}, GET /price/{symbol})
-- [ ] **2.9** REST endpoints – `api/routes/portfolio.py` (GET /portfolio, GET /equity-curve)
+- [x] **2.7** FastAPI app setup in `api/main.py` (CORS, DB connection pool, Redis client, startup/shutdown hooks)
+- [x] **2.8** REST endpoints – `api/routes/market.py` (GET /candles/{symbol}, GET /price/{symbol})
+- [x] **2.9** REST endpoints – `api/routes/portfolio.py` (GET /portfolio, GET /equity-curve)
 - [ ] **2.10** REST endpoints – `api/routes/trades.py` (GET /trades with filters, GET /trades/stats)
 - [ ] **2.11** REST endpoints – `api/routes/orders.py` (GET /orders, GET /orders/{id})
 - [ ] **2.12** REST endpoints – `api/routes/strategy.py` (GET /strategy/state, GET /strategy/signals)
@@ -61,8 +61,8 @@
 - [ ] **2.16** Integrate event publishing into strategy (publish SIGNAL_GENERATED, STATE_CHANGED events)
 - [ ] **2.17** Integrate event publishing into execution (publish ORDER_CREATED, ORDER_FILLED events)
 - [ ] **2.18** Integrate event publishing into portfolio (publish POSITION_UPDATED, TRADE_CLOSED events)
-- [ ] **2.19** API Dockerfile (`api/Dockerfile` with FastAPI + uvicorn)
-- [ ] **2.20** Add `api` service to docker-compose.yml (expose port 8000, connect to Postgres + Redis)
+- [x] **2.19** API Dockerfile – folded into existing Dockerfile (`COPY api/ api/` added to prod stage)
+- [x] **2.20** Add `api` service to docker-compose.yml (expose port 8000, connect to Postgres + Redis)
 - [ ] **2.21** Environment config (`api/.env.example` with DATABASE_URL, REDIS_URL, CORS_ORIGINS)
 
 ### Tasks – Frontend (React + WebSocket)

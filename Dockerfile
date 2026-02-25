@@ -55,6 +55,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY core/ core/
 COPY config/ config/
 COPY db/ db/
+COPY api/ api/
 COPY main.py .
 
 RUN useradd --create-home appuser
