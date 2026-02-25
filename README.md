@@ -122,9 +122,9 @@ GoldenGibbon follows a strict unidirectional data flow through isolated layers:
 - ✅ **Market Routes** — `GET /candles/{symbol}`, `GET /price/{symbol}` with filtering
 - ✅ **Portfolio Routes** — `GET /portfolio`, `GET /equity-curve` with run_id/date filters
 - ✅ **Trade Routes** — `GET /trades` with symbol/strategy/exit_reason filters, `GET /trades/stats`
+- ✅ **System & Strategy Routes** — Orders, strategy state, health, and logs endpoints
+- ✅ **WebSocket Streaming** — Real-time event broadcasting and connection manager
 - ✅ **Docker API Service** — `api` + `api-prod` in docker-compose with healthcheck, `make api`
-- 📋 **More REST Routes** — Trades, orders, strategy, system endpoints
-- 📋 **WebSocket Streaming** — Real-time event broadcasting to frontend
 - 📋 **React Dashboard** — Real-time charts, portfolio tracking, trade history
 
 ### Future (Phase 3+ - Production 🔮)
@@ -340,10 +340,10 @@ Progress is tracked in [`kanban.md`](kanban.md). Current status:
 ### Phase 1: Foundation & Backtest Engine (100% Complete)
 - ✅ **Tasks 1.1–1.28** — Fully implemented (Data, Indicators, Strategy engine, Risk manager, Portfolio tracking, Execution simulation, Backtesting loop, Logging)
 
-### Phase 2: Real-Time Interface (21% Complete)
-- ✅ **Tasks 2.1–2.9** — FastAPI dependencies, Pydantic models, ORM models, Alembic migrations, event publisher, event channels, FastAPI app, market routes, portfolio routes
-- ✅ **Tasks 2.19–2.20** — Dockerfile prod fix, API docker-compose service with healthcheck
-- 📋 Tasks 2.10–2.18, 2.21–2.52 (More REST routes, WebSocket, React frontend)
+### Phase 2: Real-Time Interface (35% Complete)
+- ✅ **Tasks 2.1–2.15** — FastAPI dependencies, Pydantic models, ORM models, Alembic migrations, event publisher, event channels, FastAPI app, REST routes (market, portfolio, trades, orders, strategy, system), WebSocket endpoint & manager
+- ✅ **Tasks 2.19–2.21** — Dockerfile prod fix, API docker-compose service with healthcheck, environment config
+- 📋 Tasks 2.16–2.18, 2.22–2.52 (Event publishing integration, React frontend)
 
 ### Phase 3: Infrastructure & Paper Trading (0% Complete)
 - 📋 Tasks 3.1–3.10 (Celery, live data feeds, state persistence)
@@ -427,11 +427,14 @@ This is a personal trading platform under active development. Contributions, sug
 
 **Phase 1** (Foundation & Backtest Engine) and **Phase 2** (Real-Time Interface) make up the MVP.
 
-```
+```text
 Phase 1  ██████████████████████████████  30/30  100%
-Phase 2  ██████░░░░░░░░░░░░░░░░░░░░░░░░  12/52   23%
+Phase 2  ██████████░░░░░░░░░░░░░░░░░░░░  18/52   35%
+Phase 3  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   0/10    0%
+Phase 4  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   0/10    0%
+Phase 5  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   0/7     0%
 ─────────────────────────────────────────────────────
-Overall  ███████████████░░░░░░░░░░░░░░░  42/82   51%
+Overall  ██████████████████░░░░░░░░░░░░  48/109  44%
 ```
 
 > *Last updated: 25 Feb 2026 · 715 tests passing*
