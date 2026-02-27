@@ -13,6 +13,7 @@ from typing import Dict, Optional
 
 import structlog
 
+from core.events import EventChannel, EventType, get_publisher
 from core.models import (
     ExitReason,
     Portfolio,
@@ -142,6 +143,21 @@ class PortfolioManager:
             cost=str(total_cost),
         )
 
+        publisher = get_publisher()
+        publisher.publish_model(
+            EventChannel.PORTFOLIO, EventType.POSITION_OPENED, position
+        )
+        publisher.publish(
+            EventChannel.PORTFOLIO,
+            EventType.BALANCE_UPDATED,
+            {
+                "symbol": symbol,
+                "usdt_balance": str(self._portfolio.usdt_balance),
+                "total_pnl": str(self._portfolio.total_pnl),
+                "open_trades_count": self._portfolio.open_trades_count,
+            },
+        )
+
         return position
 
     # ── Scale in ─────────────────────────────────────────────────────────
@@ -219,6 +235,21 @@ class PortfolioManager:
             new_avg_entry=str(new_entry),
             total_size=str(total_size),
             scale_in_count=position.scale_in_count + 1,
+        )
+
+        publisher = get_publisher()
+        publisher.publish_model(
+            EventChannel.PORTFOLIO, EventType.POSITION_UPDATED, updated
+        )
+        publisher.publish(
+            EventChannel.PORTFOLIO,
+            EventType.BALANCE_UPDATED,
+            {
+                "symbol": symbol,
+                "usdt_balance": str(self._portfolio.usdt_balance),
+                "total_pnl": str(self._portfolio.total_pnl),
+                "open_trades_count": self._portfolio.open_trades_count,
+            },
         )
 
         return updated
@@ -320,6 +351,27 @@ class PortfolioManager:
             remaining=str(remaining),
         )
 
+        publisher = get_publisher()
+        publisher.publish_model(
+            EventChannel.PORTFOLIO, EventType.TRADE_CLOSED, trade
+        )
+        if remaining > 0:
+            publisher.publish_model(
+                EventChannel.PORTFOLIO,
+                EventType.POSITION_UPDATED,
+                self._portfolio.positions[symbol],
+            )
+        publisher.publish(
+            EventChannel.PORTFOLIO,
+            EventType.BALANCE_UPDATED,
+            {
+                "symbol": symbol,
+                "usdt_balance": str(self._portfolio.usdt_balance),
+                "total_pnl": str(self._portfolio.total_pnl),
+                "open_trades_count": self._portfolio.open_trades_count,
+            },
+        )
+
         return trade
 
     def close_position(
@@ -374,6 +426,13 @@ class PortfolioManager:
 
         updated = position.model_copy(update=updates)
         self._portfolio.positions[symbol] = updated
+
+        if updates:
+            publisher = get_publisher()
+            publisher.publish_model(
+                EventChannel.PORTFOLIO, EventType.POSITION_UPDATED, updated
+            )
+
         return updated
 
     # ── Snapshots (equity curve) ─────────────────────────────────────────
@@ -408,6 +467,12 @@ class PortfolioManager:
             open_positions_count=len(self._portfolio.positions),
         )
         self._portfolio.equity_curve.append(snapshot)
+
+        publisher = get_publisher()
+        publisher.publish_model(
+            EventChannel.PORTFOLIO, EventType.EQUITY_UPDATED, snapshot
+        )
+
         return snapshot
 
     # ── Internal helpers ─────────────────────────────────────────────────

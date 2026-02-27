@@ -10,13 +10,16 @@ Covers:
     - Slippage arithmetic (always-adverse) + toggle
     - Order metadata (fill price, slippage %, status, timestamps)
     - Edge cases
+    - Event publishing (ORDER_CREATED, ORDER_FILLED)
 """
 
 from datetime import datetime
 from decimal import Decimal
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from core.events import EventChannel, EventType
 from core.execution.paper import PaperExecutor
 from core.models import (
     ExecutionResult,
@@ -470,3 +473,148 @@ class TestEdgeCases:
         ex.execute(_open_decision(), T2)
         assert pm.has_position("BTCUSDT")
         assert len(pm.portfolio.trade_history) == 1
+
+
+# ── Event publishing ─────────────────────────────────────────────────────────
+
+
+class TestExecutionEvents:
+    """Verify ORDER_CREATED and ORDER_FILLED events (task 2.17)."""
+
+    @patch("core.execution.paper.get_publisher")
+    def test_order_created_on_open(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        ex = _executor()
+        ex.execute(_open_decision(), T0)
+
+        pub.publish_model.assert_called_once()
+        args = pub.publish_model.call_args[0]
+        assert args[0] == EventChannel.EXECUTION
+        assert args[1] == EventType.ORDER_CREATED
+
+    @patch("core.execution.paper.get_publisher")
+    def test_order_created_contains_order_data(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        ex = _executor()
+        ex.execute(_open_decision(symbol="ETHUSDT"), T0)
+
+        order_model = pub.publish_model.call_args[0][2]
+        assert order_model.symbol == "ETHUSDT"
+        assert order_model.side == OrderSide.BUY
+        assert order_model.status == OrderStatus.FILLED
+
+    @patch("core.execution.paper.get_publisher")
+    def test_order_filled_on_open(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        ex = _executor()
+        ex.execute(_open_decision(), T0)
+
+        pub.publish.assert_called_once()
+        args = pub.publish.call_args[0]
+        assert args[0] == EventChannel.EXECUTION
+        assert args[1] == EventType.ORDER_FILLED
+        assert args[2]["action"] == "open"
+        assert args[2]["symbol"] == "BTCUSDT"
+        assert args[2]["side"] == "buy"
+
+    @patch("core.execution.paper.get_publisher")
+    def test_order_filled_on_close(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        pm = _pm()
+        ex = _executor(pm=pm)
+        ex.execute(_open_decision(), T0)
+        pub.reset_mock()
+
+        ex.execute(_close_decision(), T1)
+
+        pub.publish.assert_called_once()
+        data = pub.publish.call_args[0][2]
+        assert data["action"] == "close"
+        assert data["side"] == "sell"
+
+    @patch("core.execution.paper.get_publisher")
+    def test_order_filled_on_reduce(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        pm = _pm()
+        ex = _executor(pm=pm)
+        ex.execute(_open_decision(), T0)
+        pub.reset_mock()
+
+        decision = RiskDecision(
+            action=RiskAction.REDUCE,
+            symbol="BTCUSDT",
+            size=Decimal("0.1"),
+            price=Decimal("52000"),
+            exit_reason=ExitReason.MOMENTUM_FADE,
+            sell_fraction=Decimal("0.5"),
+        )
+        ex.execute(decision, T1)
+
+        data = pub.publish.call_args[0][2]
+        assert data["action"] == "reduce"
+
+    @patch("core.execution.paper.get_publisher")
+    def test_order_filled_on_scale_in(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        pm = _pm()
+        ex = _executor(pm=pm)
+        ex.execute(_open_decision(), T0)
+        pub.reset_mock()
+
+        decision = RiskDecision(
+            action=RiskAction.SCALE_IN,
+            symbol="BTCUSDT",
+            size=Decimal("0.05"),
+            price=Decimal("49000"),
+        )
+        ex.execute(decision, T1)
+
+        data = pub.publish.call_args[0][2]
+        assert data["action"] == "scale_in"
+
+    @patch("core.execution.paper.get_publisher")
+    def test_no_events_on_hold(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        ex = _executor()
+        ex.execute(RiskDecision(action=RiskAction.HOLD), T0)
+
+        pub.publish.assert_not_called()
+        pub.publish_model.assert_not_called()
+
+    @patch("core.execution.paper.get_publisher")
+    def test_two_events_per_fill(self, mock_get_pub):
+        """Each actionable execution publishes ORDER_CREATED + ORDER_FILLED."""
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        ex = _executor()
+        ex.execute(_open_decision(), T0)
+
+        assert pub.publish_model.call_count == 1  # ORDER_CREATED
+        assert pub.publish.call_count == 1  # ORDER_FILLED
+
+    @patch("core.execution.paper.get_publisher")
+    def test_order_filled_includes_fill_price(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        ex = _executor()
+        result = ex.execute(_open_decision(price=Decimal("50000")), T0)
+
+        data = pub.publish.call_args[0][2]
+        # avg_fill_price should match the result's order
+        assert data["avg_fill_price"] == str(result.order.avg_fill_price)

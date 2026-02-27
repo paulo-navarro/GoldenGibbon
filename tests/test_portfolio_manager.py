@@ -2,16 +2,18 @@
 Unit tests for PortfolioManager.
 
 Covers: initialisation, open / close / reduce / scale-in positions,
-fee accounting, stop updates, snapshots, error paths, and
-multi-symbol support.
+fee accounting, stop updates, snapshots, error paths,
+multi-symbol support, and event publishing.
 """
 
 from datetime import datetime, timedelta
 from decimal import Decimal
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from core.models import ExitReason
+from core.events import EventChannel, EventType
+from core.models import ExitReason, Position, PortfolioSnapshot, Trade
 from core.portfolio import PortfolioManager
 
 
@@ -669,3 +671,281 @@ class TestPnlTracking:
             exit_reason=ExitReason.HARD_STOP,
         )
         assert portfolio_manager.portfolio.total_pnl == t1.pnl_usdt + t2.pnl_usdt
+
+
+# ── Event publishing ─────────────────────────────────────────────────────────
+
+
+class TestPortfolioEvents:
+    """Verify POSITION_OPENED/UPDATED, TRADE_CLOSED, BALANCE/EQUITY events (task 2.18)."""
+
+    @patch("core.portfolio.get_publisher")
+    def test_open_publishes_position_opened_and_balance(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        pm = PortfolioManager(initial_capital=Decimal("10000"))
+        pm.open_position(
+            symbol="BTCUSDT",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            entry_time=T0,
+        )
+
+        event_types = [c[0][1] for c in pub.publish_model.call_args_list]
+        assert EventType.POSITION_OPENED in event_types
+
+        # BALANCE_UPDATED via publish()
+        balance_calls = [
+            c for c in pub.publish.call_args_list
+            if c[0][1] == EventType.BALANCE_UPDATED
+        ]
+        assert len(balance_calls) == 1
+        assert balance_calls[0][0][2]["symbol"] == "BTCUSDT"
+
+    @patch("core.portfolio.get_publisher")
+    def test_open_position_opened_model(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        pm = PortfolioManager(initial_capital=Decimal("10000"))
+        pm.open_position(
+            symbol="ETHUSDT",
+            size=Decimal("1"),
+            entry_price=Decimal("3000"),
+            entry_time=T0,
+        )
+
+        model = pub.publish_model.call_args_list[0][0][2]
+        assert isinstance(model, Position)
+        assert model.symbol == "ETHUSDT"
+
+    @patch("core.portfolio.get_publisher")
+    def test_scale_in_publishes_position_updated_and_balance(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        pm = PortfolioManager(initial_capital=Decimal("10000"))
+        pm.open_position(
+            symbol="BTCUSDT",
+            size=Decimal("0.05"),
+            entry_price=Decimal("50000"),
+            entry_time=T0,
+        )
+        pub.reset_mock()
+
+        pm.scale_in(
+            symbol="BTCUSDT",
+            additional_size=Decimal("0.02"),
+            price=Decimal("49000"),
+            time=T1,
+        )
+
+        model_events = [c[0][1] for c in pub.publish_model.call_args_list]
+        assert EventType.POSITION_UPDATED in model_events
+
+        balance_calls = [
+            c for c in pub.publish.call_args_list
+            if c[0][1] == EventType.BALANCE_UPDATED
+        ]
+        assert len(balance_calls) == 1
+
+    @patch("core.portfolio.get_publisher")
+    def test_close_publishes_trade_closed_and_balance(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        pm = PortfolioManager(initial_capital=Decimal("10000"))
+        pm.open_position(
+            symbol="BTCUSDT",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            entry_time=T0,
+        )
+        pub.reset_mock()
+
+        pm.close_position(
+            symbol="BTCUSDT",
+            exit_price=Decimal("52000"),
+            exit_time=T1,
+            exit_reason=ExitReason.EMA_CROSS,
+        )
+
+        model_events = [c[0][1] for c in pub.publish_model.call_args_list]
+        assert EventType.TRADE_CLOSED in model_events
+
+        # Full close → no POSITION_UPDATED (position removed)
+        assert EventType.POSITION_UPDATED not in model_events
+
+        balance_calls = [
+            c for c in pub.publish.call_args_list
+            if c[0][1] == EventType.BALANCE_UPDATED
+        ]
+        assert len(balance_calls) == 1
+
+    @patch("core.portfolio.get_publisher")
+    def test_close_trade_model(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        pm = PortfolioManager(initial_capital=Decimal("10000"))
+        pm.open_position(
+            symbol="BTCUSDT",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            entry_time=T0,
+        )
+        pub.reset_mock()
+
+        pm.close_position(
+            symbol="BTCUSDT",
+            exit_price=Decimal("52000"),
+            exit_time=T1,
+            exit_reason=ExitReason.TRAILING_STOP,
+        )
+
+        trade_model = pub.publish_model.call_args_list[0][0][2]
+        assert isinstance(trade_model, Trade)
+        assert trade_model.symbol == "BTCUSDT"
+
+    @patch("core.portfolio.get_publisher")
+    def test_partial_reduce_publishes_trade_and_position_updated(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        pm = PortfolioManager(initial_capital=Decimal("10000"))
+        pm.open_position(
+            symbol="BTCUSDT",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            entry_time=T0,
+        )
+        pub.reset_mock()
+
+        pm.reduce_position(
+            symbol="BTCUSDT",
+            sell_fraction=Decimal("0.5"),
+            exit_price=Decimal("52000"),
+            exit_time=T1,
+            exit_reason=ExitReason.MOMENTUM_FADE,
+        )
+
+        model_events = [c[0][1] for c in pub.publish_model.call_args_list]
+        assert EventType.TRADE_CLOSED in model_events
+        assert EventType.POSITION_UPDATED in model_events
+
+        balance_calls = [
+            c for c in pub.publish.call_args_list
+            if c[0][1] == EventType.BALANCE_UPDATED
+        ]
+        assert len(balance_calls) == 1
+
+    @patch("core.portfolio.get_publisher")
+    def test_update_stops_publishes_position_updated(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        pm = PortfolioManager(initial_capital=Decimal("10000"))
+        pm.open_position(
+            symbol="BTCUSDT",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            entry_time=T0,
+        )
+        pub.reset_mock()
+
+        pm.update_stops(
+            symbol="BTCUSDT",
+            trailing_stop_price=Decimal("49500"),
+        )
+
+        pub.publish_model.assert_called_once()
+        args = pub.publish_model.call_args[0]
+        assert args[0] == EventChannel.PORTFOLIO
+        assert args[1] == EventType.POSITION_UPDATED
+        assert isinstance(args[2], Position)
+
+    @patch("core.portfolio.get_publisher")
+    def test_update_stops_no_event_when_no_changes(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        pm = PortfolioManager(initial_capital=Decimal("10000"))
+        pm.open_position(
+            symbol="BTCUSDT",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            entry_time=T0,
+        )
+        pub.reset_mock()
+
+        pm.update_stops(symbol="BTCUSDT")  # all None → no updates dict
+
+        pub.publish_model.assert_not_called()
+
+    @patch("core.portfolio.get_publisher")
+    def test_take_snapshot_publishes_equity_updated(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        pm = PortfolioManager(initial_capital=Decimal("10000"))
+        pub.reset_mock()
+
+        pm.take_snapshot(T0, {"BTCUSDT": Decimal("50000")})
+
+        pub.publish_model.assert_called_once()
+        args = pub.publish_model.call_args[0]
+        assert args[0] == EventChannel.PORTFOLIO
+        assert args[1] == EventType.EQUITY_UPDATED
+        assert isinstance(args[2], PortfolioSnapshot)
+
+    @patch("core.portfolio.get_publisher")
+    def test_no_events_on_error_path(self, mock_get_pub):
+        """Duplicate open raises before any publishing."""
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        pm = PortfolioManager(initial_capital=Decimal("10000"))
+        pm.open_position(
+            symbol="BTCUSDT",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            entry_time=T0,
+        )
+        pub.reset_mock()
+
+        with pytest.raises(ValueError):
+            pm.open_position(
+                symbol="BTCUSDT",
+                size=Decimal("0.1"),
+                entry_price=Decimal("50000"),
+                entry_time=T1,
+            )
+
+        pub.publish_model.assert_not_called()
+        pub.publish.assert_not_called()
+
+    @patch("core.portfolio.get_publisher")
+    def test_event_counts_full_cycle(self, mock_get_pub):
+        """open → close: 2 publish_model + 2 publish (balance) calls."""
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        pm = PortfolioManager(initial_capital=Decimal("10000"))
+        pm.open_position(
+            symbol="BTCUSDT",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            entry_time=T0,
+        )
+        pm.close_position(
+            symbol="BTCUSDT",
+            exit_price=Decimal("52000"),
+            exit_time=T1,
+            exit_reason=ExitReason.EMA_CROSS,
+        )
+
+        # publish_model: POSITION_OPENED + TRADE_CLOSED
+        assert pub.publish_model.call_count == 2
+        # publish: BALANCE_UPDATED × 2 (open + close)
+        assert pub.publish.call_count == 2

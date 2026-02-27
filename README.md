@@ -112,24 +112,22 @@ GoldenGibbon follows a strict unidirectional data flow through isolated layers:
 - ✅ **Backtest Runner** — Fast candle-by-candle simulation loop with orderbook replay
 - ✅ **Reporting** — Rich console output tables and PostgreSQL persistence of backtest results
 - ✅ **Logging** — Structured JSON logs (structlog) for full observability of every decision
-- ✅ **Test Suite** — 600+ unit tests covering the entire pipeline
+- ✅ **Test Suite** — 841 unit tests covering the entire pipeline
 
-### In Progress (Phase 2 - Real-Time Interface 🚧)
+### Current (Phase 2 - Backend Complete ✅ · Frontend Pending 🚧)
 
-- ✅ **FastAPI + Uvicorn** — Added to dependencies with production extras
+- ✅ **FastAPI + Uvicorn** — Application factory with lifespan, CORS, health check
 - ✅ **Event System** — Redis pub/sub publisher with 6 channels and 23 event types
-- ✅ **FastAPI App** — Application factory with lifespan, CORS, health check
-- ✅ **Market Routes** — `GET /candles/{symbol}`, `GET /price/{symbol}` with filtering
-- ✅ **Portfolio Routes** — `GET /portfolio`, `GET /equity-curve` with run_id/date filters
-- ✅ **Trade Routes** — `GET /trades` with symbol/strategy/exit_reason filters, `GET /trades/stats`
-- ✅ **System & Strategy Routes** — Orders, strategy state, health, and logs endpoints
-- ✅ **WebSocket Streaming** — Real-time event broadcasting and connection manager
-- ✅ **Docker API Service** — `api` + `api-prod` in docker-compose with healthcheck, `make api`
+- ✅ **Event Integration** — Strategy, execution, and portfolio layers publish events in real-time
+- ✅ **REST API** — 6 route modules: market, portfolio, trades, orders, strategy, system
+- ✅ **WebSocket Streaming** — Real-time event broadcasting with channel filtering and connection manager
+- ✅ **Database** — ORM models, Alembic migrations, seed script
+- ✅ **Infrastructure** — Docker services, Makefile targets, environment config
 - 📋 **React Dashboard** — Real-time charts, portfolio tracking, trade history
 
 ### Future (Phase 3+ - Production 🔮)
 
-- 🔮 **Celery Workers** — Distributed task queue for live trading
+- 🔮 **Celery Workers** — Distributed task queue for live trading (docker-compose services ready)
 - 🔮 **Paper Trading Mode** — Test strategies with live data
 - 🔮 **Live Trading** — Binance integration with order lifecycle
 - 🔮 **Multi-Strategy Support** — Run multiple strategies in parallel
@@ -293,7 +291,7 @@ GoldenGibbon/
 │   ├── symbols.yaml    # Trading pairs
 │   ├── strategies.yaml # Strategy parameters
 │   └── settings.yaml   # System settings
-├── tests/              # Test suite (683 tests)
+├── tests/              # Test suite (841 tests)
 │   ├── conftest.py     # Shared fixtures
 │   ├── test_indicators.py
 │   ├── test_market_routes.py
@@ -329,7 +327,7 @@ docker compose run --rm -e PYTHONPATH=/app app pytest tests/test_indicators.py -
 docker compose run --rm -e PYTHONPATH=/app app pytest tests/test_database.py -v
 ```
 
-Current test coverage: **715 passing tests** across indicators, strategies, events, API routes, and execution engine.
+Current test coverage: **841 passing tests** across indicators, strategies, events, API routes, and execution engine.
 
 ---
 
@@ -340,13 +338,15 @@ Progress is tracked in [`kanban.md`](kanban.md). Current status:
 ### Phase 1: Foundation & Backtest Engine (100% Complete)
 - ✅ **Tasks 1.1–1.28** — Fully implemented (Data, Indicators, Strategy engine, Risk manager, Portfolio tracking, Execution simulation, Backtesting loop, Logging)
 
-### Phase 2: Real-Time Interface (35% Complete)
-- ✅ **Tasks 2.1–2.15** — FastAPI dependencies, Pydantic models, ORM models, Alembic migrations, event publisher, event channels, FastAPI app, REST routes (market, portfolio, trades, orders, strategy, system), WebSocket endpoint & manager
-- ✅ **Tasks 2.19–2.21** — Dockerfile prod fix, API docker-compose service with healthcheck, environment config
-- 📋 Tasks 2.16–2.18, 2.22–2.52 (Event publishing integration, React frontend)
+### Phase 2: Real-Time Interface (49% Complete)
+- ✅ **Tasks 2.1–2.21** — Backend complete: FastAPI, Pydantic models, ORM, Alembic migrations, event publisher, event channels, REST routes (market, portfolio, trades, orders, strategy, system), WebSocket endpoint & manager, event integration (strategy + execution + portfolio), Docker service, env config
+- ✅ **Tasks 2.47–2.48, 2.51** — Integration: seed script, Makefile targets, REST endpoint tests
+- 📋 Tasks 2.22–2.46 (React frontend)
+- 📋 Tasks 2.49–2.50, 2.52 (Frontend-dependent integration tests)
 
-### Phase 3: Infrastructure & Paper Trading (0% Complete)
-- 📋 Tasks 3.1–3.10 (Celery, live data feeds, state persistence)
+### Phase 3: Infrastructure & Paper Trading (10% Complete)
+- ✅ **Task 3.1** — Redis + Celery worker + Celery Beat services in docker-compose
+- 📋 Tasks 3.2–3.10 (Celery app, live data feeds, state persistence)
 
 ### Phase 4: Real Trading (0% Complete)
 - 📋 Tasks 4.1–4.10 (Binance executor, capital limits, alerting)
@@ -429,15 +429,15 @@ This is a personal trading platform under active development. Contributions, sug
 
 ```text
 Phase 1  ██████████████████████████████  30/30  100%
-Phase 2  ██████████░░░░░░░░░░░░░░░░░░░░  18/52   35%
-Phase 3  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   0/10    0%
+Phase 2  ████████████████░░░░░░░░░░░░░░  25/52   48%
+Phase 3  ███░░░░░░░░░░░░░░░░░░░░░░░░░░░   1/10   10%
 Phase 4  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   0/10    0%
 Phase 5  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   0/7     0%
 ─────────────────────────────────────────────────────
-Overall  ██████████████████░░░░░░░░░░░░  48/109  44%
+Overall  ██████████████████░░░░░░░░░░░░  56/109  51%
 ```
 
-> *Last updated: 25 Feb 2026 · 715 tests passing*
+> *Last updated: 27 Feb 2026 · 841 tests passing*
 
 ---
 

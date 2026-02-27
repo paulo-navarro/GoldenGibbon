@@ -12,6 +12,7 @@ or mutate portfolio state directly.
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 
+from core.events import EventChannel, EventType, get_publisher
 from core.models import MarketData, Portfolio, Signal, StrategyConditions, StrategyState
 
 
@@ -75,6 +76,69 @@ class Strategy(ABC):
     def conditions(self) -> StrategyConditions:
         """Current conditions snapshot (for debugging / UI)."""
         return self._conditions
+
+    def evaluate(
+        self, market_data: MarketData, portfolio: Portfolio
+    ) -> Signal:
+        """
+        Wrapper around :meth:`decide` that publishes strategy events.
+
+        Captures state and conditions before calling ``decide()``, then
+        publishes ``SIGNAL_GENERATED`` (always), ``STATE_CHANGED`` (when the
+        state-machine transitions), and ``CONDITIONS_EVALUATED`` (when the
+        conditions snapshot changes).
+
+        Callers that need event visibility (backtest runner, live tick loop)
+        should call this method instead of ``decide()`` directly.
+
+        Args:
+            market_data: Current candles + calculated indicators.
+            portfolio: Current balance + open positions.
+
+        Returns:
+            Signal: The same signal that ``decide()`` returns.
+        """
+        old_state = self._state
+        old_conditions = self._conditions.model_copy()
+
+        signal = self.decide(market_data, portfolio)
+
+        publisher = get_publisher()
+        publisher.publish(
+            EventChannel.STRATEGY,
+            EventType.SIGNAL_GENERATED,
+            {
+                "strategy": self.name,
+                "symbol": market_data.symbol,
+                "signal": signal.value,
+                "state": self._state.value,
+            },
+        )
+
+        if self._state != old_state:
+            publisher.publish(
+                EventChannel.STRATEGY,
+                EventType.STATE_CHANGED,
+                {
+                    "strategy": self.name,
+                    "symbol": market_data.symbol,
+                    "old_state": old_state.value,
+                    "new_state": self._state.value,
+                },
+            )
+
+        if self._conditions != old_conditions:
+            publisher.publish(
+                EventChannel.STRATEGY,
+                EventType.CONDITIONS_EVALUATED,
+                {
+                    "strategy": self.name,
+                    "symbol": market_data.symbol,
+                    **self._conditions.model_dump(mode="json"),
+                },
+            )
+
+        return signal
 
     def reset(self) -> None:
         """

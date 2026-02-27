@@ -208,7 +208,7 @@ class BacktestRunner:
 
             # ── 3. Strategy decision ─────────────────────────────────
             if not stop_result.stop_hit:
-                signal = self._strategy.decide(market_data, pm.portfolio)
+                signal = self._strategy.evaluate(market_data, pm.portfolio)
 
                 if signal != Signal.HOLD:
                     logger.info(

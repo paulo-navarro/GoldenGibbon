@@ -3,8 +3,9 @@ Tests for the Strategy abstract base class.
 """
 
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+from core.events import EventChannel, EventType
 from core.models import MarketData, Portfolio, Signal, StrategyConditions, StrategyState
 from core.strategies import Strategy
 from core.strategies.base import Strategy as StrategyDirect
@@ -118,6 +119,198 @@ class TestStrategyProperties:
     def test_description_from_docstring(self):
         s = ConcreteStrategy({})
         assert "minimal strategy" in s.description.lower()
+
+
+# ── Helpers for evaluate() tests ─────────────────────────────────────────────
+
+
+class StatefulStrategy(Strategy):
+    """Strategy that can be configured to transition state/conditions."""
+
+    @property
+    def name(self) -> str:
+        return "stateful_test"
+
+    def decide(self, market_data: MarketData, portfolio: Portfolio) -> Signal:
+        """Transition based on pre-configured targets."""
+        if self._next_state is not None:
+            self._state = self._next_state
+        if self._next_conditions is not None:
+            self._conditions = self._next_conditions
+        return self._next_signal
+
+    def setup(
+        self,
+        signal: Signal = Signal.HOLD,
+        next_state: StrategyState | None = None,
+        next_conditions: StrategyConditions | None = None,
+    ) -> "StatefulStrategy":
+        self._next_signal = signal
+        self._next_state = next_state
+        self._next_conditions = next_conditions
+        return self
+
+
+def _md(symbol: str = "BTCUSDT") -> MagicMock:
+    md = MagicMock(spec=MarketData)
+    md.symbol = symbol
+    return md
+
+
+def _pf() -> MagicMock:
+    return MagicMock(spec=Portfolio)
+
+
+# ── evaluate() tests ────────────────────────────────────────────────────────
+
+
+class TestStrategyEvaluate:
+    """Verify evaluate() publishes correct events around decide()."""
+
+    @patch("core.strategies.base.get_publisher")
+    def test_returns_same_signal_as_decide(self, mock_get_pub):
+        mock_get_pub.return_value = MagicMock()
+        s = StatefulStrategy({}).setup(signal=Signal.BUY)
+        result = s.evaluate(_md(), _pf())
+        assert result == Signal.BUY
+
+    @patch("core.strategies.base.get_publisher")
+    def test_publishes_signal_generated_on_every_call(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        s = StatefulStrategy({}).setup(signal=Signal.HOLD)
+        s.evaluate(_md("ETHUSDT"), _pf())
+
+        pub.publish.assert_any_call(
+            EventChannel.STRATEGY,
+            EventType.SIGNAL_GENERATED,
+            {
+                "strategy": "stateful_test",
+                "symbol": "ETHUSDT",
+                "signal": "hold",
+                "state": "flat",
+            },
+        )
+
+    @patch("core.strategies.base.get_publisher")
+    def test_publishes_state_changed_on_transition(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        s = StatefulStrategy({}).setup(
+            signal=Signal.BUY, next_state=StrategyState.POSITION
+        )
+        s.evaluate(_md(), _pf())
+
+        pub.publish.assert_any_call(
+            EventChannel.STRATEGY,
+            EventType.STATE_CHANGED,
+            {
+                "strategy": "stateful_test",
+                "symbol": "BTCUSDT",
+                "old_state": "flat",
+                "new_state": "position",
+            },
+        )
+
+    @patch("core.strategies.base.get_publisher")
+    def test_no_state_changed_when_state_unchanged(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        s = StatefulStrategy({}).setup(signal=Signal.HOLD)
+        s.evaluate(_md(), _pf())
+
+        state_changed_calls = [
+            c
+            for c in pub.publish.call_args_list
+            if c[0][1] == EventType.STATE_CHANGED
+        ]
+        assert state_changed_calls == []
+
+    @patch("core.strategies.base.get_publisher")
+    def test_publishes_conditions_evaluated_on_change(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        new_conds = StrategyConditions(ema_cross_bullish=True)
+        s = StatefulStrategy({}).setup(
+            signal=Signal.HOLD, next_conditions=new_conds
+        )
+        s.evaluate(_md("BTCUSDT"), _pf())
+
+        pub.publish.assert_any_call(
+            EventChannel.STRATEGY,
+            EventType.CONDITIONS_EVALUATED,
+            {
+                "strategy": "stateful_test",
+                "symbol": "BTCUSDT",
+                **new_conds.model_dump(mode="json"),
+            },
+        )
+
+    @patch("core.strategies.base.get_publisher")
+    def test_no_conditions_evaluated_when_unchanged(self, mock_get_pub):
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        s = StatefulStrategy({}).setup(signal=Signal.HOLD)
+        s.evaluate(_md(), _pf())
+
+        cond_calls = [
+            c
+            for c in pub.publish.call_args_list
+            if c[0][1] == EventType.CONDITIONS_EVALUATED
+        ]
+        assert cond_calls == []
+
+    @patch("core.strategies.base.get_publisher")
+    def test_exactly_one_event_when_no_transitions(self, mock_get_pub):
+        """HOLD with no state/condition changes → only SIGNAL_GENERATED."""
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        s = StatefulStrategy({}).setup(signal=Signal.HOLD)
+        s.evaluate(_md(), _pf())
+
+        assert pub.publish.call_count == 1
+        assert pub.publish.call_args_list[0][0][1] == EventType.SIGNAL_GENERATED
+
+    @patch("core.strategies.base.get_publisher")
+    def test_all_three_events_on_full_transition(self, mock_get_pub):
+        """BUY that changes state + conditions → 3 publish calls."""
+        pub = MagicMock()
+        mock_get_pub.return_value = pub
+
+        new_conds = StrategyConditions(
+            ema_cross_bullish=True, adx_above_threshold=True
+        )
+        s = StatefulStrategy({}).setup(
+            signal=Signal.BUY,
+            next_state=StrategyState.POSITION,
+            next_conditions=new_conds,
+        )
+        s.evaluate(_md(), _pf())
+
+        assert pub.publish.call_count == 3
+        event_types = [c[0][1] for c in pub.publish.call_args_list]
+        assert event_types == [
+            EventType.SIGNAL_GENERATED,
+            EventType.STATE_CHANGED,
+            EventType.CONDITIONS_EVALUATED,
+        ]
+
+    @patch("core.strategies.base.get_publisher")
+    def test_publisher_disabled_does_not_raise(self, mock_get_pub):
+        """When publisher is disabled, evaluate() still returns the signal."""
+        pub = MagicMock()
+        pub.publish.side_effect = None  # no-op
+        mock_get_pub.return_value = pub
+
+        s = StatefulStrategy({}).setup(signal=Signal.SELL_FULL)
+        result = s.evaluate(_md(), _pf())
+        assert result == Signal.SELL_FULL
 
     def test_import_from_package(self):
         """Strategy is importable from core.strategies (not just core.strategies.base)."""

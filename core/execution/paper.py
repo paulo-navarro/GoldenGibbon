@@ -20,6 +20,7 @@ from typing import Optional
 
 import structlog
 
+from core.events import EventChannel, EventType, get_publisher
 from core.models import (
     ExecutionResult,
     ExitReason,
@@ -102,19 +103,29 @@ class PaperExecutor:
         if action == RiskAction.HOLD:
             return None
 
+        result: Optional[ExecutionResult] = None
+
         if action == RiskAction.OPEN:
-            return self._execute_open(decision, timestamp)
+            result = self._execute_open(decision, timestamp)
+        elif action == RiskAction.SCALE_IN:
+            result = self._execute_scale_in(decision, timestamp)
+        elif action == RiskAction.CLOSE:
+            result = self._execute_close(decision, timestamp)
+        elif action == RiskAction.REDUCE:
+            result = self._execute_reduce(decision, timestamp)
 
-        if action == RiskAction.SCALE_IN:
-            return self._execute_scale_in(decision, timestamp)
+        if result is not None:
+            publisher = get_publisher()
+            publisher.publish(
+                EventChannel.EXECUTION,
+                EventType.ORDER_FILLED,
+                {
+                    "action": action.value,
+                    **result.order.model_dump(mode="json"),
+                },
+            )
 
-        if action == RiskAction.CLOSE:
-            return self._execute_close(decision, timestamp)
-
-        if action == RiskAction.REDUCE:
-            return self._execute_reduce(decision, timestamp)
-
-        return None  # pragma: no cover
+        return result
 
     # ── Private: buy-side ────────────────────────────────────────────────
 
@@ -287,7 +298,7 @@ class PaperExecutor:
             else Decimal("0")
         ).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
 
-        return Order(
+        order = Order(
             symbol=decision.symbol,
             side=side,
             order_type=OrderType.MARKET,
@@ -301,3 +312,10 @@ class PaperExecutor:
             updated_at=timestamp,
             filled_at=timestamp,
         )
+
+        publisher = get_publisher()
+        publisher.publish_model(
+            EventChannel.EXECUTION, EventType.ORDER_CREATED, order
+        )
+
+        return order

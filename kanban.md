@@ -1,6 +1,6 @@
 # Kanban – Crypto Trading Platform
 
-> Updated: 2026-02-19
+> Updated: 2026-02-27
 
 ---
 
@@ -58,9 +58,9 @@
 - [x] **2.13** REST endpoints – `api/routes/system.py` (GET /health, GET /logs)
 - [x] **2.14** WebSocket endpoint in `api/websocket.py` (WS /ws, subscribe to Redis pub/sub, forward events)
 - [x] **2.15** WebSocket connection manager (multiple clients, heartbeat, reconnection handling)
-- [ ] **2.16** Integrate event publishing into strategy (publish SIGNAL_GENERATED, STATE_CHANGED events)
-- [ ] **2.17** Integrate event publishing into execution (publish ORDER_CREATED, ORDER_FILLED events)
-- [ ] **2.18** Integrate event publishing into portfolio (publish POSITION_UPDATED, TRADE_CLOSED events)
+- [x] **2.16** Integrate event publishing into strategy (publish SIGNAL_GENERATED, STATE_CHANGED events)
+- [x] **2.17** Integrate event publishing into execution (publish ORDER_CREATED, ORDER_FILLED events)
+- [x] **2.18** Integrate event publishing into portfolio (publish POSITION_UPDATED, TRADE_CLOSED events)
 - [x] **2.19** API Dockerfile – folded into existing Dockerfile (`COPY api/ api/` added to prod stage)
 - [x] **2.20** Add `api` service to docker-compose.yml (expose port 8000, connect to Postgres + Redis)
 - [x] **2.21** Environment config (`api/.env.example` with DATABASE_URL, REDIS_URL, CORS_ORIGINS)
@@ -95,19 +95,19 @@
 
 ### Tasks – Integration & Testing
 
-- [ ] **2.47** Database seed script (`db/seeds.py` with sample candles, trades, orders)
-- [ ] **2.48** Makefile targets (make api, make frontend, make dev)
-- [ ] **2.49** Test event flow – publish test event from Python shell, verify UI update
-- [ ] **2.50** Test WebSocket reconnection – stop/start API service, verify auto-reconnect
-- [ ] **2.51** Verify all REST endpoints return data (use seed data)
-- [ ] **2.52** End-to-end test – run full stack (docker-compose up), open dashboard, verify live updates
+- [x] **2.47** Database seed script (`db/seeds.py` with sample candles, trades, orders)
+- [x] **2.48** Makefile targets (make api, make frontend, make dev)
+- [ ] **2.49** Test event flow – publish test event from Python shell, verify UI update (backend event tests done; UI verification blocked on frontend)
+- [ ] **2.50** Test WebSocket reconnection – stop/start API service, verify auto-reconnect (blocked on frontend)
+- [x] **2.51** Verify all REST endpoints return data (use seed data)
+- [ ] **2.52** End-to-end test – run full stack (docker-compose up), open dashboard, verify live updates (docker-compose infra ready; blocked on frontend)
 
 ---
 
 ## Phase 3 – Infrastructure & Paper Trading
 ### Tasks
 
-- [ ] **3.1** Add Redis + Celery worker + Celery Beat services to docker-compose
+- [x] **3.1** Add Redis + Celery worker + Celery Beat services to docker-compose
 - [ ] **3.2** Celery setup – app config, worker entrypoint, result backend (Redis)
 - [ ] **3.3** Celery Beat – periodic task schedule (15m candle tick, 4h reconciliation)
 - [ ] **3.4** Candle fetch task – Celery task to pull latest candles + update cache + publish CANDLE_RECEIVED event
@@ -121,11 +121,6 @@
 ---
 
 ## Phase 4 – Real Trading
-
-| TODO | IN PROGRESS | DONE |
-|------|-------------|------|
-| | | |
-
 ### Tasks
 
 - [ ] **4.1** BinanceExecutor – real `buy()` / `sell()` with order lifecycle (PENDING → FILLED / REJECTED / CANCELLED)
@@ -142,11 +137,6 @@
 ---
 
 ## Phase 5 – Research Platform
-
-| TODO | IN PROGRESS | DONE |
-|------|-------------|------|
-| | | |
-
 ### Tasks
 
 - [ ] **5.1** Strategy plugin system – register new strategies without modifying core
@@ -161,8 +151,6 @@
 
 ## Labels
 
-| Label | Meaning |
-|-------|---------|
 | `core` | Part of the core pipeline (data → indicators → strategy → risk → execution → portfolio) |
 | `infra` | Infrastructure / DevOps (DB, Redis, Celery, deployment) |
 | `strategy` | Strategy-specific logic (Smart Hodler, future strategies) |
