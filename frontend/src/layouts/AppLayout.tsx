@@ -1,0 +1,156 @@
+import { useEffect, useState } from 'react';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import AppBar from '@mui/material/AppBar';
+import Box from '@mui/material/Box';
+import Divider from '@mui/material/Divider';
+import Drawer from '@mui/material/Drawer';
+import List from '@mui/material/List';
+import ListItemButton from '@mui/material/ListItemButton';
+import ListItemIcon from '@mui/material/ListItemIcon';
+import ListItemText from '@mui/material/ListItemText';
+import Toolbar from '@mui/material/Toolbar';
+import Typography from '@mui/material/Typography';
+import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
+import BarChartIcon from '@mui/icons-material/BarChart';
+import DashboardIcon from '@mui/icons-material/Dashboard';
+import ReceiptIcon from '@mui/icons-material/Receipt';
+import ShowChartIcon from '@mui/icons-material/ShowChart';
+import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
+import TerminalIcon from '@mui/icons-material/Terminal';
+
+// ── Constants ───────────────────────────────────────────────────────────────
+
+/** Width of the permanent sidebar drawer (px). */
+export const DRAWER_WIDTH = 240;
+
+const NAV_ITEMS = [
+  { label: 'Dashboard', path: '/', icon: <DashboardIcon /> },
+  { label: 'Strategy', path: '/strategy', icon: <ShowChartIcon /> },
+  { label: 'Portfolio', path: '/portfolio', icon: <AccountBalanceWalletIcon /> },
+  { label: 'Trades', path: '/trades', icon: <SwapHorizIcon /> },
+  { label: 'Orders', path: '/orders', icon: <ReceiptIcon /> },
+  { label: 'Metrics', path: '/metrics', icon: <BarChartIcon /> },
+  { label: 'Logs', path: '/logs', icon: <TerminalIcon /> },
+];
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+/** Format current UTC time as HH:MM:SS. */
+function utcClock(): string {
+  const now = new Date();
+  return now.toISOString().slice(11, 19);
+}
+
+// ── Layout ──────────────────────────────────────────────────────────────────
+
+export default function AppLayout() {
+  const { pathname } = useLocation();
+  const [clock, setClock] = useState(utcClock);
+
+  useEffect(() => {
+    const id = setInterval(() => setClock(utcClock()), 1_000);
+    return () => clearInterval(id);
+  }, []);
+
+  return (
+    <Box sx={{ display: 'flex' }}>
+      {/* ── AppBar ──────────────────────────────────────────────────── */}
+      <AppBar
+        position="fixed"
+        sx={{
+          width: `calc(100% - ${DRAWER_WIDTH}px)`,
+          ml: `${DRAWER_WIDTH}px`,
+        }}
+      >
+        <Toolbar variant="dense">
+          {/* Left – page context (placeholder) */}
+          <Typography variant="body2" color="text.secondary" noWrap>
+            Dashboard
+          </Typography>
+
+          <Box sx={{ flexGrow: 1 }} />
+
+          {/* Right – connection status (task 2.45) + clock */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            {/* ConnectionStatus placeholder – task 2.45 */}
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ fontFamily: 'monospace', letterSpacing: 1 }}
+            >
+              {clock} UTC
+            </Typography>
+          </Box>
+        </Toolbar>
+      </AppBar>
+
+      {/* ── Sidebar Drawer ──────────────────────────────────────────── */}
+      <Drawer
+        variant="permanent"
+        anchor="left"
+        sx={{
+          width: DRAWER_WIDTH,
+          flexShrink: 0,
+          '& .MuiDrawer-paper': {
+            width: DRAWER_WIDTH,
+            boxSizing: 'border-box',
+          },
+        }}
+      >
+        {/* Logo / app title */}
+        <Toolbar variant="dense" sx={{ px: 2 }}>
+          <Typography variant="h6" noWrap sx={{ color: 'primary.main' }}>
+            GoldenGibbon
+          </Typography>
+        </Toolbar>
+        <Divider />
+
+        <List sx={{ pt: 1 }}>
+          {NAV_ITEMS.map(({ label, path, icon }) => {
+            const active =
+              path === '/' ? pathname === '/' : pathname.startsWith(path);
+            return (
+              <ListItemButton
+                key={path}
+                component={NavLink}
+                to={path}
+                selected={active}
+              >
+                <ListItemIcon
+                  sx={{
+                    minWidth: 36,
+                    color: active ? 'primary.main' : 'text.secondary',
+                  }}
+                >
+                  {icon}
+                </ListItemIcon>
+                <ListItemText
+                  primary={label}
+                  primaryTypographyProps={{
+                    variant: 'body2',
+                    fontWeight: active ? 600 : 400,
+                  }}
+                />
+              </ListItemButton>
+            );
+          })}
+        </List>
+      </Drawer>
+
+      {/* ── Main Content ────────────────────────────────────────────── */}
+      <Box
+        component="main"
+        sx={{
+          flexGrow: 1,
+          p: 3,
+          width: `calc(100% - ${DRAWER_WIDTH}px)`,
+        }}
+      >
+        {/* Spacer to push content below the AppBar */}
+        <Toolbar variant="dense" />
+
+        <Outlet />
+      </Box>
+    </Box>
+  );
+}

@@ -69,12 +69,12 @@
 
 - [x] **2.22** Initialize Vite + React + TypeScript project in `frontend/` directory
 - [x] **2.23** Install dependencies (`@mui/material`, `@mui/icons-material`, `@emotion/react`, `@emotion/styled`, `react-router-dom`, `zustand`, `@tanstack/react-query`, `recharts`, `@tanstack/react-table`)
-- [ ] **2.24** Configure Vite proxy to FastAPI (port 8000) in `vite.config.ts`
-- [ ] **2.25** Create TypeScript interfaces matching backend Pydantic models (`frontend/src/types/`)
-- [ ] **2.26** MUI theme setup – dark mode `ThemeProvider` in `frontend/src/theme.ts` (palette, typography, component overrides)
-- [ ] **2.27** App shell layout – `AppLayout.tsx` with MUI `Drawer` (left sidebar nav), `AppBar` (connection status, clock), and `<Outlet />` for routed content
-- [ ] **2.28** React Router setup – `router.tsx` with routes: `/` (Dashboard), `/trades` (Trades), `/orders` (Orders), `/strategy` (Strategy), `/logs` (Logs), `/settings` (Settings)
-- [ ] **2.29** Sidebar nav items – icons + labels: Dashboard, Strategy, Portfolio, Trades, Orders, Metrics, Logs, System
+- [x] **2.24** Configure Vite proxy to FastAPI (port 8000) in `vite.config.ts`
+- [x] **2.25** Create TypeScript interfaces matching backend Pydantic models (`frontend/src/types/`)
+- [x] **2.26** MUI theme setup – dark mode `ThemeProvider` in `frontend/src/theme.ts` (palette, typography, component overrides)
+- [x] **2.27** App shell layout – `AppLayout.tsx` with MUI `Drawer` (left sidebar nav), `AppBar` (connection status, clock), and `<Outlet />` for routed content
+- [x] **2.28** React Router setup – `router.tsx` with routes: `/` (Dashboard), `/trades` (Trades), `/orders` (Orders), `/strategy` (Strategy), `/logs` (Logs), `/settings` (Settings)
+- [x] **2.29** Sidebar nav items – icons + labels: Dashboard, Strategy, Portfolio, Trades, Orders, Metrics, Logs, System
 - [ ] **2.30** WebSocket hook – `frontend/src/hooks/useWebSocket.ts` (connect, parse events, auto-reconnect, connection status)
 - [ ] **2.31** Zustand store – `stores/marketStore.ts` (candles, indicators, price updates)
 - [ ] **2.32** Zustand store – `stores/strategyStore.ts` (state, signal, conditions checklist)
