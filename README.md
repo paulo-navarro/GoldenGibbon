@@ -114,7 +114,7 @@ GoldenGibbon follows a strict unidirectional data flow through isolated layers:
 - ✅ **Logging** — Structured JSON logs (structlog) for full observability of every decision
 - ✅ **Test Suite** — 841 unit tests covering the entire pipeline
 
-### Current (Phase 2 - Backend Complete ✅ · Frontend Pending 🚧)
+### Current (Phase 2 - Backend Complete ✅ · Frontend In Progress 🚧)
 
 - ✅ **FastAPI + Uvicorn** — Application factory with lifespan, CORS, health check
 - ✅ **Event System** — Redis pub/sub publisher with 6 channels and 23 event types
@@ -123,7 +123,8 @@ GoldenGibbon follows a strict unidirectional data flow through isolated layers:
 - ✅ **WebSocket Streaming** — Real-time event broadcasting with channel filtering and connection manager
 - ✅ **Database** — ORM models, Alembic migrations, seed script
 - ✅ **Infrastructure** — Docker services, Makefile targets, environment config
-- 📋 **React Dashboard** — Real-time charts, portfolio tracking, trade history
+- 🚧 **React Dashboard Foundation** — Vite + React + TS setup, MUI dark theme, App Shell layout with routing
+- 📋 **React Dashboard Features** — Real-time charts, portfolio tracking, trade history, event streaming (Pending)
 
 ### Future (Phase 3+ - Production 🔮)
 
@@ -338,11 +339,12 @@ Progress is tracked in [`kanban.md`](kanban.md). Current status:
 ### Phase 1: Foundation & Backtest Engine (100% Complete)
 - ✅ **Tasks 1.1–1.28** — Fully implemented (Data, Indicators, Strategy engine, Risk manager, Portfolio tracking, Execution simulation, Backtesting loop, Logging)
 
-### Phase 2: Real-Time Interface (49% Complete)
+### Phase 2: Real-Time Interface (61% Complete)
 - ✅ **Tasks 2.1–2.21** — Backend complete: FastAPI, Pydantic models, ORM, Alembic migrations, event publisher, event channels, REST routes (market, portfolio, trades, orders, strategy, system), WebSocket endpoint & manager, event integration (strategy + execution + portfolio), Docker service, env config
-- ✅ **Tasks 2.47–2.48, 2.51** — Integration: seed script, Makefile targets, REST endpoint tests
-- 📋 Tasks 2.22–2.46 (React frontend)
-- 📋 Tasks 2.49–2.50, 2.52 (Frontend-dependent integration tests)
+- ✅ **Tasks 2.22–2.29, 2.49–2.50** — Frontend foundation: Vite setup, dependencies, TS interfaces, MUI theme, App Shell layout, React Router, Sidebar, Dockerfile, docker-compose service
+- ✅ **Tasks 2.51–2.52, 2.55** — Integration: seed script, Makefile targets, REST endpoint tests
+- 📋 Tasks 2.30–2.48 — React frontend stores, pages, components, main entrypoint
+- 📋 Tasks 2.53–2.54, 2.56 — Architecture integration tests (event flow, WS reconnection, end-to-end)
 
 ### Phase 3: Infrastructure & Paper Trading (10% Complete)
 - ✅ **Task 3.1** — Redis + Celery worker + Celery Beat services in docker-compose
@@ -352,7 +354,7 @@ Progress is tracked in [`kanban.md`](kanban.md). Current status:
 - 📋 Tasks 4.1–4.10 (Binance executor, capital limits, alerting)
 
 ### Phase 5: Research Platform (0% Complete)
-- 📋 Tasks 5.1–5.7 (Multi-strategy, optimization, parameter tuning)
+- 📋 Tasks 5.1–5.5 (Multi-strategy, optimization, parameter tuning)
 
 ---
 
@@ -429,15 +431,15 @@ This is a personal trading platform under active development. Contributions, sug
 
 ```text
 Phase 1  ██████████████████████████████  30/30  100%
-Phase 2  ████████████████░░░░░░░░░░░░░░  25/52   48%
+Phase 2  ██████████████████░░░░░░░░░░░░  34/56   61%
 Phase 3  ███░░░░░░░░░░░░░░░░░░░░░░░░░░░   1/10   10%
 Phase 4  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   0/10    0%
-Phase 5  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   0/7     0%
+Phase 5  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   0/5     0%
 ─────────────────────────────────────────────────────
-Overall  ██████████████████░░░░░░░░░░░░  56/109  51%
+Overall  ██████████████████░░░░░░░░░░░░  65/111  59%
 ```
 
-> *Last updated: 27 Feb 2026 · 841 tests passing*
+> *Last updated: 28 Feb 2026 · 841 tests passing*
 
 ---
 
