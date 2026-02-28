@@ -145,6 +145,36 @@ services:
     profiles: [prod]
     command: celery -A core.celery_app beat --loglevel=info
 
+  # ── Frontend (dev) ─────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+    container_name: trade-frontend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "${FRONTEND_PORT:-5858}:5173"
+    depends_on:
+      api:
+        condition: service_healthy
+    profiles: [dev]
+
+  # ── Frontend (prod) ────────────────────────────
+  frontend-prod:
+    build:
+      context: ./frontend
+      target: prod
+    container_name: trade-frontend
+    ports:
+      - "${FRONTEND_PORT:-5858}:80"
+    depends_on:
+      api-prod:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: [prod]
+
   # ── Postgres ───────────────────────────────────
   postgres:
     image: postgres:16-alpine

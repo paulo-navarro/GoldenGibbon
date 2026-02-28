@@ -1,6 +1,6 @@
 # Kanban – Crypto Trading Platform
 
-> Updated: 2026-02-27
+> Updated: 2026-02-28
 
 ---
 
@@ -67,40 +67,44 @@
 
 ### Tasks – Frontend (React + WebSocket)
 
-- [ ] **2.22** Initialize Vite + React + TypeScript project in `frontend/` directory
-- [ ] **2.23** Install dependencies (socket.io-client or native WebSocket, zustand, @tanstack/react-query, recharts, @tanstack/react-table)
+- [x] **2.22** Initialize Vite + React + TypeScript project in `frontend/` directory
+- [x] **2.23** Install dependencies (`@mui/material`, `@mui/icons-material`, `@emotion/react`, `@emotion/styled`, `react-router-dom`, `zustand`, `@tanstack/react-query`, `recharts`, `@tanstack/react-table`)
 - [ ] **2.24** Configure Vite proxy to FastAPI (port 8000) in `vite.config.ts`
-- [ ] **2.25** Create TypeScript interfaces matching backend Pydantic models
-- [ ] **2.26** WebSocket hook in `frontend/src/hooks/useWebSocket.ts` (connect, parse events, auto-reconnect)
-- [ ] **2.27** Zustand store – `stores/marketStore.ts` (candles, indicators, price updates)
-- [ ] **2.28** Zustand store – `stores/strategyStore.ts` (state, signal, conditions checklist)
-- [ ] **2.29** Zustand store – `stores/portfolioStore.ts` (balance, positions, equity curve)
-- [ ] **2.30** Zustand store – `stores/tradesStore.ts` (trade history array)
-- [ ] **2.31** Zustand store – `stores/ordersStore.ts` (active and recent orders)
-- [ ] **2.32** Zustand store – `stores/systemStore.ts` (health status, logs buffer)
-- [ ] **2.33** React Query hooks in `frontend/src/api/` (useCandles, usePortfolio, useTrades, useEquityCurve, etc.)
-- [ ] **2.34** Component – `MarketDataPanel.tsx` (price ticker, candlestick charts, indicator overlays)
-- [ ] **2.35** Component – `StrategyPanel.tsx` (state badge, signal, conditions checklist, scaled entry progress, cooldown timer)
-- [ ] **2.36** Component – `PortfolioPanel.tsx` (balance, open positions table, trailing stop level)
-- [ ] **2.37** Component – `TradesTable.tsx` (sortable/filterable trade history)
-- [ ] **2.38** Component – `OrdersPanel.tsx` (active orders, recent fills, execution stats)
-- [ ] **2.39** Component – `MetricsPanel.tsx` (equity curve chart, win rate, total return, drawdown, Sharpe)
-- [ ] **2.40** Component – `SystemStatus.tsx` (connection indicators, last update timestamp, session status)
-- [ ] **2.41** Component – `LogsViewer.tsx` (real-time log stream with filtering)
-- [ ] **2.42** Main layout in `App.tsx` (grid layout, connection status header, theme toggle)
-- [ ] **2.43** Initialize WebSocket and stores in `main.tsx` and `App.tsx`
-- [ ] **2.44** Environment config (`frontend/.env.example` with VITE_API_URL, VITE_WS_URL)
-- [ ] **2.45** Frontend Dockerfile (`frontend/Dockerfile` with Vite build + nginx serve)
-- [ ] **2.46** Add `frontend` service to docker-compose.yml (expose port 5173 for dev, 80 for prod)
+- [ ] **2.25** Create TypeScript interfaces matching backend Pydantic models (`frontend/src/types/`)
+- [ ] **2.26** MUI theme setup – dark mode `ThemeProvider` in `frontend/src/theme.ts` (palette, typography, component overrides)
+- [ ] **2.27** App shell layout – `AppLayout.tsx` with MUI `Drawer` (left sidebar nav), `AppBar` (connection status, clock), and `<Outlet />` for routed content
+- [ ] **2.28** React Router setup – `router.tsx` with routes: `/` (Dashboard), `/trades` (Trades), `/orders` (Orders), `/strategy` (Strategy), `/logs` (Logs), `/settings` (Settings)
+- [ ] **2.29** Sidebar nav items – icons + labels: Dashboard, Strategy, Portfolio, Trades, Orders, Metrics, Logs, System
+- [ ] **2.30** WebSocket hook – `frontend/src/hooks/useWebSocket.ts` (connect, parse events, auto-reconnect, connection status)
+- [ ] **2.31** Zustand store – `stores/marketStore.ts` (candles, indicators, price updates)
+- [ ] **2.32** Zustand store – `stores/strategyStore.ts` (state, signal, conditions checklist)
+- [ ] **2.33** Zustand store – `stores/portfolioStore.ts` (balance, positions, equity curve)
+- [ ] **2.34** Zustand store – `stores/tradesStore.ts` (trade history array)
+- [ ] **2.35** Zustand store – `stores/ordersStore.ts` (active and recent orders)
+- [ ] **2.36** Zustand store – `stores/systemStore.ts` (health status, logs buffer)
+- [ ] **2.37** React Query hooks in `frontend/src/api/` (useCandles, usePortfolio, useTrades, useEquityCurve, etc.)
+- [ ] **2.38** Page – `pages/DashboardPage.tsx` (price ticker cards, mini equity curve, open positions summary, recent signals, system status)
+- [ ] **2.39** Page – `pages/StrategyPage.tsx` (state badge, signal, conditions checklist, scaled entry progress, cooldown timer)
+- [ ] **2.40** Page – `pages/PortfolioPage.tsx` (balance card, open positions table with trailing stop levels, equity curve chart)
+- [ ] **2.41** Page – `pages/TradesPage.tsx` (sortable/filterable trade history with MUI DataGrid or @tanstack/react-table)
+- [ ] **2.42** Page – `pages/OrdersPage.tsx` (active orders, recent fills, execution stats)
+- [ ] **2.43** Page – `pages/MetricsPage.tsx` (equity curve chart, win rate, total return, drawdown, Sharpe ratio)
+- [ ] **2.44** Page – `pages/LogsPage.tsx` (real-time log stream with filtering and severity chips)
+- [ ] **2.45** Component – `components/ConnectionStatus.tsx` (WebSocket + API health indicator in AppBar)
+- [ ] **2.46** Component – `components/PriceTicker.tsx` (live price with delta, used in Dashboard + AppBar)
+- [ ] **2.47** Initialize WebSocket, stores, QueryClient, Router, and ThemeProvider in `main.tsx`
+- [ ] **2.48** Environment config (`frontend/.env.example` with VITE_API_URL, VITE_WS_URL)
+- [x] **2.49** Frontend Dockerfile (`frontend/Dockerfile` with Vite build + nginx serve)
+- [x] **2.50** Add `frontend` service to docker-compose.yml (expose port 5173 for dev, 80 for prod)
 
 ### Tasks – Integration & Testing
 
-- [x] **2.47** Database seed script (`db/seeds.py` with sample candles, trades, orders)
-- [x] **2.48** Makefile targets (make api, make frontend, make dev)
-- [ ] **2.49** Test event flow – publish test event from Python shell, verify UI update (backend event tests done; UI verification blocked on frontend)
-- [ ] **2.50** Test WebSocket reconnection – stop/start API service, verify auto-reconnect (blocked on frontend)
-- [x] **2.51** Verify all REST endpoints return data (use seed data)
-- [ ] **2.52** End-to-end test – run full stack (docker-compose up), open dashboard, verify live updates (docker-compose infra ready; blocked on frontend)
+- [x] **2.51** Database seed script (`db/seeds.py` with sample candles, trades, orders)
+- [x] **2.52** Makefile targets (make api, make frontend, make dev)
+- [ ] **2.53** Test event flow – publish test event from Python shell, verify UI update (backend event tests done; UI verification blocked on frontend)
+- [ ] **2.54** Test WebSocket reconnection – stop/start API service, verify auto-reconnect (blocked on frontend)
+- [x] **2.55** Verify all REST endpoints return data (use seed data)
+- [ ] **2.56** End-to-end test – run full stack (docker-compose up), open dashboard, verify live updates (docker-compose infra ready; blocked on frontend)
 
 ---
 

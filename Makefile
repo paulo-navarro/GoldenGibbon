@@ -1,4 +1,4 @@
-.PHONY: dev prod down logs ps build test test-cov migrate migrate-create seed db-shell test-indicators test-loader api
+.PHONY: dev prod down logs ps build test test-cov migrate migrate-create seed db-shell test-indicators test-loader api frontend
 
 # ── Development (hot-reload via volume mount) ──
 dev:
@@ -11,6 +11,10 @@ prod:
 # ── API (just the FastAPI server + infra) ──────
 api:
 	docker compose --profile dev up --build -d api postgres redis
+
+# ── Frontend (dev server + API + infra) ────────
+frontend:
+	docker compose --profile dev up --build -d frontend api postgres redis
 
 # ── Helpers ────────────────────────────────────
 down:

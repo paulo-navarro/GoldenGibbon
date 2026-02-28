@@ -172,11 +172,11 @@ class TestCORS:
         resp = client.options(
             "/api/system/health",
             headers={
-                "Origin": "http://localhost:5173",
+                "Origin": "http://localhost:5858",
                 "Access-Control-Request-Method": "GET",
             },
         )
-        assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
+        assert resp.headers.get("access-control-allow-origin") == "http://localhost:5858"
 
     def test_rejects_unknown_origin(self, client):
         resp = client.options(

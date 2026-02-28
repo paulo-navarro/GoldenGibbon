@@ -39,3 +39,10 @@ docker-compose.override.yml
 
 # Logs
 logs/
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+.env.local
+.env.*.local
