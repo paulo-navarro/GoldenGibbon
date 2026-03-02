@@ -52,7 +52,7 @@ migrate-create:
 	docker compose run --rm app alembic revision --autogenerate -m "$(message)"
 
 seed:
-	docker compose run --rm app python db/seeds.py
+	docker compose run --rm -e PYTHONPATH=/app app python db/seeds.py
 
 db-shell:
 	docker compose exec postgres psql -U trade -d trade
