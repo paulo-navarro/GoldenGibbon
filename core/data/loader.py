@@ -259,6 +259,29 @@ class DataLoader:
             logger.error(f"Failed to cache candles: {e}")
             raise
     
+    def cache_candles(
+        self,
+        candles: List[Candle],
+        symbol: str,
+        timeframe: str,
+    ) -> int:
+        """
+        Upsert candles into the database cache.
+
+        Public wrapper around :meth:`_cache_to_db`.  Used by Celery tasks
+        that fetch the latest few candles and want to persist them without
+        going through the full :meth:`load_historical` pipeline.
+
+        Args:
+            candles: Candle objects returned by :class:`BinanceClient`.
+            symbol: Trading symbol (e.g. ``"BTCUSDT"``).
+            timeframe: Timeframe string (e.g. ``"15m"``).
+
+        Returns:
+            Count of newly inserted records (duplicates silently skipped).
+        """
+        return self._cache_to_db(candles, symbol, timeframe)
+
     def get_market_data(
         self,
         symbol: str,

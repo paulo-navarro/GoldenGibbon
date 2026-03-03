@@ -107,6 +107,15 @@ live_trading:
   reconcile_on_startup: true
   reconciliation_interval_hours: 4
 
+# WebSocket Live Feed (Task 3.6)
+ws_feed:
+  enabled: false
+  base_url: "wss://stream.binance.com:9443"
+  reconnect_delay: 1.0       # initial backoff (seconds)
+  max_reconnect_delay: 60.0  # max backoff cap (seconds)
+  ping_interval: 20          # seconds between pings
+  ping_timeout: 10           # seconds to wait for pong
+
 # System
 system:
   timezone: "UTC"

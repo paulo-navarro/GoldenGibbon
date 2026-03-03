@@ -145,6 +145,40 @@ services:
     profiles: [prod]
     command: celery -A core.celery_app beat --loglevel=info
 
+  # ── WebSocket Feed (dev) ────────────────────────
+  ws-feed:
+    build:
+      context: .
+      target: dev
+    container_name: trade-ws-feed
+    env_file: .env
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles: [dev]
+    restart: unless-stopped
+    command: python -m core.data.stream_runner
+
+  # ── WebSocket Feed (prod) ───────────────────────
+  ws-feed-prod:
+    build:
+      context: .
+      target: prod
+    container_name: trade-ws-feed
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: [prod]
+    command: python -m core.data.stream_runner
+
   # ── Frontend (dev) ─────────────────────────────
   frontend:
     build:

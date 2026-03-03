@@ -1,4 +1,4 @@
-.PHONY: dev prod down logs ps build test test-cov migrate migrate-create seed db-shell test-indicators test-loader api frontend
+.PHONY: dev prod down logs ps build test test-cov migrate migrate-create seed db-shell test-indicators test-loader api frontend celery celery-logs ws-feed ws-feed-logs
 
 # ── Development (hot-reload via volume mount) ──
 dev:
@@ -29,6 +29,20 @@ ps:
 build:
 	docker compose --profile dev build
 	docker compose --profile prod build
+
+# ── Celery ─────────────────────────────────────
+celery:
+	docker compose --profile dev up --build -d celery-worker celery-beat postgres redis
+
+celery-logs:
+	docker compose --profile dev logs -f celery-worker celery-beat
+
+# ── WebSocket Feed ─────────────────────────────
+ws-feed:
+	docker compose --profile dev up --build -d ws-feed postgres redis
+
+ws-feed-logs:
+	docker compose --profile dev logs -f ws-feed
 
 # ── Testing ────────────────────────────────────
 test:

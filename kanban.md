@@ -1,6 +1,6 @@
 # Kanban – Crypto Trading Platform
 
-> Updated: 2026-02-28
+> Updated: 2026-03-03
 
 ---
 
@@ -112,11 +112,11 @@
 ### Tasks
 
 - [x] **3.1** Add Redis + Celery worker + Celery Beat services to docker-compose
-- [ ] **3.2** Celery setup – app config, worker entrypoint, result backend (Redis)
-- [ ] **3.3** Celery Beat – periodic task schedule (15m candle tick, 4h reconciliation)
-- [ ] **3.4** Candle fetch task – Celery task to pull latest candles + update cache + publish CANDLE_RECEIVED event
-- [ ] **3.5** Strategy tick task – Celery task to run indicator → strategy → risk → execute pipeline
-- [ ] **3.6** Live data feed – real-time candle ingestion from Binance (REST or WebSocket)
+- [x] **3.2** Celery setup – app config, worker entrypoint, result backend (Redis)
+- [x] **3.3** Celery Beat – periodic task schedule (15m candle tick, 4h reconciliation)
+- [x] **3.4** Candle fetch task – Celery task to pull latest candles + update cache + publish CANDLE_RECEIVED event
+- [x] **3.5** Strategy tick task – Celery task to run indicator → strategy → risk → execute pipeline
+- [x] **3.6** Live data feed – real-time candle ingestion from Binance (REST or WebSocket)
 - [ ] **3.7** Paper trading mode – PaperExecutor driven by live data via Celery tasks
 - [ ] **3.8** State persistence – save/load strategy state + portfolio between ticks (also: enrich `/api/strategy/signals` with live conditions from `state_data`)
 - [ ] **3.9** Reconciliation task – compare local state vs expected state on startup

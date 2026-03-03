@@ -324,6 +324,19 @@ class LiveTradingConfig(BaseModel):
     reconciliation_interval_hours: int = Field(default=4, ge=1)
 
 
+# ── WebSocket Feed Configuration ──────────────────────────────────────────────
+
+class WebSocketFeedConfig(BaseModel):
+    """Binance WebSocket live-feed settings (task 3.6)."""
+
+    enabled: bool = Field(default=False)
+    base_url: str = Field(default="wss://stream.binance.com:9443")
+    reconnect_delay: float = Field(default=1.0, gt=0, description="Initial reconnect delay in seconds")
+    max_reconnect_delay: float = Field(default=60.0, gt=0, description="Maximum reconnect delay in seconds")
+    ping_interval: int = Field(default=20, ge=5, description="WebSocket ping interval in seconds")
+    ping_timeout: int = Field(default=10, ge=1, description="WebSocket ping timeout in seconds")
+
+
 # ── System Configuration ──────────────────────────────────────────────────────
 
 class SystemConfig(BaseModel):
@@ -360,6 +373,7 @@ class Settings(BaseModel):
     backtest: BacktestConfig
     paper_trading: PaperTradingConfig
     live_trading: LiveTradingConfig
+    ws_feed: WebSocketFeedConfig = Field(default_factory=WebSocketFeedConfig)
     system: SystemConfig
     
     @classmethod
