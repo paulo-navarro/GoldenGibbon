@@ -145,6 +145,7 @@ def position_to_orm(position: pydantic_models.Position) -> orm_models.PositionRe
     """
     return orm_models.PositionRecord(
         symbol=position.symbol,
+        strategy=position.strategy,
         size=position.size,
         entry_price=position.entry_price,
         entry_time=position.entry_time,
@@ -168,6 +169,7 @@ def orm_to_position(record: orm_models.PositionRecord) -> pydantic_models.Positi
     """
     return pydantic_models.Position(
         symbol=record.symbol,
+        strategy=record.strategy,
         size=record.size,
         entry_price=record.entry_price,
         entry_time=record.entry_time,
@@ -450,15 +452,28 @@ def orm_to_signal_snapshot(
     """
     Derive a signal snapshot from a StrategyStateRecord.
 
-    Signal is always HOLD until live conditions are persisted
-    to ``state_data`` (Phase 3, task 3.8).
+    Reads the live ``signal`` value and ``conditions`` dict from
+    the ``state_data`` JSONB column (populated every tick by task 3.8).
+    Falls back to ``Signal.HOLD`` if no live data is available yet.
     """
+    data = record.state_data or {}
+
+    # Resolve signal from persisted state_data
+    raw_signal = data.get("signal")
+    try:
+        signal = pydantic_models.Signal(raw_signal) if raw_signal else pydantic_models.Signal.HOLD
+    except ValueError:
+        signal = pydantic_models.Signal.HOLD
+
+    # Conditions dict (strategy-specific booleans)
+    conditions = data.get("conditions")
+
     return pydantic_models.StrategySignalSnapshot(
         symbol=record.symbol,
         strategy=record.strategy,
         state=pydantic_models.StrategyState(record.state),
-        signal=pydantic_models.Signal.HOLD,
-        conditions=record.state_data,
+        signal=signal,
+        conditions=conditions,
         updated_at=record.updated_at,
     )
 

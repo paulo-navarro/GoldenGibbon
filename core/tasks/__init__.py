@@ -4,7 +4,7 @@ Celery tasks for the trading pipeline.
 Each task is implemented incrementally as the corresponding kanban item lands:
 
 * :func:`fetch_candles` → **3.4** ✓
-* :func:`run_strategy_tick` → **3.5** ✓
+* :func:`run_strategy_tick` → **3.5** ✓  (+ **3.7** paper mode, **3.8** state persistence)
 * :func:`run_reconciliation` → **3.9** (stub)
 
 The module is auto-discovered by :mod:`core.celery_app` via
@@ -13,6 +13,7 @@ The module is auto-discovered by :mod:`core.celery_app` via
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, Optional, Tuple
 
@@ -36,6 +37,11 @@ _LOOKBACK_DAYS = 7
 # Must be longer than the tick execution time (~5 s) but short enough
 # that a stuck lock self-heals.  120 s is conservative.
 _TICK_LOCK_TTL = 120
+
+# Maximum in-memory trade-history and equity-curve entries to keep
+# after each persist.  Older entries live in the DB.
+_MAX_MEMORY_TRADES = 50
+_MAX_MEMORY_SNAPSHOTS = 100
 
 
 # ── Tick idempotency (task 3.6) ──────────────────────────────────────────────
@@ -95,8 +101,9 @@ def _get_strategy_registry() -> Dict[str, type]:
 # Keeps strategy, portfolio-manager, risk-engine and executor instances alive
 # across ticks *within the same worker process*.  Keyed by (strategy, symbol).
 #
-# This is a pragmatic in-memory cache.  Task 3.8 will add proper DB-backed
-# state persistence so that strategy position survives worker restarts.
+# On first creation the factory attempts to restore state from the DB
+# (tasks 3.7 / 3.8) so that paper-trading positions and strategy state
+# survive worker restarts.
 
 _WorkerStateKey = Tuple[str, str]  # (strategy_name, symbol)
 
@@ -104,13 +111,14 @@ _WorkerStateKey = Tuple[str, str]  # (strategy_name, symbol)
 class _TickComponents:
     """Holds the live objects for one (strategy, symbol) pair."""
 
-    __slots__ = ("strategy", "pm", "risk_engine", "executor")
+    __slots__ = ("strategy", "pm", "risk_engine", "executor", "run_id")
 
-    def __init__(self, strategy, pm, risk_engine, executor):  # noqa: ANN001
+    def __init__(self, strategy, pm, risk_engine, executor, run_id: str):  # noqa: ANN001
         self.strategy = strategy
         self.pm = pm
         self.risk_engine = risk_engine
         self.executor = executor
+        self.run_id = run_id
 
 
 _worker_state: Dict[_WorkerStateKey, _TickComponents] = {}
@@ -119,6 +127,106 @@ _worker_state: Dict[_WorkerStateKey, _TickComponents] = {}
 def clear_worker_state() -> None:
     """Reset worker-process state.  Used in tests for isolation."""
     _worker_state.clear()
+
+
+# ── State recovery helpers (task 3.8) ────────────────────────────────────────
+
+
+def _recover_state(
+    strategy_name: str,
+    symbol: str,
+    strategy,  # noqa: ANN001 – Strategy instance
+    pm,  # noqa: ANN001 – PortfolioManager
+    risk_engine,  # noqa: ANN001 – RiskEngine
+) -> str | None:
+    """
+    Attempt to restore strategy / portfolio / risk state from the DB.
+
+    Returns the previous ``run_id`` if recovery succeeded, or ``None``
+    if no persisted state was found.
+    """
+    from core.models import StrategyState
+    from db import get_session
+    from db.models import PositionRecord, StrategyStateRecord
+    from db.utils import orm_to_position
+
+    recovered_run_id: str | None = None
+
+    try:
+        with get_session() as session:
+            # 1. Restore strategy state ────────────────────────────────
+            state_rec = (
+                session.query(StrategyStateRecord)
+                .filter_by(symbol=symbol, strategy=strategy_name)
+                .first()
+            )
+            if state_rec is not None:
+                strategy._state = StrategyState(state_rec.state)
+                data = state_rec.state_data or {}
+
+                # Cooldown counter
+                strategy._cooldown_remaining = data.get("cooldown_remaining", 0)
+
+                # Strategy-specific fields
+                if hasattr(strategy, "_consecutive_below_ema200"):
+                    strategy._consecutive_below_ema200 = data.get(
+                        "consecutive_below_ema200", 0
+                    )
+
+                # Risk engine: consecutive BUY candle counter
+                risk_engine._buy_signal_candles[symbol] = (
+                    state_rec.consecutive_buy_candles
+                )
+
+                recovered_run_id = data.get("run_id")
+
+                logger.info(
+                    "state_recovery: strategy state restored",
+                    strategy=strategy_name,
+                    symbol=symbol,
+                    state=state_rec.state,
+                    cooldown_remaining=strategy._cooldown_remaining,
+                    buy_signal_candles=state_rec.consecutive_buy_candles,
+                )
+
+            # 2. Restore open position ─────────────────────────────────
+            pos_rec = (
+                session.query(PositionRecord)
+                .filter_by(symbol=symbol, strategy=strategy_name)
+                .first()
+            )
+            if pos_rec is not None:
+                position = orm_to_position(pos_rec)
+                # Restore USDT balance from state_data
+                if state_rec is not None:
+                    data = state_rec.state_data or {}
+                    saved_balance = data.get("usdt_balance")
+                    if saved_balance is not None:
+                        pm._portfolio.usdt_balance = Decimal(str(saved_balance))
+
+                # Inject position directly into PM without deducting cost
+                # (cost was already deducted when originally opened).
+                pm._portfolio.positions[symbol] = position
+                pm._portfolio.open_trades_count = len(pm._portfolio.positions)
+
+                logger.info(
+                    "state_recovery: position restored",
+                    strategy=strategy_name,
+                    symbol=symbol,
+                    size=str(position.size),
+                    entry_price=str(position.entry_price),
+                    scale_in_count=position.scale_in_count,
+                )
+
+    except Exception as exc:
+        logger.warning(
+            "state_recovery: failed (starting fresh)",
+            strategy=strategy_name,
+            symbol=symbol,
+            error=str(exc),
+        )
+
+    return recovered_run_id
 
 
 def _get_or_create_components(
@@ -132,11 +240,15 @@ def _get_or_create_components(
 ) -> _TickComponents:
     """
     Return cached tick-pipeline components, creating them on first call.
+
+    On first creation, attempts to recover persisted state from the DB
+    (task 3.8).  Falls back to a fresh session if no state is found.
     """
     key: _WorkerStateKey = (strategy_name, symbol)
 
     if key not in _worker_state:
         from core.execution.paper import PaperExecutor
+        from core.events import EventChannel, EventType, get_publisher
         from core.portfolio import PortfolioManager
         from core.risk import RiskEngine
 
@@ -157,15 +269,183 @@ def _get_or_create_components(
             simulate_slippage=paper_config.get("simulate_slippage", True),
         )
 
-        _worker_state[key] = _TickComponents(strategy, pm, risk_engine, executor)
+        # Attempt state recovery from DB
+        recovered_run_id = _recover_state(
+            strategy_name, symbol, strategy, pm, risk_engine,
+        )
+
+        # Generate or reuse run_id
+        now_tag = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        run_id = recovered_run_id or f"paper_{strategy_name}_{symbol}_{now_tag}"
+
+        _worker_state[key] = _TickComponents(
+            strategy, pm, risk_engine, executor, run_id,
+        )
+
         logger.info(
             "tick_components: created",
             strategy=strategy_name,
             symbol=symbol,
             initial_capital=str(cap),
+            run_id=run_id,
+            recovered=recovered_run_id is not None,
+        )
+
+        # Publish startup event (task 3.7)
+        publisher = get_publisher()
+        publisher.publish(
+            EventChannel.SYSTEM,
+            EventType.STARTUP,
+            {
+                "mode": "paper_trading",
+                "strategy": strategy_name,
+                "symbol": symbol,
+                "run_id": run_id,
+                "initial_capital": str(cap),
+                "recovered": recovered_run_id is not None,
+            },
         )
 
     return _worker_state[key]
+
+
+# ── DB persistence helpers (tasks 3.7 / 3.8) ────────────────────────────────
+
+
+def _persist_tick_results(
+    session,  # noqa: ANN001 – SQLAlchemy Session
+    comp: _TickComponents,
+    strategy_name: str,
+    symbol: str,
+    execution_result,  # noqa: ANN001 – Optional[ExecutionResult]
+    snapshot,  # noqa: ANN001 – PortfolioSnapshot
+    signal_value: str,
+    candle_time: datetime,
+) -> None:
+    """
+    Persist execution audit trail and state snapshot to the DB.
+
+    Called once per tick after execution + snapshot.  Writes:
+
+    * OrderRecord (if an order was filled)
+    * TradeRecord (if a trade closed)
+    * PortfolioSnapshot
+    * PositionRecord (upsert or delete)
+    * StrategyStateRecord (upsert)
+    """
+    from db.models import (
+        OrderRecord,
+        PositionRecord,
+        PortfolioSnapshot as PortfolioSnapshotORM,
+        StrategyStateRecord,
+    )
+    from db.utils import (
+        order_to_orm,
+        portfolio_snapshot_to_orm,
+        position_to_orm,
+        trade_to_orm,
+    )
+
+    run_id = comp.run_id
+
+    # ── 1. Order + Trade audit trail ─────────────────────────────────
+    if execution_result is not None:
+        order_rec = order_to_orm(execution_result.order)
+        order_rec.run_id = run_id
+        session.add(order_rec)
+
+        if execution_result.trade is not None:
+            trade_rec = trade_to_orm(execution_result.trade, run_id=run_id)
+            session.add(trade_rec)
+
+    # ── 2. Portfolio snapshot ────────────────────────────────────────
+    snap_rec = portfolio_snapshot_to_orm(snapshot, run_id=run_id)
+    session.add(snap_rec)
+
+    # ── 3. Position upsert / delete ──────────────────────────────────
+    existing_pos = (
+        session.query(PositionRecord)
+        .filter_by(symbol=symbol, strategy=strategy_name)
+        .first()
+    )
+
+    if comp.pm.has_position(symbol):
+        position = comp.pm.get_position(symbol)
+        if existing_pos is not None:
+            existing_pos.size = position.size
+            existing_pos.entry_price = position.entry_price
+            existing_pos.entry_time = position.entry_time
+            existing_pos.highest_close = position.highest_close
+            existing_pos.trailing_stop_price = position.trailing_stop_price
+            existing_pos.hard_stop_price = position.hard_stop_price
+            existing_pos.scale_in_count = position.scale_in_count
+            existing_pos.buy_signal_candles = position.buy_signal_candles
+        else:
+            new_pos = position_to_orm(position)
+            session.add(new_pos)
+    else:
+        # Position closed — remove from DB
+        if existing_pos is not None:
+            session.delete(existing_pos)
+
+    # ── 4. Strategy state upsert ─────────────────────────────────────
+    state_data = {
+        "run_id": run_id,
+        "signal": signal_value,
+        "cooldown_remaining": getattr(comp.strategy, "_cooldown_remaining", 0),
+        "usdt_balance": str(comp.pm.portfolio.usdt_balance),
+        "equity": str(comp.pm.portfolio.equity),
+        "total_pnl": str(comp.pm.portfolio.total_pnl),
+    }
+
+    # Conditions
+    if hasattr(comp.strategy, "conditions") and comp.strategy.conditions is not None:
+        state_data["conditions"] = comp.strategy.conditions.model_dump(mode="json")
+
+    # Strategy-specific state
+    if hasattr(comp.strategy, "_consecutive_below_ema200"):
+        state_data["consecutive_below_ema200"] = comp.strategy._consecutive_below_ema200
+
+    buy_candles = comp.risk_engine.get_buy_signal_candles(symbol)
+
+    # Derive last_exit_time from most recent trade
+    last_exit: datetime | None = None
+    if comp.pm.portfolio.trade_history:
+        last_exit = comp.pm.portfolio.trade_history[-1].exit_time
+
+    existing_state = (
+        session.query(StrategyStateRecord)
+        .filter_by(symbol=symbol, strategy=strategy_name)
+        .first()
+    )
+    if existing_state is not None:
+        existing_state.state = comp.strategy.state.value
+        existing_state.consecutive_buy_candles = buy_candles
+        existing_state.state_data = state_data
+        existing_state.last_exit_time = last_exit
+    else:
+        new_state = StrategyStateRecord(
+            symbol=symbol,
+            strategy=strategy_name,
+            state=comp.strategy.state.value,
+            consecutive_buy_candles=buy_candles,
+            state_data=state_data,
+            last_exit_time=last_exit,
+        )
+        session.add(new_state)
+
+
+def _trim_in_memory_history(pm) -> None:  # noqa: ANN001
+    """
+    Trim in-memory trade history and equity curve to bounded sizes.
+
+    Older entries are persisted in the DB; no need to keep them in RAM
+    for a long-running paper session.
+    """
+    if len(pm.portfolio.trade_history) > _MAX_MEMORY_TRADES:
+        pm._portfolio.trade_history = pm._portfolio.trade_history[-_MAX_MEMORY_TRADES:]
+    if len(pm.portfolio.equity_curve) > _MAX_MEMORY_SNAPSHOTS:
+        pm._portfolio.equity_curve = pm._portfolio.equity_curve[-_MAX_MEMORY_SNAPSHOTS:]
 
 
 # ── fetch_candles (task 3.4) ─────────────────────────────────────────────────
@@ -279,6 +559,15 @@ def run_strategy_tick(self) -> Dict[str, Any]:  # noqa: ANN001
     populate the DB cache.  Also triggered immediately by the WebSocket
     stream runner (task 3.6) when a candle closes.
 
+    **Task 3.7 – Paper trading mode:**
+    Only runs when ``paper_trading.enabled`` is ``True`` in config.
+    Uses ``paper_trading.initial_capital`` for the starting balance.
+
+    **Task 3.8 – State persistence:**
+    After each tick, persists orders, trades, portfolio snapshots,
+    positions, and strategy state to the DB.  On worker restart the
+    factory recovers state automatically.
+
     A Redis ``SET NX EX`` lock keyed by the latest candle's open_time
     prevents double-execution when both Beat and the stream trigger the
     task for the same candle.
@@ -292,14 +581,14 @@ def run_strategy_tick(self) -> Dict[str, Any]:  # noqa: ANN001
     4. Passes the signal through ``RiskEngine.evaluate()`` for sizing.
     5. Executes via ``PaperExecutor.execute()``.
     6. Takes a portfolio snapshot.
+    7. Persists execution results + state to the DB.
 
     Strategy, PortfolioManager, RiskEngine and PaperExecutor instances
-    are kept alive in worker-process memory across ticks.  Task 3.8 will
-    add DB-backed state persistence for crash recovery.
+    are kept alive in worker-process memory across ticks.
 
     Returns:
         Summary dict with tick counts and signals per symbol.
-        Returns ``{"skipped": True}`` if the idempotency lock was not acquired.
+        Returns ``{"skipped": True}`` if the task should not run.
     """
     from core.config import get_settings
     from core.data.binance_client import BinanceClient
@@ -311,6 +600,14 @@ def run_strategy_tick(self) -> Dict[str, Any]:  # noqa: ANN001
     settings = get_settings()
     publisher = get_publisher()
     registry = _get_strategy_registry()
+
+    # ── Mode gate (task 3.7) ─────────────────────────────────────────
+    if not settings.paper_trading.enabled:
+        logger.info(
+            "run_strategy_tick: skipped (paper_trading not enabled)",
+            task_id=self.request.id,
+        )
+        return {"skipped": True, "reason": "paper_trading_not_enabled"}
 
     # ── Idempotency lock (task 3.6) ──────────────────────────────────
     # Peek at the latest candle timestamp from the DB to build the lock
@@ -375,7 +672,7 @@ def run_strategy_tick(self) -> Dict[str, Any]:  # noqa: ANN001
                     risk_config=settings.risk.model_dump(),
                     execution_config=settings.execution.model_dump(),
                     paper_config=settings.paper_trading.model_dump(),
-                    initial_capital=settings.backtest.initial_capital,
+                    initial_capital=settings.paper_trading.initial_capital,
                 )
 
                 # ── 1. Load data + indicators from DB cache ──────────
@@ -407,13 +704,17 @@ def run_strategy_tick(self) -> Dict[str, Any]:  # noqa: ANN001
                     market_data, comp.pm.portfolio,
                 )
 
+                execution_result = None
+
                 if stop_result.stop_hit:
                     log.info(
                         "run_strategy_tick: stop hit",
                         exit_reason=str(stop_result.decision.exit_reason),
                         close=str(close),
                     )
-                    comp.executor.execute(stop_result.decision, candle_time)
+                    execution_result = comp.executor.execute(
+                        stop_result.decision, candle_time,
+                    )
                     # Enter cooldown via strategy state
                     if stop_result.cooldown_candles and stop_result.cooldown_candles > 0:
                         comp.strategy._cooldown_remaining = stop_result.cooldown_candles
@@ -436,10 +737,33 @@ def run_strategy_tick(self) -> Dict[str, Any]:  # noqa: ANN001
                     )
 
                     # ── 5. Execute ───────────────────────────────────
-                    comp.executor.execute(decision, candle_time)
+                    execution_result = comp.executor.execute(decision, candle_time)
 
                 # ── 6. Equity snapshot ───────────────────────────────
-                comp.pm.take_snapshot(candle_time, {symbol: close})
+                snapshot = comp.pm.take_snapshot(candle_time, {symbol: close})
+
+                # ── 7. Persist to DB (tasks 3.7 / 3.8) ──────────────
+                try:
+                    with get_session() as session:
+                        _persist_tick_results(
+                            session=session,
+                            comp=comp,
+                            strategy_name=strategy_name,
+                            symbol=symbol,
+                            execution_result=execution_result,
+                            snapshot=snapshot,
+                            signal_value=signal.value,
+                            candle_time=candle_time,
+                        )
+                except Exception as persist_exc:
+                    log.error(
+                        "run_strategy_tick: persist failed (tick still valid)",
+                        error=str(persist_exc),
+                        exc_info=True,
+                    )
+
+                # ── 8. Trim in-memory history ────────────────────────
+                _trim_in_memory_history(comp.pm)
 
                 tick_key = f"{strategy_name}:{symbol}"
                 signals[tick_key] = signal.value
@@ -451,6 +775,7 @@ def run_strategy_tick(self) -> Dict[str, Any]:  # noqa: ANN001
                     state=comp.strategy.state.value,
                     close=str(close),
                     equity=str(comp.pm.portfolio.equity),
+                    run_id=comp.run_id,
                 )
 
             except Exception as exc:

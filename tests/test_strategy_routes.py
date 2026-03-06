@@ -43,7 +43,7 @@ def _seed_strategy_states(db: Session) -> list[StrategyStateRecord]:
             strategy="smart_hodler",
             state="position",
             consecutive_buy_candles=3,
-            state_data={"entry_count": 2, "scaled_in": True},
+            state_data={"signal": "buy", "conditions": {"entry_count": 2, "scaled_in": True}},
             created_at=BASE_TIME,
             updated_at=BASE_TIME + timedelta(hours=1),
         ),
@@ -63,7 +63,7 @@ def _seed_strategy_states(db: Session) -> list[StrategyStateRecord]:
             cooldown_until=BASE_TIME + timedelta(hours=12),
             consecutive_buy_candles=0,
             last_exit_time=BASE_TIME - timedelta(hours=1),
-            state_data={"exit_reason": "hard_stop"},
+            state_data={"signal": "hold", "conditions": {"exit_reason": "hard_stop"}},
             created_at=BASE_TIME - timedelta(days=1),
             updated_at=BASE_TIME,
         ),
@@ -176,20 +176,23 @@ class TestGetStrategyState:
         assert cooldown["cooldown_until"] is not None
 
     def test_state_data_present(self, seeded_client):
+        """StrategyStateRecord with state_data returns it in the response."""
         data = seeded_client.get("/api/strategy/state").json()
         states_by_key = {
             (s["symbol"], s["strategy"]): s for s in data
         }
         assert states_by_key[("BTCUSDT", "smart_hodler")]["state_data"] == {
-            "entry_count": 2, "scaled_in": True,
+            "signal": "buy", "conditions": {"entry_count": 2, "scaled_in": True},
         }
 
     def test_state_data_null(self, seeded_client):
+        """StrategyStateRecord without state_data returns null."""
         data = seeded_client.get("/api/strategy/state").json()
         states_by_key = {
             (s["symbol"], s["strategy"]): s for s in data
         }
         assert states_by_key[("BTCUSDT", "mean_reversion")]["state_data"] is None
+        assert states_by_key[("SOLUSDT", "smart_hodler")]["state_data"] is None
 
     def test_symbol_filter(self, seeded_client):
         data = seeded_client.get(
@@ -264,10 +267,19 @@ class TestGetStrategySignals:
         }
         assert expected_keys == set(signal.keys())
 
-    def test_signal_is_hold(self, seeded_client):
-        """All signals are HOLD until Phase 3 task 3.8 implements live conditions."""
+    def test_signal_from_state_data(self, seeded_client):
+        """Signal is derived from state_data when present, defaults to HOLD."""
         data = seeded_client.get("/api/strategy/signals").json()
-        assert all(s["signal"] == "hold" for s in data)
+        signals_by_key = {
+            (s["symbol"], s["strategy"]): s for s in data
+        }
+        # BTCUSDT/smart_hodler has signal="buy" in state_data
+        assert signals_by_key[("BTCUSDT", "smart_hodler")]["signal"] == "buy"
+        # ETHUSDT/smart_hodler has signal="hold" in state_data
+        assert signals_by_key[("ETHUSDT", "smart_hodler")]["signal"] == "hold"
+        # Records with no state_data default to HOLD
+        assert signals_by_key[("BTCUSDT", "mean_reversion")]["signal"] == "hold"
+        assert signals_by_key[("SOLUSDT", "smart_hodler")]["signal"] == "hold"
 
     def test_conditions_from_state_data(self, seeded_client):
         data = seeded_client.get("/api/strategy/signals").json()
@@ -276,6 +288,9 @@ class TestGetStrategySignals:
         }
         assert signals_by_key[("BTCUSDT", "smart_hodler")]["conditions"] == {
             "entry_count": 2, "scaled_in": True,
+        }
+        assert signals_by_key[("ETHUSDT", "smart_hodler")]["conditions"] == {
+            "exit_reason": "hard_stop",
         }
 
     def test_conditions_null_when_no_state_data(self, seeded_client):

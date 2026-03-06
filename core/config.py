@@ -306,6 +306,7 @@ class PaperTradingConfig(BaseModel):
     """Paper trading settings."""
     
     enabled: bool = Field(default=False)
+    initial_capital: float = Field(default=10000, gt=0, description="Starting USDT balance for paper trading")
     simulate_slippage: bool = Field(default=True)
     simulate_latency: bool = Field(default=True)
     latency_ms: int = Field(default=100, ge=0)

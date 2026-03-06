@@ -117,8 +117,8 @@
 - [x] **3.4** Candle fetch task – Celery task to pull latest candles + update cache + publish CANDLE_RECEIVED event
 - [x] **3.5** Strategy tick task – Celery task to run indicator → strategy → risk → execute pipeline
 - [x] **3.6** Live data feed – real-time candle ingestion from Binance (REST or WebSocket)
-- [ ] **3.7** Paper trading mode – PaperExecutor driven by live data via Celery tasks
-- [ ] **3.8** State persistence – save/load strategy state + portfolio between ticks (also: enrich `/api/strategy/signals` with live conditions from `state_data`)
+- [x] **3.7** Paper trading mode – PaperExecutor driven by live data via Celery tasks
+- [x] **3.8** State persistence – save/load strategy state + portfolio between ticks (also: enrich `/api/strategy/signals` with live conditions from `state_data`)
 - [ ] **3.9** Reconciliation task – compare local state vs expected state on startup
 - [ ] **3.10** Monitoring – health checks for workers, beat, Redis connectivity
 

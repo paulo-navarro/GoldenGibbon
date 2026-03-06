@@ -154,6 +154,12 @@ class TestTaskStubs:
         import pandas as pd
         import numpy as np
         from core.models import MarketData
+        from core.config import get_settings
+
+        # Enable paper trading so mode gate doesn't skip
+        settings = get_settings()
+        original = settings.paper_trading.enabled
+        settings.paper_trading.enabled = True
 
         # Create minimal MarketData so the tick pipeline can run
         dates = pd.date_range("2025-01-01", periods=250, freq="15min")
@@ -165,17 +171,20 @@ class TestTaskStubs:
         indicators = {"ema_fast": pd.Series(close, index=dates), "ema_slow": pd.Series(close, index=dates)}
         md = MarketData(symbol="BTCUSDT", timeframe="15m", candles=df, indicators=indicators)
 
-        with patch("core.data.loader.DataLoader.get_multi_timeframe_market_data", return_value=md):
-            from core.tasks import run_strategy_tick, clear_worker_state
-            clear_worker_state()
+        try:
+            with patch("core.data.loader.DataLoader.get_multi_timeframe_market_data", return_value=md):
+                from core.tasks import run_strategy_tick, clear_worker_state
+                clear_worker_state()
 
-            result = run_strategy_tick.apply()
-            assert result.successful()
-            summary = result.result
-            assert isinstance(summary, dict)
-            assert "ticks_processed" in summary
-            assert "ticks_failed" in summary
-            assert "signals" in summary
+                result = run_strategy_tick.apply()
+                assert result.successful()
+                summary = result.result
+                assert isinstance(summary, dict)
+                assert "ticks_processed" in summary
+                assert "ticks_failed" in summary
+                assert "signals" in summary
+        finally:
+            settings.paper_trading.enabled = original
 
     def test_run_reconciliation_returns_none(self):
         from core.tasks import run_reconciliation

@@ -125,6 +125,7 @@ class PortfolioManager:
 
         position = Position(
             symbol=symbol,
+            strategy=strategy,
             size=size,
             entry_price=entry_price,
             entry_time=entry_time,

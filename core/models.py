@@ -276,6 +276,7 @@ class Position(BaseModel):
     Tracks an active long position with entry price, stops, and scaling info.
     """
     symbol: str
+    strategy: str = "unknown"  # Strategy that opened this position
     size: Decimal  # Amount in base asset (e.g., BTC)
     entry_price: Decimal  # Average entry price
     entry_time: datetime

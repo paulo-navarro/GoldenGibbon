@@ -96,8 +96,13 @@ def setup_logging(config: "LoggingConfig") -> None:
     root_logger = logging.getLogger()
     root_logger.setLevel(log_level)
 
-    # Remove any pre-existing handlers to avoid duplicate output
-    root_logger.handlers.clear()
+    # Remove pre-existing handlers to avoid duplicate output, but
+    # preserve Celery's own handlers (they live on the 'celery*'
+    # loggers) so that task success/failure messages still appear.
+    root_logger.handlers = [
+        h for h in root_logger.handlers
+        if getattr(h, "_celery", False)
+    ]
 
     if config.console:
         console_handler = logging.StreamHandler(sys.stderr)

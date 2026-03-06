@@ -103,6 +103,18 @@ def _reset_worker_state():
     tasks_mod._STRATEGY_REGISTRY.clear()
 
 
+@pytest.fixture(autouse=True)
+def _enable_paper_trading():
+    """Enable paper trading so mode gate doesn't skip the tick."""
+    from core.config import get_settings
+
+    settings = get_settings()
+    original = settings.paper_trading.enabled
+    settings.paper_trading.enabled = True
+    yield
+    settings.paper_trading.enabled = original
+
+
 # ── Patch targets ────────────────────────────────────────────────────────────
 
 _PATCH_LOADER = "core.data.loader.DataLoader.get_multi_timeframe_market_data"

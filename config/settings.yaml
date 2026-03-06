@@ -87,7 +87,8 @@ backtest:
 
 # Paper Trading Settings
 paper_trading:
-  enabled: false
+  enabled: true
+  initial_capital: 10000
   simulate_slippage: true
   simulate_latency: true
   latency_ms: 100
@@ -109,7 +110,7 @@ live_trading:
 
 # WebSocket Live Feed (Task 3.6)
 ws_feed:
-  enabled: false
+  enabled: true
   base_url: "wss://stream.binance.com:9443"
   reconnect_delay: 1.0       # initial backoff (seconds)
   max_reconnect_delay: 60.0  # max backoff cap (seconds)
