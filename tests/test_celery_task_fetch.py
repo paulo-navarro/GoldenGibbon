@@ -17,9 +17,16 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
+from core.config import SymbolConfig
 from core.models import Candle
 from db import get_session
 from db.models import CandleRecord
+
+# Fixed test symbols – isolates tests from config/symbols.yaml
+_TEST_SYMBOLS = [
+    SymbolConfig(symbol="BTCUSDT", timeframes=["15m", "1h"]),
+    SymbolConfig(symbol="ETHUSDT", timeframes=["15m", "1h"]),
+]
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -68,6 +75,18 @@ def _eager_celery():
     app.conf.task_eager_propagates = False
 
 
+@pytest.fixture(autouse=True)
+def _pin_symbols():
+    """Pin enabled_symbols to 2 test symbols so tests don't depend on config."""
+    from core.config import get_settings
+
+    settings = get_settings()
+    original = settings.symbols
+    settings.symbols = list(_TEST_SYMBOLS)
+    yield
+    settings.symbols = original
+
+
 # ── Happy path ───────────────────────────────────────────────────────────────
 
 
@@ -86,7 +105,7 @@ class TestFetchCandlesHappyPath:
         assert result.successful()
 
         summary = result.result
-        # 2 symbols × 2 timeframes = 4 pairs
+        # 2 test symbols × 2 timeframes = 4 pairs
         assert summary["pairs_processed"] == 4
         assert summary["pairs_failed"] == 0
         assert summary["total_new_candles"] == 4 * len(SAMPLE_CANDLES)
@@ -101,7 +120,7 @@ class TestFetchCandlesHappyPath:
 
         fetch_candles.apply()
 
-        # Both symbols/timeframes should have candles in the DB
+        # Both test symbols/timeframes should have candles in the DB
         assert _count_candle_records("BTCUSDT", "15m") == len(SAMPLE_CANDLES)
         assert _count_candle_records("BTCUSDT", "1h") == len(SAMPLE_CANDLES)
         assert _count_candle_records("ETHUSDT", "15m") == len(SAMPLE_CANDLES)

@@ -107,6 +107,11 @@ class EventType(str, Enum):
     STARTUP = "startup"
     SHUTDOWN = "shutdown"
 
+    # ── Reconciliation (task 3.9) ────────────────────────────────────
+    RECONCILIATION_OK = "reconciliation_ok"
+    RECONCILIATION_MISMATCH = "reconciliation_mismatch"
+    RECONCILIATION_REPAIRED = "reconciliation_repaired"
+
 
 # ── Event Envelope ───────────────────────────────────────────────────────────
 

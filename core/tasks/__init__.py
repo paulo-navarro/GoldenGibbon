@@ -5,7 +5,8 @@ Each task is implemented incrementally as the corresponding kanban item lands:
 
 * :func:`fetch_candles` → **3.4** ✓
 * :func:`run_strategy_tick` → **3.5** ✓  (+ **3.7** paper mode, **3.8** state persistence)
-* :func:`run_reconciliation` → **3.9** (stub)
+* :func:`run_reconciliation` → **3.9** ✓
+* :func:`emit_heartbeat` → **3.10** ✓
 
 The module is auto-discovered by :mod:`core.celery_app` via
 ``app.autodiscover_tasks(["core.tasks"])``.
@@ -805,18 +806,386 @@ def run_strategy_tick(self) -> Dict[str, Any]:  # noqa: ANN001
     return summary
 
 
-# ── run_reconciliation (task 3.9, stub) ──────────────────────────────────────
+# ── Reconciliation helpers (task 3.9) ────────────────────────────────────────
+
+# Tolerance for trade PnL arithmetic comparison (advisory check).
+_PNL_TOLERANCE = Decimal("0.01")
+
+
+def _reconcile_pair(
+    session,  # noqa: ANN001 – SQLAlchemy Session
+    strategy_name: str,
+    symbol: str,
+) -> Dict[str, Any]:
+    """
+    Run DB-only consistency checks for one ``(strategy, symbol)`` pair.
+
+    **Check A – State ↔ Position consistency**
+
+    * ``POSITION`` / ``REDUCED`` → ``PositionRecord`` must exist.
+    * ``FLAT`` / ``COOLDOWN`` → no ``PositionRecord`` should exist.
+
+    **Check B – Balance sanity**
+
+    * ``usdt_balance`` and ``equity`` must be non-negative.
+    * When ``FLAT``, ``usdt_balance`` ≈ ``equity``.
+
+    **Check C – Trade PnL arithmetic (advisory)**
+
+    * Sum of ``TradeRecord.pnl_usdt`` for the current ``run_id`` should
+      match ``state_data.total_pnl`` within :data:`_PNL_TOLERANCE`.
+
+    Returns a result dict::
+
+        {
+            "pair": "strategy:symbol",
+            "status": "ok" | "mismatch",
+            "checks": [...],
+            "repairs": [...],
+        }
+    """
+    from db.models import PositionRecord, StrategyStateRecord, TradeRecord
+
+    pair_label = f"{strategy_name}:{symbol}"
+    checks: list[Dict[str, Any]] = []
+    repairs: list[str] = []
+    has_mismatch = False
+
+    state_rec = (
+        session.query(StrategyStateRecord)
+        .filter_by(symbol=symbol, strategy=strategy_name)
+        .first()
+    )
+    pos_rec = (
+        session.query(PositionRecord)
+        .filter_by(symbol=symbol, strategy=strategy_name)
+        .first()
+    )
+
+    # ── Check A: State ↔ Position ────────────────────────────────────
+    if state_rec is None and pos_rec is None:
+        checks.append({"check": "state_position", "result": "ok", "detail": "no state, no position"})
+    elif state_rec is None and pos_rec is not None:
+        # Orphan position with no strategy state at all
+        has_mismatch = True
+        checks.append({
+            "check": "state_position",
+            "result": "mismatch",
+            "detail": "PositionRecord exists but no StrategyStateRecord",
+        })
+        session.delete(pos_rec)
+        repairs.append("deleted orphan PositionRecord (no strategy state)")
+        logger.warning(
+            "reconcile: orphan position deleted",
+            strategy=strategy_name, symbol=symbol,
+        )
+    elif state_rec is not None:
+        state_value = state_rec.state  # e.g. "position", "flat"
+        expects_position = state_value in ("position", "reduced")
+
+        if expects_position and pos_rec is None:
+            # State says open position but none in DB → reset to FLAT
+            has_mismatch = True
+            checks.append({
+                "check": "state_position",
+                "result": "mismatch",
+                "detail": f"state={state_value} but no PositionRecord",
+            })
+            state_rec.state = "flat"
+            if state_rec.state_data:
+                state_rec.state_data = {
+                    **state_rec.state_data,
+                    "cooldown_remaining": 0,
+                }
+            repairs.append(f"reset strategy state from {state_value} to flat")
+            logger.warning(
+                "reconcile: state reset to flat (missing position)",
+                strategy=strategy_name, symbol=symbol, was=state_value,
+            )
+        elif not expects_position and pos_rec is not None:
+            # State is FLAT/COOLDOWN but a position still exists → delete
+            has_mismatch = True
+            checks.append({
+                "check": "state_position",
+                "result": "mismatch",
+                "detail": f"state={state_value} but PositionRecord exists",
+            })
+            session.delete(pos_rec)
+            repairs.append(f"deleted orphan PositionRecord (state={state_value})")
+            logger.warning(
+                "reconcile: orphan position deleted",
+                strategy=strategy_name, symbol=symbol, state=state_value,
+            )
+        else:
+            checks.append({"check": "state_position", "result": "ok"})
+
+    # ── Check B: Balance sanity ──────────────────────────────────────
+    if state_rec is not None and state_rec.state_data:
+        data = state_rec.state_data
+        usdt_balance = Decimal(str(data.get("usdt_balance", 0)))
+        equity = Decimal(str(data.get("equity", 0)))
+
+        balance_ok = True
+        details: list[str] = []
+
+        if usdt_balance < 0:
+            balance_ok = False
+            details.append(f"negative usdt_balance={usdt_balance}")
+        if equity < 0:
+            balance_ok = False
+            details.append(f"negative equity={equity}")
+
+        # If FLAT, balance should equal equity (no position value)
+        state_value = state_rec.state
+        if state_value == "flat" and abs(usdt_balance - equity) > _PNL_TOLERANCE:
+            balance_ok = False
+            details.append(
+                f"FLAT but usdt_balance={usdt_balance} != equity={equity}"
+            )
+
+        if balance_ok:
+            checks.append({"check": "balance_sanity", "result": "ok"})
+        else:
+            has_mismatch = True
+            checks.append({
+                "check": "balance_sanity",
+                "result": "warning",
+                "detail": "; ".join(details),
+            })
+            logger.warning(
+                "reconcile: balance sanity warning",
+                strategy=strategy_name, symbol=symbol,
+                details=details,
+            )
+    else:
+        checks.append({"check": "balance_sanity", "result": "ok", "detail": "no state data"})
+
+    # ── Check C: Trade PnL arithmetic (advisory) ─────────────────────
+    if state_rec is not None and state_rec.state_data:
+        data = state_rec.state_data
+        run_id = data.get("run_id")
+        saved_total_pnl = Decimal(str(data.get("total_pnl", 0)))
+
+        if run_id:
+            from sqlalchemy import func as sa_func
+
+            row = (
+                session.query(sa_func.coalesce(sa_func.sum(TradeRecord.pnl_usdt), 0))
+                .filter_by(run_id=run_id)
+                .scalar()
+            )
+            db_total_pnl = Decimal(str(row))
+            delta = abs(saved_total_pnl - db_total_pnl)
+
+            if delta <= _PNL_TOLERANCE:
+                checks.append({"check": "trade_pnl", "result": "ok"})
+            else:
+                has_mismatch = True
+                checks.append({
+                    "check": "trade_pnl",
+                    "result": "warning",
+                    "detail": (
+                        f"state_data.total_pnl={saved_total_pnl} vs "
+                        f"sum(TradeRecord.pnl_usdt)={db_total_pnl} "
+                        f"(delta={delta})"
+                    ),
+                })
+                logger.warning(
+                    "reconcile: trade PnL drift",
+                    strategy=strategy_name, symbol=symbol,
+                    saved=str(saved_total_pnl), computed=str(db_total_pnl),
+                    delta=str(delta),
+                )
+        else:
+            checks.append({"check": "trade_pnl", "result": "ok", "detail": "no run_id"})
+    else:
+        checks.append({"check": "trade_pnl", "result": "ok", "detail": "no state data"})
+
+    return {
+        "pair": pair_label,
+        "status": "mismatch" if has_mismatch else "ok",
+        "checks": checks,
+        "repairs": repairs,
+    }
+
+
+# ── run_reconciliation (task 3.9) ────────────────────────────────────────────
 
 
 @app.task(bind=True, name="core.tasks.run_reconciliation")
-def run_reconciliation(self) -> None:  # noqa: ANN001
+def run_reconciliation(self) -> Dict[str, Any]:  # noqa: ANN001
     """
-    Reconcile local state against expected state.
+    Reconcile local DB state against expected invariants.
 
-    Called every 4 hours by Celery Beat (``reconciliation-4h``).
-    Stub – will be implemented in task **3.9**.
+    Called every 4 hours by Celery Beat (``reconciliation-4h``) and
+    once on worker startup (``worker_ready`` signal).  For each
+    ``(strategy, symbol)`` pair the task runs three consistency
+    checks via :func:`_reconcile_pair`:
+
+    * **State ↔ Position** – strategy state machine matches
+      ``PositionRecord`` presence.
+    * **Balance sanity** – non-negative balances, FLAT equity match.
+    * **Trade PnL arithmetic** – ``state_data.total_pnl`` agrees with
+      ``sum(TradeRecord.pnl_usdt)`` for the current ``run_id``.
+
+    Mismatches are auto-repaired (state/position) where safe, and
+    published as events on ``EventChannel.SYSTEM`` for dashboard
+    visibility.
+
+    Returns:
+        Summary dict ``{"pairs_checked": N, "mismatches": M,
+        "repairs": R, "details": [...]}``.
     """
-    logger.info(
-        "run_reconciliation: not yet implemented",
-        task_id=self.request.id,
+    from core.config import get_settings
+    from core.events import EventChannel, EventType, get_publisher
+    from db import get_session
+
+    settings = get_settings()
+    publisher = get_publisher()
+    registry = _get_strategy_registry()
+
+    strategy_configs = {
+        "smart_hodler": settings.strategies.smart_hodler,
+        "mean_reversion": settings.strategies.mean_reversion,
+    }
+
+    pairs_checked = 0
+    total_mismatches = 0
+    total_repairs = 0
+    details: list[Dict[str, Any]] = []
+
+    for strategy_name, strat_cfg in strategy_configs.items():
+        if not strat_cfg.enabled:
+            continue
+        if strategy_name not in registry:
+            continue
+
+        for symbol_cfg in settings.enabled_symbols:
+            symbol = symbol_cfg.symbol
+            log = logger.bind(
+                strategy=strategy_name,
+                symbol=symbol,
+                task_id=self.request.id,
+            )
+
+            try:
+                with get_session() as session:
+                    result = _reconcile_pair(session, strategy_name, symbol)
+                    pairs_checked += 1
+                    details.append(result)
+
+                    if result["status"] == "mismatch":
+                        total_mismatches += 1
+                        total_repairs += len(result["repairs"])
+
+                        # Publish per-pair mismatch event
+                        publisher.publish(
+                            EventChannel.SYSTEM,
+                            EventType.RECONCILIATION_MISMATCH,
+                            {
+                                "pair": result["pair"],
+                                "checks": result["checks"],
+                                "repairs": result["repairs"],
+                            },
+                        )
+
+                        if result["repairs"]:
+                            publisher.publish(
+                                EventChannel.SYSTEM,
+                                EventType.RECONCILIATION_REPAIRED,
+                                {
+                                    "pair": result["pair"],
+                                    "repairs": result["repairs"],
+                                },
+                            )
+
+                    log.info(
+                        "reconcile: pair checked",
+                        status=result["status"],
+                        repairs=len(result["repairs"]),
+                    )
+
+            except Exception as exc:
+                log.error(
+                    "reconcile: pair failed",
+                    error=str(exc),
+                    exc_info=True,
+                )
+                details.append({
+                    "pair": f"{strategy_name}:{symbol}",
+                    "status": "error",
+                    "error": str(exc),
+                })
+
+    summary: Dict[str, Any] = {
+        "pairs_checked": pairs_checked,
+        "mismatches": total_mismatches,
+        "repairs": total_repairs,
+        "details": details,
+    }
+
+    # Publish summary event
+    if total_mismatches == 0:
+        publisher.publish(
+            EventChannel.SYSTEM,
+            EventType.RECONCILIATION_OK,
+            summary,
+        )
+    else:
+        publisher.publish(
+            EventChannel.SYSTEM,
+            EventType.RECONCILIATION_MISMATCH,
+            summary,
+        )
+
+    logger.info("run_reconciliation: complete", **summary, task_id=self.request.id)
+    return summary
+
+
+# ── Heartbeat (task 3.10) ────────────────────────────────────────────────────
+
+# Redis key written by each heartbeat so the /health endpoint can detect
+# beat+worker liveness without a slow Celery inspect call.
+_HEARTBEAT_KEY = "gg:heartbeat:last"
+_HEARTBEAT_TTL = 120  # 2× the 60-second emit interval
+
+
+@app.task(name="core.tasks.emit_heartbeat", bind=True)
+def emit_heartbeat(self: Any) -> Dict[str, Any]:  # noqa: ANN401
+    """
+    Lightweight canary task proving **both** Beat and the worker are alive.
+
+    Beat schedules this every 60 s; when a worker executes it the task:
+
+    1. Publishes a ``HEARTBEAT`` event on ``gg:system`` so the React
+       dashboard can update its liveness indicator in real time.
+    2. Sets a Redis key (``gg:heartbeat:last``) with a 120 s TTL so
+       the ``GET /health`` endpoint can report beat/worker status
+       without the latency of ``app.control.ping()``.
+    """
+    import os
+    import redis as _redis
+
+    from core.events import EventChannel, EventType, get_publisher
+
+    now = datetime.now(timezone.utc).isoformat()
+    hostname = getattr(self.request, "hostname", None) or "unknown"
+
+    # 1. Publish HEARTBEAT event
+    publisher = get_publisher()
+    publisher.publish(
+        EventChannel.SYSTEM,
+        EventType.HEARTBEAT,
+        {"source": "worker", "hostname": hostname, "timestamp": now},
     )
+
+    # 2. Set Redis canary key
+    redis_url = os.environ.get("REDIS_URL", "redis://redis:6379/0")
+    try:
+        r = _redis.Redis.from_url(redis_url)
+        r.set(_HEARTBEAT_KEY, now, ex=_HEARTBEAT_TTL)
+    except Exception as exc:
+        logger.warning("emit_heartbeat: redis key write failed", error=str(exc))
+
+    logger.debug("emit_heartbeat: ok", hostname=hostname)
+    return {"hostname": hostname, "timestamp": now}

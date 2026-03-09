@@ -22,7 +22,7 @@ import os
 
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import worker_process_init
+from celery.signals import worker_process_init, worker_ready
 
 # ── Redis URL ────────────────────────────────────────────────────────────────
 
@@ -76,6 +76,11 @@ app.conf.update(
             # reconciliation_interval_hours: 4.
             "schedule": crontab(minute=5, hour="*/4"),
         },
+        "heartbeat-60s": {
+            "task": "core.tasks.emit_heartbeat",
+            # Every 60 seconds — proves both Beat and a worker are alive.
+            "schedule": 60.0,
+        },
     },
 )
 
@@ -102,5 +107,33 @@ def _setup_worker_logging(**_kwargs: object) -> None:
         logging.getLogger(__name__).warning(
             "Failed to configure structured logging in Celery worker; "
             "falling back to basic logging.",
+            exc_info=True,
+        )
+
+
+# ── Startup reconciliation (task 3.9) ────────────────────────────────────────
+
+@worker_ready.connect
+def _reconcile_on_startup(**_kwargs: object) -> None:
+    """
+    Enqueue a reconciliation check when the Celery worker is ready.
+
+    Controlled by ``live_trading.reconcile_on_startup`` in
+    ``settings.yaml`` (defaults to ``True``).  The task runs
+    asynchronously inside the worker so it doesn't block startup.
+    """
+    try:
+        from core.config import get_settings
+
+        settings = get_settings()
+        if settings.live_trading.reconcile_on_startup:
+            from core.tasks import run_reconciliation
+
+            run_reconciliation.delay()
+    except Exception:  # pragma: no cover – best-effort
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Failed to enqueue startup reconciliation.",
             exc_info=True,
         )

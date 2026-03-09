@@ -15,6 +15,7 @@ GET /logs
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections import deque
 from datetime import datetime, timezone
@@ -36,6 +37,8 @@ class HealthResponse(BaseModel):
     status: str
     db: bool
     redis: bool
+    celery_worker: bool
+    celery_beat: bool
     environment: str
     timestamp: str
 
@@ -56,6 +59,39 @@ def _get_log_path() -> str:
         return get_settings().logging.file_path
     except Exception:
         return "logs/trading.log"
+
+
+def _probe_celery_worker() -> bool:
+    """
+    Ping Celery workers with a short timeout.
+
+    Returns ``True`` if at least one worker responds.
+    """
+    try:
+        from core.celery_app import app as celery_app
+
+        responses = celery_app.control.ping(timeout=1.0)
+        return len(responses) > 0
+    except Exception:
+        return False
+
+
+def _check_heartbeat_key() -> bool:
+    """
+    Check whether the ``gg:heartbeat:last`` Redis key exists.
+
+    This key is written by the :func:`core.tasks.emit_heartbeat` task
+    with a 120 s TTL.  If it exists, both Beat (scheduled the task)
+    and a worker (executed it) were alive within that window.
+    """
+    try:
+        import redis as _redis
+
+        redis_url = os.environ.get("REDIS_URL", "redis://redis:6379/0")
+        r = _redis.Redis.from_url(redis_url)
+        return bool(r.exists("gg:heartbeat:last"))
+    except Exception:
+        return False
 
 
 def _tail_file(path: str, n: int, level_filter: Optional[str] = None) -> list[str]:
@@ -89,8 +125,8 @@ async def health(request: Request) -> HealthResponse:
     """
     Liveness / readiness probe.
 
-    Returns the connection status of Postgres and Redis, plus the
-    current environment and server timestamp.
+    Returns the connection status of Postgres, Redis, Celery worker,
+    Celery Beat, the current environment, and server timestamp.
     """
     redis_ok = False
     if hasattr(request.app.state, "redis") and request.app.state.redis is not None:
@@ -100,10 +136,18 @@ async def health(request: Request) -> HealthResponse:
         except Exception:
             pass
 
+    # Run blocking Celery probes in a thread to avoid blocking the event loop.
+    worker_ok, beat_ok = await asyncio.gather(
+        asyncio.to_thread(_probe_celery_worker),
+        asyncio.to_thread(_check_heartbeat_key),
+    )
+
     return HealthResponse(
         status="ok",
         db=check_connection(),
         redis=redis_ok,
+        celery_worker=worker_ok,
+        celery_beat=beat_ok,
         environment=os.getenv("ENVIRONMENT", "development"),
         timestamp=datetime.now(timezone.utc).isoformat(),
     )

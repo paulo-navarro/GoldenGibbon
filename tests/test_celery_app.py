@@ -85,6 +85,7 @@ class TestBeatSchedule:
 
         assert "fetch-candles-15m" in app.conf.beat_schedule
         assert "reconciliation-4h" in app.conf.beat_schedule
+        assert "heartbeat-60s" in app.conf.beat_schedule
 
     def test_fetch_candles_schedule(self):
         from core.celery_app import app
@@ -132,6 +133,12 @@ class TestTaskStubs:
         import core.tasks  # noqa: F401 – force task registration
 
         assert "core.tasks.run_reconciliation" in app.tasks
+
+    def test_emit_heartbeat_registered(self):
+        from core.celery_app import app
+        import core.tasks  # noqa: F401 – force task registration
+
+        assert "core.tasks.emit_heartbeat" in app.tasks
 
     def test_fetch_candles_returns_summary_dict(self):
         """fetch_candles now returns a summary dict (not None) – verify shape."""
@@ -186,9 +193,17 @@ class TestTaskStubs:
         finally:
             settings.paper_trading.enabled = original
 
-    def test_run_reconciliation_returns_none(self):
+    def test_run_reconciliation_returns_summary_dict(self):
+        """run_reconciliation returns a summary dict with check counts."""
         from core.tasks import run_reconciliation
 
         result = run_reconciliation.apply()
-        assert result.result is None
         assert result.successful()
+        summary = result.result
+        assert isinstance(summary, dict)
+        assert "pairs_checked" in summary
+        assert "mismatches" in summary
+        assert "repairs" in summary
+        assert "details" in summary
+        # Clean DB → no mismatches expected
+        assert summary["mismatches"] == 0

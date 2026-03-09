@@ -96,7 +96,7 @@ export const useSystemStore = create<SystemStore>()((set, get) => ({
         set((s) => ({
           health: s.health
             ? { ...s.health, timestamp }
-            : { status: 'ok', db: true, redis: true, environment: '', timestamp },
+            : { status: 'ok', db: true, redis: true, celery_worker: true, celery_beat: true, environment: '', timestamp },
         }));
         break;
       }

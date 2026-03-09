@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from core.config import SymbolConfig
 from core.models import (
     MarketData,
     Portfolio,
@@ -30,6 +31,12 @@ from core.models import (
     StopCheckResult,
     StrategyState,
 )
+
+# Fixed test symbols – isolates tests from config/symbols.yaml
+_TEST_SYMBOLS = [
+    SymbolConfig(symbol="BTCUSDT", timeframes=["15m", "1h"]),
+    SymbolConfig(symbol="ETHUSDT", timeframes=["15m", "1h"]),
+]
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -115,6 +122,18 @@ def _enable_paper_trading():
     settings.paper_trading.enabled = original
 
 
+@pytest.fixture(autouse=True)
+def _pin_symbols():
+    """Pin enabled_symbols to 2 test symbols so tests don't depend on config."""
+    from core.config import get_settings
+
+    settings = get_settings()
+    original = settings.symbols
+    settings.symbols = list(_TEST_SYMBOLS)
+    yield
+    settings.symbols = original
+
+
 # ── Patch targets ────────────────────────────────────────────────────────────
 
 _PATCH_LOADER = "core.data.loader.DataLoader.get_multi_timeframe_market_data"
@@ -161,7 +180,7 @@ class TestRunStrategyTickHappyPath:
         result = run_strategy_tick.apply()
         summary = result.result
 
-        # Default config: 2 strategies × 2 symbols = 4
+        # 2 strategies × 2 test symbols = 4
         assert summary["ticks_processed"] == 4
         assert summary["ticks_failed"] == 0
 

@@ -6,6 +6,8 @@ export interface HealthResponse {
   status: string;
   db: boolean;
   redis: boolean;
+  celery_worker: boolean;
+  celery_beat: boolean;
   environment: string;
   timestamp: string;
 }

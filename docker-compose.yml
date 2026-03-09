@@ -97,6 +97,12 @@ services:
         condition: service_healthy
     profiles: [dev]
     command: celery -A core.celery_app worker --loglevel=info
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A core.celery_app inspect ping --timeout 2"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   celery-worker-prod:
     build:
@@ -112,6 +118,12 @@ services:
     restart: unless-stopped
     profiles: [prod]
     command: celery -A core.celery_app worker --loglevel=info
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A core.celery_app inspect ping --timeout 2"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   # ── Celery Beat ────────────────────────────────
   celery-beat:
@@ -129,6 +141,12 @@ services:
         condition: service_healthy
     profiles: [dev]
     command: celery -A core.celery_app beat --loglevel=info
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import redis, os; r = redis.Redis.from_url(os.environ.get('REDIS_URL', 'redis://redis:6379/0')); assert r.exists('gg:heartbeat:last')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
 
   celery-beat-prod:
     build:
@@ -144,6 +162,12 @@ services:
     restart: unless-stopped
     profiles: [prod]
     command: celery -A core.celery_app beat --loglevel=info
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import redis, os; r = redis.Redis.from_url(os.environ.get('REDIS_URL', 'redis://redis:6379/0')); assert r.exists('gg:heartbeat:last')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
 
   # ── WebSocket Feed (dev) ────────────────────────
   ws-feed:
@@ -162,6 +186,12 @@ services:
     profiles: [dev]
     restart: unless-stopped
     command: python -m core.data.stream_runner
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import redis, os; r = redis.Redis.from_url(os.environ.get('REDIS_URL', 'redis://redis:6379/0')); r.ping()\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   # ── WebSocket Feed (prod) ───────────────────────
   ws-feed-prod:
@@ -178,6 +208,12 @@ services:
     restart: unless-stopped
     profiles: [prod]
     command: python -m core.data.stream_runner
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import redis, os; r = redis.Redis.from_url(os.environ.get('REDIS_URL', 'redis://redis:6379/0')); r.ping()\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   # ── Frontend (dev) ─────────────────────────────
   frontend:

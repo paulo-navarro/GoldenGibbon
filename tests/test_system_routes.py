@@ -24,7 +24,7 @@ from api.main import create_app
 
 
 def _make_client():
-    """Create patch contexts for mocked Redis."""
+    """Create patch contexts for mocked Redis and Celery probes."""
     mock_async_redis = AsyncMock()
     mock_async_redis.ping = AsyncMock(return_value=True)
     mock_async_redis.close = AsyncMock()
@@ -34,14 +34,16 @@ def _make_client():
         patch("api.main.reset_publisher"),
         patch("api.main.check_connection", return_value=True),
         patch("redis.asyncio.from_url", return_value=mock_async_redis),
+        patch("api.routes.system._probe_celery_worker", return_value=True),
+        patch("api.routes.system._check_heartbeat_key", return_value=True),
     )
 
 
 @pytest.fixture()
 def client():
     """TestClient with real DB and mocked Redis."""
-    p1, p2, p3, p4 = _make_client()
-    with p1 as mock_init, p2, p3, p4:
+    p1, p2, p3, p4, p5, p6 = _make_client()
+    with p1 as mock_init, p2, p3, p4, p5, p6:
         mock_pub = MagicMock()
         mock_pub.enabled = True
         mock_init.return_value = mock_pub
@@ -74,8 +76,8 @@ def log_file(tmp_path):
 @pytest.fixture()
 def client_with_logs(log_file):
     """TestClient with a patched log file path."""
-    p1, p2, p3, p4 = _make_client()
-    with p1 as mock_init, p2, p3, p4:
+    p1, p2, p3, p4, p5, p6 = _make_client()
+    with p1 as mock_init, p2, p3, p4, p5, p6:
         mock_pub = MagicMock()
         mock_pub.enabled = True
         mock_init.return_value = mock_pub
@@ -91,8 +93,8 @@ def client_with_logs(log_file):
 @pytest.fixture()
 def client_no_logs():
     """TestClient where log file does not exist."""
-    p1, p2, p3, p4 = _make_client()
-    with p1 as mock_init, p2, p3, p4:
+    p1, p2, p3, p4, p5, p6 = _make_client()
+    with p1 as mock_init, p2, p3, p4, p5, p6:
         mock_pub = MagicMock()
         mock_pub.enabled = True
         mock_init.return_value = mock_pub
@@ -117,7 +119,7 @@ class TestGetHealth:
 
     def test_response_shape(self, client):
         data = client.get("/api/system/health").json()
-        expected_keys = {"status", "db", "redis", "environment", "timestamp"}
+        expected_keys = {"status", "db", "redis", "celery_worker", "celery_beat", "environment", "timestamp"}
         assert expected_keys == set(data.keys())
 
     def test_status_ok(self, client):
@@ -155,6 +157,8 @@ class TestGetHealth:
             patch("api.main.check_connection", return_value=True),
             # Make redis.asyncio.from_url raise so app.state.redis is None
             patch("redis.asyncio.from_url", side_effect=ConnectionError("refused")),
+            patch("api.routes.system._probe_celery_worker", return_value=True),
+            patch("api.routes.system._check_heartbeat_key", return_value=True),
         ):
             mock_pub = MagicMock()
             mock_pub.enabled = False
@@ -234,8 +238,8 @@ class TestGetLogs:
         empty_log = tmp_path / "empty.log"
         empty_log.write_text("")
 
-        p1, p2, p3, p4 = _make_client()
-        with p1 as mock_init, p2, p3, p4:
+        p1, p2, p3, p4, p5, p6 = _make_client()
+        with p1 as mock_init, p2, p3, p4, p5, p6:
             mock_pub = MagicMock()
             mock_pub.enabled = True
             mock_init.return_value = mock_pub
