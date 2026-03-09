@@ -40,6 +40,11 @@ docker-compose.override.yml
 # Logs
 logs/
 
+# Celery Beat runtime schedule database
+celerybeat-schedule
+celerybeat-schedule.db
+celerybeat.pid
+
 # Node / Frontend
 node_modules/
 frontend/dist/
