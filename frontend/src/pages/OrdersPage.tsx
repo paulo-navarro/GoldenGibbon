@@ -93,12 +93,14 @@ function OrderFilters({ filters, onChange }: { filters: Filters; onChange: (f: F
 }
 
 function applyFilters(orders: Order[], filters: Filters): Order[] {
-  return orders.filter((o) => {
-    if (filters.symbol && o.symbol !== filters.symbol) return false;
-    if (filters.side && o.side !== filters.side) return false;
-    if (filters.status && o.status !== filters.status) return false;
-    return true;
-  });
+  return orders
+    .filter((o) => {
+      if (filters.symbol && o.symbol !== filters.symbol) return false;
+      if (filters.side && o.side !== filters.side) return false;
+      if (filters.status && o.status !== filters.status) return false;
+      return true;
+    })
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 }
 
 function OrderTable({ title, orders, showFillDetail }: { title: string; orders: Order[]; showFillDetail?: boolean }) {

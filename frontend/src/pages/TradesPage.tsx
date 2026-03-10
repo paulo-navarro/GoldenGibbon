@@ -105,6 +105,13 @@ const COLUMNS = [
     header: 'Exit Reason',
     cell: (info) => info.getValue(),
   }),
+  col.accessor('exit_time', {
+    header: 'Exit Time',
+    cell: (info) => {
+      const d = new Date(info.getValue());
+      return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+    },
+  }),
 ];
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -209,7 +216,7 @@ function TradeFilters({ filters, onChange }: { filters: Filters; onChange: (f: F
 }
 
 function TradeHistoryTable({ filters }: { filters: Filters }) {
-  const [sorting, setSorting] = useState<SortingState>([{ id: 'pnl_usdt', desc: true }]);
+  const [sorting, setSorting] = useState<SortingState>([{ id: 'exit_time', desc: true }]);
 
   const params = {
     symbol: filters.symbol || undefined,
