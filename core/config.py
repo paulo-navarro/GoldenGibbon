@@ -202,7 +202,7 @@ class StrategiesConfig(BaseModel):
 
 class RiskConfig(BaseModel):
     """Risk management settings."""
-    
+
     max_drawdown_per_trade: float = Field(default=0.03, gt=0, le=1)
     trailing_stop_atr_multiplier: float = Field(default=2.0, gt=0)
     cooldown_candles: int = Field(default=16, ge=0)
@@ -210,6 +210,10 @@ class RiskConfig(BaseModel):
     max_total_exposure_pct: float = Field(default=1.0, gt=0, le=1)
     max_trades_per_day: int = Field(default=20, ge=1)
     max_daily_loss_pct: float = Field(default=0.10, gt=0, le=1)
+    # Per-trade absolute notional cap in USDT (None = no cap)
+    max_trade_size_usdt: Optional[float] = Field(default=None, gt=0)
+    # Per-symbol absolute exposure cap in USDT (None = no cap)
+    max_symbol_exposure_usdt: Optional[float] = Field(default=None, gt=0)
 
 
 # ── Execution Configuration ───────────────────────────────────────────────────

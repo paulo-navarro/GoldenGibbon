@@ -20,6 +20,10 @@ risk:
   max_trades_per_day: 20
   max_daily_loss_pct: 0.10  # Stop trading if down 10% in a day
 
+  # Absolute trade size caps (for live trading; null = no cap)
+  max_trade_size_usdt: null        # e.g. 500 = cap each trade at 500 USDT notional
+  max_symbol_exposure_usdt: null   # e.g. 1000 = cap total exposure per symbol at 1000 USDT
+
 # Execution Settings
 execution:
   # Slippage estimate for backtest (0.1%)
