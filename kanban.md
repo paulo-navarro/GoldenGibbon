@@ -93,7 +93,7 @@
 - [x] **2.45** Component – `components/ConnectionStatus.tsx` (WebSocket + API health indicator in AppBar)
 - [x] **2.46** Component – `components/PriceTicker.tsx` (live price with delta, used in Dashboard + AppBar)
 - [x] **2.47** Initialize WebSocket, stores, QueryClient, Router, and ThemeProvider in `main.tsx`
-- [-] **2.48** Environment config (`frontend/.env.example` with VITE_API_URL, VITE_WS_URL)
+- [x] **2.48** Environment config (`frontend/.env.example` with VITE_API_URL, VITE_WS_URL)
 - [x] **2.49** Frontend Dockerfile (`frontend/Dockerfile` with Vite build + nginx serve)
 - [x] **2.50** Add `frontend` service to docker-compose.yml (expose port 5173 for dev, 80 for prod)
 
