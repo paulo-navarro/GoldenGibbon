@@ -122,6 +122,15 @@
 - [x] **3.9** Reconciliation task – compare local state vs expected state on startup
 - [x] **3.10** Monitoring – health checks for workers, beat, Redis connectivity
 
+## Phase 3b – Historical Data Pipeline
+### Tasks
+
+- [x] **3b.1** Add inter-request rate-limit delay (250ms) in `_fetch_in_chunks()` to avoid Binance 429s during bulk downloads
+- [x] **3b.2** Create `scripts/pull_historical_data.py` — CLI script that wires up DB + client + config, downloads all symbol/timeframe pairs, shows progress + summary table
+- [x] **3b.3** `--days` CLI argument to override the 730-day default (e.g. `--days 30` for quick paper-trading warm-up)
+- [x] **3b.4** `make pull-historical-data` Makefile target with optional `DAYS=` variable
+- [x] **3b.5** Unit tests for the script
+
 ---
 
 ## Phase 4 – Real Trading
