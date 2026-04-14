@@ -9,6 +9,7 @@ Trailing stop logic (ATR-based) and hard stop (percentage-based with
 cooldown) are both implemented in ``check_stops()``.
 """
 
+from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from typing import Any, Dict, Optional
 
@@ -110,6 +111,27 @@ class RiskEngine:
             str(self._risk_config.get("max_position_size_pct", 1.0))
         )
 
+        # Max daily new entries (OPEN + SCALE_IN combined); None = unlimited
+        _max_daily = self._risk_config.get("max_trades_per_day")
+        self._max_daily_trades: Optional[int] = (
+            int(_max_daily) if _max_daily is not None else None
+        )
+
+        # Per-trade absolute notional cap in USDT; None = no cap (4.6)
+        _max_trade = self._risk_config.get("max_trade_size_usdt")
+        self._max_trade_size_usdt: Optional[Decimal] = (
+            Decimal(str(_max_trade)) if _max_trade is not None else None
+        )
+
+        # Per-symbol absolute exposure cap in USDT; None = no cap (4.6)
+        _max_sym = self._risk_config.get("max_symbol_exposure_usdt")
+        self._max_symbol_exposure_usdt: Optional[Decimal] = (
+            Decimal(str(_max_sym)) if _max_sym is not None else None
+        )
+
+        # Daily open counter: {UTC date: count} — reset automatically each day
+        self._daily_opens: Dict[date, int] = {}
+
         # Cooldown candles after a hard-stop exit (SH: 16, MR: 8)
         self._cooldown_candles = int(
             strategy_config.get("cooldown_candles", 16)
@@ -135,6 +157,11 @@ class RiskEngine:
     @property
     def strategy_name(self) -> str:
         return self._strategy_name
+
+    def get_daily_opens(self, day: Optional[date] = None) -> int:
+        """Return the number of entries opened on *day* (defaults to today UTC)."""
+        key = day if day is not None else self._today_utc()
+        return self._daily_opens.get(key, 0)
 
     def get_buy_signal_candles(self, symbol: str) -> int:
         """Return the consecutive BUY-candle count for *symbol*."""
@@ -385,6 +412,25 @@ class RiskEngine:
         """Size and authorise a new position."""
         self._buy_signal_candles[symbol] = 1
 
+        # ── Daily trade limit check (4.4) ────────────────────────────
+        if self._is_daily_limit_reached():
+            logger.info(
+                "risk.daily_limit_reached",
+                symbol=symbol,
+                max_daily_trades=self._max_daily_trades,
+                opens_today=self.get_daily_opens(),
+            )
+            return RiskDecision(action=RiskAction.HOLD)
+
+        # ── Per-symbol exposure check (4.6) ──────────────────────────
+        if self._is_symbol_exposure_exceeded(symbol, portfolio, close):
+            logger.info(
+                "risk.symbol_exposure_exceeded",
+                symbol=symbol,
+                max_symbol_exposure_usdt=str(self._max_symbol_exposure_usdt),
+            )
+            return RiskDecision(action=RiskAction.HOLD)
+
         size = self._calculate_initial_size(portfolio, close)
         if size <= 0:
             return RiskDecision(action=RiskAction.HOLD)
@@ -392,6 +438,7 @@ class RiskEngine:
         hard_stop = self._compute_hard_stop(close)
         trailing_stop = self._compute_trailing_stop(close, market_data)
 
+        self._increment_daily_opens()
         return RiskDecision(
             action=RiskAction.OPEN,
             symbol=symbol,
@@ -432,10 +479,32 @@ class RiskEngine:
         else:
             return RiskDecision(action=RiskAction.HOLD)
 
+        # ── Daily trade limit check (4.4) ────────────────────────────
+        if self._is_daily_limit_reached():
+            logger.info(
+                "risk.daily_limit_reached",
+                symbol=symbol,
+                action="scale_in",
+                max_daily_trades=self._max_daily_trades,
+                opens_today=self.get_daily_opens(),
+            )
+            return RiskDecision(action=RiskAction.HOLD)
+
+        # ── Per-symbol exposure check (4.6) ──────────────────────────
+        if self._is_symbol_exposure_exceeded(symbol, portfolio, close):
+            logger.info(
+                "risk.symbol_exposure_exceeded",
+                symbol=symbol,
+                action="scale_in",
+                max_symbol_exposure_usdt=str(self._max_symbol_exposure_usdt),
+            )
+            return RiskDecision(action=RiskAction.HOLD)
+
         size = self._size_from_pct(pct, portfolio, close)
         if size <= 0:
             return RiskDecision(action=RiskAction.HOLD)
 
+        self._increment_daily_opens()
         return RiskDecision(
             action=RiskAction.SCALE_IN,
             symbol=symbol,
@@ -477,6 +546,10 @@ class RiskEngine:
         # Cap at max_position_size_pct × equity
         max_notional = portfolio.equity * self._max_position_pct
         notional = min(desired_notional, max_notional)
+
+        # Per-trade absolute notional cap (4.6)
+        if self._max_trade_size_usdt is not None:
+            notional = min(notional, self._max_trade_size_usdt)
 
         size = (notional / price).quantize(
             Decimal("0.00000001"), rounding=ROUND_DOWN
@@ -557,3 +630,42 @@ class RiskEngine:
             "1h": 60, "4h": 240, "1d": 1440, "1w": 10080,
         }
         return mapping.get(tf, 15)
+
+    # ── Private: limit helpers (4.4 / 4.6) ──────────────────────────
+
+    def _today_utc(self) -> date:
+        return datetime.now(timezone.utc).date()
+
+    def _is_daily_limit_reached(self) -> bool:
+        """Return True if max_trades_per_day has been reached for today."""
+        if self._max_daily_trades is None:
+            return False
+        return self.get_daily_opens() >= self._max_daily_trades
+
+    def _increment_daily_opens(self) -> None:
+        """Record one more entry open for today."""
+        today = self._today_utc()
+        self._daily_opens[today] = self._daily_opens.get(today, 0) + 1
+
+    def _is_symbol_exposure_exceeded(
+        self,
+        symbol: str,
+        portfolio: Portfolio,
+        close: Decimal,
+    ) -> bool:
+        """
+        Return True if opening a new position would breach the per-symbol
+        exposure cap.
+
+        Checks current open position value (if any) against
+        ``max_symbol_exposure_usdt``.  The check is conservative:
+        if a position is already open and its notional already exceeds
+        the cap, it blocks further entries.
+        """
+        if self._max_symbol_exposure_usdt is None:
+            return False
+        position = portfolio.positions.get(symbol)
+        if position is None:
+            return False
+        current_exposure = position.size * close
+        return current_exposure >= self._max_symbol_exposure_usdt

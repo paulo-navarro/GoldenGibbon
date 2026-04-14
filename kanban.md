@@ -139,9 +139,9 @@
 - [ ] **4.1** BinanceExecutor – real `buy()` / `sell()` with order lifecycle (PENDING → FILLED / REJECTED / CANCELLED)
 - [ ] **4.2** Order model – MARKET + LIMIT support, status tracking
 - [x] **4.3** Retry logic – exponential backoff on executor failures
-- [ ] **4.4** Capital limits – max position size, max daily trades
+- [x] **4.4** Capital limits – max position size, max daily trades
 - [ ] **4.5** Max drawdown kill-switch – global emergency stop
-- [ ] **4.6** Trade size limits – per-trade and per-symbol caps
+- [x] **4.6** Trade size limits – per-trade and per-symbol caps
 - [ ] **4.7** Crash recovery – restore state from Postgres after unexpected restart
 - [ ] **4.8** Reconciliation job – compare local portfolio vs Binance account on startup
 - [ ] **4.9** Alerting – notifications on trades, stops hit, kill-switch activation
