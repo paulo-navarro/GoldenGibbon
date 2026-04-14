@@ -1,4 +1,4 @@
-.PHONY: dev prod down logs ps build test test-cov migrate migrate-create seed db-shell test-indicators test-loader api frontend celery celery-logs ws-feed ws-feed-logs
+.PHONY: dev prod down logs ps build test test-cov migrate migrate-create seed db-shell test-indicators test-loader pull-historical-data api frontend celery celery-logs ws-feed ws-feed-logs
 
 # ── Development (hot-reload via volume mount) ──
 dev:
@@ -57,6 +57,10 @@ test-indicators:
 
 test-loader:
 	docker compose run --rm -e PYTHONPATH=/app app python scripts/test_data_loader.py
+
+pull-historical-data:
+	docker compose run --rm -e PYTHONPATH=/app app \
+		python scripts/pull_historical_data.py --days $(or $(DAYS),730)
 
 # ── Database ───────────────────────────────────
 migrate:

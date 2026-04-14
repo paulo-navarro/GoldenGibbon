@@ -93,7 +93,7 @@
 - [x] **2.45** Component – `components/ConnectionStatus.tsx` (WebSocket + API health indicator in AppBar)
 - [x] **2.46** Component – `components/PriceTicker.tsx` (live price with delta, used in Dashboard + AppBar)
 - [x] **2.47** Initialize WebSocket, stores, QueryClient, Router, and ThemeProvider in `main.tsx`
-- [-] **2.48** Environment config (`frontend/.env.example` with VITE_API_URL, VITE_WS_URL)
+- [x] **2.48** Environment config (`frontend/.env.example` with VITE_API_URL, VITE_WS_URL)
 - [x] **2.49** Frontend Dockerfile (`frontend/Dockerfile` with Vite build + nginx serve)
 - [x] **2.50** Add `frontend` service to docker-compose.yml (expose port 5173 for dev, 80 for prod)
 
@@ -122,6 +122,15 @@
 - [x] **3.9** Reconciliation task – compare local state vs expected state on startup
 - [x] **3.10** Monitoring – health checks for workers, beat, Redis connectivity
 
+## Phase 3b – Historical Data Pipeline
+### Tasks
+
+- [x] **3b.1** Add inter-request rate-limit delay (250ms) in `_fetch_in_chunks()` to avoid Binance 429s during bulk downloads
+- [x] **3b.2** Create `scripts/pull_historical_data.py` — CLI script that wires up DB + client + config, downloads all symbol/timeframe pairs, shows progress + summary table
+- [x] **3b.3** `--days` CLI argument to override the 730-day default (e.g. `--days 30` for quick paper-trading warm-up)
+- [x] **3b.4** `make pull-historical-data` Makefile target with optional `DAYS=` variable
+- [x] **3b.5** Unit tests for the script
+
 ---
 
 ## Phase 4 – Real Trading
@@ -129,7 +138,7 @@
 
 - [ ] **4.1** BinanceExecutor – real `buy()` / `sell()` with order lifecycle (PENDING → FILLED / REJECTED / CANCELLED)
 - [ ] **4.2** Order model – MARKET + LIMIT support, status tracking
-- [ ] **4.3** Retry logic – exponential backoff on executor failures
+- [x] **4.3** Retry logic – exponential backoff on executor failures
 - [x] **4.4** Capital limits – max position size, max daily trades
 - [ ] **4.5** Max drawdown kill-switch – global emergency stop
 - [x] **4.6** Trade size limits – per-trade and per-symbol caps

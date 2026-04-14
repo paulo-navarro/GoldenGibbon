@@ -5,6 +5,7 @@ Orchestrates fetching candles from Binance API and caching to Postgres database.
 """
 
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
@@ -163,13 +164,17 @@ class DataLoader:
                 )
                 
                 all_candles.extend(candles)
-                
+
                 logger.debug(
                     f"Fetched {len(candles)} candles: "
                     f"{current_start.date()} to {current_end.date()} "
                     f"(total: {len(all_candles)}/{total_expected})"
                 )
-                
+
+                # Preventive rate-limit delay between bulk requests
+                BINANCE_BULK_FETCH_DELAY_S = 0.25
+                time.sleep(BINANCE_BULK_FETCH_DELAY_S)
+
                 # Move to next chunk
                 if candles:
                     # Start next chunk after last candle to avoid overlap
