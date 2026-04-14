@@ -138,7 +138,7 @@
 
 - [ ] **4.1** BinanceExecutor – real `buy()` / `sell()` with order lifecycle (PENDING → FILLED / REJECTED / CANCELLED)
 - [ ] **4.2** Order model – MARKET + LIMIT support, status tracking
-- [ ] **4.3** Retry logic – exponential backoff on executor failures
+- [x] **4.3** Retry logic – exponential backoff on executor failures
 - [ ] **4.4** Capital limits – max position size, max daily trades
 - [ ] **4.5** Max drawdown kill-switch – global emergency stop
 - [ ] **4.6** Trade size limits – per-trade and per-symbol caps

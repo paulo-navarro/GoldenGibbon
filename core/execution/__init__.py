@@ -8,5 +8,6 @@ delegates accounting to PortfolioManager, and returns a filled
 """
 
 from core.execution.paper import PaperExecutor
+from core.execution.retry import RetryConfig, RetryExhausted, with_retry
 
-__all__ = ["PaperExecutor"]
+__all__ = ["PaperExecutor", "RetryConfig", "RetryExhausted", "with_retry"]
