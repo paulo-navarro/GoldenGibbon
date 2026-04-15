@@ -74,3 +74,33 @@ seed:
 
 db-shell:
 	docker compose exec postgres psql -U trade -d trade
+
+# ── Deploy to VPS (off-host build + ship) ──────
+#
+# Builds prod images locally, streams them over SSH to the VPS and
+# restarts the stack there. Off-host builds avoid eating 3–5 GB of
+# disk on the VPS during `pip install` / `npm ci`.
+#
+# Override VPS / VPS_PATH from the command line if needed:
+#   make deploy-vps VPS=root@host VPS_PATH=/root/GoldenGibbon
+VPS      ?= root@76.13.172.71
+VPS_PATH ?= /root/GoldenGibbon
+PROD_IMAGES = \
+	goldengibbon-app-prod \
+	goldengibbon-api-prod \
+	goldengibbon-celery-worker-prod \
+	goldengibbon-celery-beat-prod \
+	goldengibbon-ws-feed-prod \
+	goldengibbon-frontend-prod
+
+deploy-build: ## Build all prod images locally
+	docker compose --profile prod build
+
+deploy-ship: deploy-build ## Stream built images to the VPS over SSH
+	@echo "Streaming $$(echo $(PROD_IMAGES) | wc -w) images to $(VPS)..."
+	docker save $(PROD_IMAGES) | gzip | ssh $(VPS) 'gunzip | docker load'
+
+deploy-vps: deploy-ship ## Build locally, ship images, restart stack on VPS
+	@echo "Pulling main + restarting prod stack on $(VPS)..."
+	ssh $(VPS) 'cd $(VPS_PATH) && git pull origin main && docker compose --profile prod up -d'
+	@echo "Deploy complete. Check: ssh $(VPS) 'docker ps --filter name=trade-'"
