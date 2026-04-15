@@ -200,7 +200,7 @@ function MiniEquityCurve() {
           <Tooltip
             contentStyle={{ background: '#111720', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, fontSize: 12 }}
             labelStyle={{ color: '#9e9e9e' }}
-            formatter={(value: number) => [`$${value.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, 'Equity']}
+            formatter={(value) => [`$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, 'Equity']}
           />
           <Area
             type="monotone"

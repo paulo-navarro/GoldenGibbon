@@ -4,13 +4,16 @@
 
 /** Error thrown when the API returns a non-2xx status. */
 export class ApiError extends Error {
-  constructor(
-    public status: number,
-    public statusText: string,
-    public body: unknown,
-  ) {
+  readonly status: number;
+  readonly statusText: string;
+  readonly body: unknown;
+
+  constructor(status: number, statusText: string, body: unknown) {
     super(`API ${status}: ${statusText}`);
     this.name = 'ApiError';
+    this.status = status;
+    this.statusText = statusText;
+    this.body = body;
   }
 }
 

@@ -71,7 +71,8 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
   const { data: portfolio } = usePortfolio();
 
   const cond: Record<string, unknown> | null =
-    condStore ?? ((sig?.conditions as Record<string, unknown>) ?? null);
+    (condStore as unknown as Record<string, unknown> | undefined) ??
+    ((sig?.conditions as unknown as Record<string, unknown> | undefined) ?? null);
 
   // Live countdown ticker (only while in cooldown)
   const [now, setNow] = useState(Date.now());

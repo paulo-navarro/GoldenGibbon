@@ -203,7 +203,7 @@ function EquityCurveChart() {
           <Tooltip
             contentStyle={CHART_TOOLTIP_STYLE}
             labelStyle={{ color: '#9e9e9e' }}
-            formatter={(v: number) => [`$${v.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, 'Equity']}
+            formatter={(v) => [`$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, 'Equity']}
           />
           <Area type="monotone" dataKey="equity" stroke="#00bcd4" strokeWidth={2} fill="url(#metricsEquityGrad)" />
         </AreaChart>
@@ -239,7 +239,7 @@ function DrawdownChart() {
           <Tooltip
             contentStyle={CHART_TOOLTIP_STYLE}
             labelStyle={{ color: '#9e9e9e' }}
-            formatter={(v: number) => [`${v.toFixed(2)}%`, 'Drawdown']}
+            formatter={(v) => [`${Number(v).toFixed(2)}%`, 'Drawdown']}
           />
           <Area type="monotone" dataKey="drawdown" stroke="#f44336" strokeWidth={2} fill="url(#drawdownGrad)" />
         </AreaChart>

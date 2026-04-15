@@ -241,8 +241,8 @@ function EquityCurveChart() {
               fontSize: 12,
             }}
             labelStyle={{ color: '#9e9e9e' }}
-            formatter={(value: number, name: string) => [
-              `$${value.toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+            formatter={(value, name) => [
+              `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
               name === 'equity' ? 'Equity' : 'PnL',
             ]}
           />
