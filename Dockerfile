@@ -59,7 +59,9 @@ COPY db/ db/
 COPY api/ api/
 COPY main.py .
 
-RUN useradd --create-home appuser
+RUN useradd --create-home appuser && \
+    mkdir -p /app/logs && \
+    chown -R appuser:appuser /app
 USER appuser
 
 CMD ["python", "main.py"]
