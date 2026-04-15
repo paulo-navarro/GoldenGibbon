@@ -162,6 +162,20 @@
 
 ---
 
+## Phase 6 – VPS Deployment
+### Tasks
+
+- [ ] **6.1** Create 2 GB swap on VPS (`fallocate`, `mkswap`, `swapon`, persist in `/etc/fstab`) to absorb celery-worker memory spikes and prevent OOM kills `infra`
+- [ ] **6.2** Off-VPS image builds – build images locally, ship via `docker save | ssh | docker load` (or registry) to avoid consuming 3–5 GB of disk during build on the VPS `infra`
+- [ ] **6.3** Use `prod` target for the frontend container (nginx serving static build, ~15 MB) instead of Vite dev server (~165 MB) `infra`
+- [ ] **6.4** Set `mem_limit: 512m` (and matching `mem_reservation`) on `celery-worker-prod` in `docker-compose.yml` to cap pandas/indicator spikes `infra`
+- [ ] **6.5** Bind postgres and redis published ports to `127.0.0.1` in `docker-compose.yml` so they are not exposed on the public interface `infra`
+- [ ] **6.6** Reverse-proxy api + frontend behind the existing host nginx on a dedicated subdomain (TLS via certbot, upstreams to `127.0.0.1:${API_PORT}` and `127.0.0.1:${FRONTEND_PORT}`) `infra`
+
+> Auth must land before 6.6 goes live — public exposure without authentication is not acceptable. Auth tasks tracked separately.
+
+---
+
 ## Labels
 
 | `core` | Part of the core pipeline (data → indicators → strategy → risk → execution → portfolio) |
