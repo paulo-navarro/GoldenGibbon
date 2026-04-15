@@ -165,16 +165,16 @@
 ## Phase 6 – VPS Deployment
 ### Tasks
 
-- [ ] **6.1** Create 2 GB swap on VPS (`fallocate`, `mkswap`, `swapon`, persist in `/etc/fstab`) to absorb celery-worker memory spikes and prevent OOM kills `infra`
-- [ ] **6.2** Off-VPS image builds – build images locally, ship via `docker save | ssh | docker load` (or registry) to avoid consuming 3–5 GB of disk during build on the VPS `infra`
-- [ ] **6.3** Use `prod` target for the frontend container (nginx serving static build, ~15 MB) instead of Vite dev server (~165 MB) `infra`
-- [ ] **6.4** Set `mem_limit: 512m` (and matching `mem_reservation`) on `celery-worker-prod` in `docker-compose.yml` to cap pandas/indicator spikes `infra`
-- [ ] **6.5** Bind postgres and redis published ports to `127.0.0.1` in `docker-compose.yml` so they are not exposed on the public interface `infra`
-- [ ] **6.6** Reverse-proxy api + frontend behind the existing host nginx on a dedicated subdomain (TLS via certbot, upstreams to `127.0.0.1:${API_PORT}` and `127.0.0.1:${FRONTEND_PORT}`) `infra`
-- [ ] **6.7** Generate bcrypt htpasswd file on VPS (`htpasswd -B -c`), long random password, stored at `/etc/nginx/auth/gg.htpasswd` with mode `0640 root:www-data` `infra`
-- [ ] **6.8** Add `auth_basic "GoldenGibbon"` + `auth_basic_user_file` directives to the `gg.*` nginx server block so every route (REST, WebSocket, static) requires credentials `infra`
-- [ ] **6.9** Install fail2ban and configure `nginx-http-auth` jail (maxretry=5, findtime=10m, bantime=1h) reading the nginx error log, enforced via iptables/ufw `infra`
-- [ ] **6.10** End-to-end verification: 5 bad attempts → IP banned; correct creds → 200 on REST + WebSocket upgrade; confirm `gg.htpasswd` is unreadable over HTTP `infra`
+- [x] **6.1** Create 2 GB swap on VPS (`fallocate`, `mkswap`, `swapon`, persist in `/etc/fstab`) to absorb celery-worker memory spikes and prevent OOM kills `infra`
+- [x] **6.2** Off-VPS image builds – build images locally, ship via `docker save | ssh | docker load` (or registry) to avoid consuming 3–5 GB of disk during build on the VPS `infra`
+- [x] **6.3** Use `prod` target for the frontend container (nginx serving static build, ~15 MB) instead of Vite dev server (~165 MB) `infra`
+- [x] **6.4** Set `mem_limit: 512m` (and matching `mem_reservation`) on `celery-worker-prod` in `docker-compose.yml` to cap pandas/indicator spikes `infra`
+- [x] **6.5** Bind postgres and redis published ports to `127.0.0.1` in `docker-compose.yml` so they are not exposed on the public interface `infra`
+- [x] **6.6** Reverse-proxy api + frontend behind the existing host nginx on a dedicated subdomain (TLS via certbot, upstreams to `127.0.0.1:${API_PORT}` and `127.0.0.1:${FRONTEND_PORT}`) `infra`
+- [x] **6.7** Generate bcrypt htpasswd file on VPS (`htpasswd -B -c`), long random password, stored at `/etc/nginx/auth/gg.htpasswd` with mode `0640 root:www-data` `infra`
+- [x] **6.8** Add `auth_basic "GoldenGibbon"` + `auth_basic_user_file` directives to the `gg.*` nginx server block so every route (REST, WebSocket, static) requires credentials `infra`
+- [x] **6.9** Install fail2ban and configure `nginx-http-auth` jail (maxretry=5, findtime=10m, bantime=1h) reading the nginx error log, enforced via iptables/ufw `infra`
+- [x] **6.10** End-to-end verification: 5 bad attempts → IP banned; correct creds → 200 on REST + WebSocket upgrade; confirm `gg.htpasswd` is unreadable over HTTP `infra`
 
 > Tasks 6.7–6.10 (auth layer) MUST complete before 6.6 serves any public request. Public exposure without Basic Auth + fail2ban is not acceptable.
 
