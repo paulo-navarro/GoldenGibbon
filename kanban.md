@@ -171,8 +171,12 @@
 - [ ] **6.4** Set `mem_limit: 512m` (and matching `mem_reservation`) on `celery-worker-prod` in `docker-compose.yml` to cap pandas/indicator spikes `infra`
 - [ ] **6.5** Bind postgres and redis published ports to `127.0.0.1` in `docker-compose.yml` so they are not exposed on the public interface `infra`
 - [ ] **6.6** Reverse-proxy api + frontend behind the existing host nginx on a dedicated subdomain (TLS via certbot, upstreams to `127.0.0.1:${API_PORT}` and `127.0.0.1:${FRONTEND_PORT}`) `infra`
+- [ ] **6.7** Generate bcrypt htpasswd file on VPS (`htpasswd -B -c`), long random password, stored at `/etc/nginx/auth/gg.htpasswd` with mode `0640 root:www-data` `infra`
+- [ ] **6.8** Add `auth_basic "GoldenGibbon"` + `auth_basic_user_file` directives to the `gg.*` nginx server block so every route (REST, WebSocket, static) requires credentials `infra`
+- [ ] **6.9** Install fail2ban and configure `nginx-http-auth` jail (maxretry=5, findtime=10m, bantime=1h) reading the nginx error log, enforced via iptables/ufw `infra`
+- [ ] **6.10** End-to-end verification: 5 bad attempts → IP banned; correct creds → 200 on REST + WebSocket upgrade; confirm `gg.htpasswd` is unreadable over HTTP `infra`
 
-> Auth must land before 6.6 goes live — public exposure without authentication is not acceptable. Auth tasks tracked separately.
+> Tasks 6.7–6.10 (auth layer) MUST complete before 6.6 serves any public request. Public exposure without Basic Auth + fail2ban is not acceptable.
 
 ---
 
