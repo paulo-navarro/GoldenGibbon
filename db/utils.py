@@ -244,17 +244,22 @@ def orm_to_trade(record: orm_models.TradeRecord) -> pydantic_models.Trade:
 
 # ── Order Conversions ────────────────────────────────────────────────────────
 
-def order_to_orm(order: pydantic_models.Order) -> orm_models.OrderRecord:
+def order_to_orm(
+    order: pydantic_models.Order,
+    run_id: str | None = None,
+) -> orm_models.OrderRecord:
     """
     Convert Pydantic Order to ORM OrderRecord.
-    
+
     Args:
         order: Pydantic Order model
-    
+        run_id: Optional run_id to link this order to.
+
     Returns:
         ORM OrderRecord
     """
     return orm_models.OrderRecord(
+        run_id=run_id or order.run_id,
         symbol=order.symbol,
         side=order.side.value,
         order_type=order.order_type.value,
@@ -266,6 +271,10 @@ def order_to_orm(order: pydantic_models.Order) -> orm_models.OrderRecord:
         slippage_percent=order.slippage_percent,
         fee_usdt=order.fee_usdt,
         exchange_order_id=order.exchange_order_id,
+        time_in_force=order.time_in_force.value if order.time_in_force else None,
+        limit_price=order.limit_price,
+        reject_reason=order.reject_reason,
+        exchange_status=order.exchange_status,
         created_at=order.created_at,
         updated_at=order.updated_at,
         filled_at=order.filled_at,
@@ -275,10 +284,10 @@ def order_to_orm(order: pydantic_models.Order) -> orm_models.OrderRecord:
 def orm_to_order(record: orm_models.OrderRecord) -> pydantic_models.Order:
     """
     Convert ORM OrderRecord to Pydantic Order.
-    
+
     Args:
         record: ORM OrderRecord
-    
+
     Returns:
         Pydantic Order model
     """
@@ -295,6 +304,10 @@ def orm_to_order(record: orm_models.OrderRecord) -> pydantic_models.Order:
         slippage_percent=record.slippage_percent,
         fee_usdt=record.fee_usdt,
         exchange_order_id=record.exchange_order_id,
+        time_in_force=pydantic_models.TimeInForce(record.time_in_force) if record.time_in_force else None,
+        limit_price=record.limit_price,
+        reject_reason=record.reject_reason,
+        exchange_status=record.exchange_status,
         created_at=record.created_at,
         updated_at=record.updated_at,
         filled_at=record.filled_at,

@@ -112,14 +112,15 @@ _WorkerStateKey = Tuple[str, str]  # (strategy_name, symbol)
 class _TickComponents:
     """Holds the live objects for one (strategy, symbol) pair."""
 
-    __slots__ = ("strategy", "pm", "risk_engine", "executor", "run_id")
+    __slots__ = ("strategy", "pm", "risk_engine", "executor", "run_id", "kill_switch")
 
-    def __init__(self, strategy, pm, risk_engine, executor, run_id: str):  # noqa: ANN001
+    def __init__(self, strategy, pm, risk_engine, executor, run_id: str, kill_switch=None):  # noqa: ANN001
         self.strategy = strategy
         self.pm = pm
         self.risk_engine = risk_engine
         self.executor = executor
         self.run_id = run_id
+        self.kill_switch = kill_switch
 
 
 _worker_state: Dict[_WorkerStateKey, _TickComponents] = {}
@@ -139,17 +140,24 @@ def _recover_state(
     strategy,  # noqa: ANN001 – Strategy instance
     pm,  # noqa: ANN001 – PortfolioManager
     risk_engine,  # noqa: ANN001 – RiskEngine
+    kill_switch=None,  # noqa: ANN001 – KillSwitch instance
 ) -> str | None:
     """
     Attempt to restore strategy / portfolio / risk state from the DB.
+
+    Recovers:
+      1. Strategy state (state machine, cooldown, counters)
+      2. Open position
+      3. Recent trade history (task 4.7)
+      4. Equity curve snapshots (task 4.7)
 
     Returns the previous ``run_id`` if recovery succeeded, or ``None``
     if no persisted state was found.
     """
     from core.models import StrategyState
     from db import get_session
-    from db.models import PositionRecord, StrategyStateRecord
-    from db.utils import orm_to_position
+    from db.models import PositionRecord, PortfolioSnapshot, StrategyStateRecord, TradeRecord
+    from db.utils import orm_to_portfolio_snapshot, orm_to_position, orm_to_trade
 
     recovered_run_id: str | None = None
 
@@ -180,6 +188,10 @@ def _recover_state(
                 )
 
                 recovered_run_id = data.get("run_id")
+
+                # Kill-switch state (task 4.5)
+                if kill_switch is not None:
+                    kill_switch.restore_from_dict(data)
 
                 logger.info(
                     "state_recovery: strategy state restored",
@@ -219,6 +231,47 @@ def _recover_state(
                     scale_in_count=position.scale_in_count,
                 )
 
+            # 3. Restore recent trade history (task 4.7) ──────────────
+            if recovered_run_id is not None:
+                trade_recs = (
+                    session.query(TradeRecord)
+                    .filter_by(strategy=strategy_name, symbol=symbol)
+                    .order_by(TradeRecord.exit_time.desc())
+                    .limit(_MAX_MEMORY_TRADES)
+                    .all()
+                )
+                if trade_recs:
+                    # Reverse so oldest first (chronological order)
+                    pm._portfolio.trade_history = [
+                        orm_to_trade(r) for r in reversed(trade_recs)
+                    ]
+                    logger.info(
+                        "state_recovery: trade history restored",
+                        strategy=strategy_name,
+                        symbol=symbol,
+                        count=len(trade_recs),
+                    )
+
+            # 4. Restore equity curve snapshots (task 4.7) ────────────
+            if recovered_run_id is not None:
+                snap_recs = (
+                    session.query(PortfolioSnapshot)
+                    .filter_by(run_id=recovered_run_id)
+                    .order_by(PortfolioSnapshot.timestamp.desc())
+                    .limit(_MAX_MEMORY_SNAPSHOTS)
+                    .all()
+                )
+                if snap_recs:
+                    pm._portfolio.equity_curve = [
+                        orm_to_portfolio_snapshot(r) for r in reversed(snap_recs)
+                    ]
+                    logger.info(
+                        "state_recovery: equity curve restored",
+                        strategy=strategy_name,
+                        symbol=symbol,
+                        count=len(snap_recs),
+                    )
+
     except Exception as exc:
         logger.warning(
             "state_recovery: failed (starting fresh)",
@@ -238,12 +291,17 @@ def _get_or_create_components(
     execution_config: dict,
     paper_config: dict,
     initial_capital: float,
+    trading_mode: str = "paper",
 ) -> _TickComponents:
     """
     Return cached tick-pipeline components, creating them on first call.
 
     On first creation, attempts to recover persisted state from the DB
     (task 3.8).  Falls back to a fresh session if no state is found.
+
+    Args:
+        trading_mode: ``"paper"`` for PaperExecutor, ``"live"`` for
+                      BinanceExecutor.
     """
     key: _WorkerStateKey = (strategy_name, symbol)
 
@@ -263,24 +321,47 @@ def _get_or_create_components(
 
         pm = PortfolioManager(initial_capital=cap, taker_fee=taker_fee)
         risk_engine = RiskEngine(strategy_name, strategy_config, risk_config)
-        executor = PaperExecutor(
-            strategy_name=strategy_name,
-            portfolio_manager=pm,
-            slippage=Decimal(str(execution_config.get("slippage", 0.001))),
-            simulate_slippage=paper_config.get("simulate_slippage", True),
+
+        if trading_mode == "live":
+            from core.execution.binance import BinanceExecutor
+
+            executor = BinanceExecutor.from_settings(
+                strategy_name=strategy_name,
+                portfolio_manager=pm,
+            )
+            # Load exchange filters for quantity/price formatting
+            executor.load_exchange_filters([symbol])
+        else:
+            executor = PaperExecutor(
+                strategy_name=strategy_name,
+                portfolio_manager=pm,
+                slippage=Decimal(str(execution_config.get("slippage", 0.001))),
+                simulate_slippage=paper_config.get("simulate_slippage", True),
+            )
+
+        # Kill-switch (task 4.5)
+        from core.risk.kill_switch import KillSwitch
+        from core.config import get_settings as _get_settings
+
+        _settings = _get_settings()
+        kill_switch = KillSwitch(
+            max_drawdown_pct=_settings.live_trading.kill_switch_max_drawdown,
+            max_daily_loss_pct=_settings.risk.max_daily_loss_pct,
         )
 
         # Attempt state recovery from DB
         recovered_run_id = _recover_state(
             strategy_name, symbol, strategy, pm, risk_engine,
+            kill_switch=kill_switch,
         )
 
         # Generate or reuse run_id
         now_tag = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-        run_id = recovered_run_id or f"paper_{strategy_name}_{symbol}_{now_tag}"
+        prefix = "live" if trading_mode == "live" else "paper"
+        run_id = recovered_run_id or f"{prefix}_{strategy_name}_{symbol}_{now_tag}"
 
         _worker_state[key] = _TickComponents(
-            strategy, pm, risk_engine, executor, run_id,
+            strategy, pm, risk_engine, executor, run_id, kill_switch,
         )
 
         logger.info(
@@ -290,6 +371,7 @@ def _get_or_create_components(
             initial_capital=str(cap),
             run_id=run_id,
             recovered=recovered_run_id is not None,
+            trading_mode=trading_mode,
         )
 
         # Publish startup event (task 3.7)
@@ -298,7 +380,7 @@ def _get_or_create_components(
             EventChannel.SYSTEM,
             EventType.STARTUP,
             {
-                "mode": "paper_trading",
+                "mode": f"{trading_mode}_trading",
                 "strategy": strategy_name,
                 "symbol": symbol,
                 "run_id": run_id,
@@ -351,8 +433,7 @@ def _persist_tick_results(
 
     # ── 1. Order + Trade audit trail ─────────────────────────────────
     if execution_result is not None:
-        order_rec = order_to_orm(execution_result.order)
-        order_rec.run_id = run_id
+        order_rec = order_to_orm(execution_result.order, run_id=run_id)
         session.add(order_rec)
 
         if execution_result.trade is not None:
@@ -407,6 +488,10 @@ def _persist_tick_results(
     if hasattr(comp.strategy, "_consecutive_below_ema200"):
         state_data["consecutive_below_ema200"] = comp.strategy._consecutive_below_ema200
 
+    # Kill-switch state (task 4.5)
+    if comp.kill_switch is not None:
+        state_data.update(comp.kill_switch.to_dict())
+
     buy_candles = comp.risk_engine.get_buy_signal_candles(symbol)
 
     # Derive last_exit_time from most recent trade
@@ -447,6 +532,77 @@ def _trim_in_memory_history(pm) -> None:  # noqa: ANN001
         pm._portfolio.trade_history = pm._portfolio.trade_history[-_MAX_MEMORY_TRADES:]
     if len(pm.portfolio.equity_curve) > _MAX_MEMORY_SNAPSHOTS:
         pm._portfolio.equity_curve = pm._portfolio.equity_curve[-_MAX_MEMORY_SNAPSHOTS:]
+
+
+# ── Alerting helper (task 4.9) ─────────────────────────────────────────────
+
+
+def _send_tick_alerts(
+    *,
+    strategy_name: str,
+    symbol: str,
+    execution_result,  # noqa: ANN001 – Optional[ExecutionResult]
+    stop_hit: bool,
+    stop_type: str | None,
+    close: Decimal,
+    comp: _TickComponents,
+    settings,  # noqa: ANN001 – Settings
+) -> None:
+    """
+    Send Telegram alerts for notable events in the current tick.
+
+    Called once per tick after persistence.  Checks ``AlertingConfig``
+    flags before sending.  Never raises.
+    """
+    cfg = settings.alerting
+    if not cfg.enabled:
+        return
+
+    try:
+        from core.alerting import get_alerter
+
+        alerter = get_alerter()
+        if not alerter.enabled:
+            return
+
+        # ── Stop hit ────────────────────────────────────────────
+        if stop_hit and cfg.alert_on_stop:
+            alerter.alert_stop(
+                symbol=symbol,
+                stop_type=stop_type or "unknown",
+                price=str(close),
+                strategy=strategy_name,
+            )
+
+        # ── Order fill ──────────────────────────────────────────
+        if execution_result is not None and cfg.alert_on_fill:
+            order = execution_result.order
+            pnl_str = None
+            if execution_result.trade is not None:
+                pnl_str = f"{execution_result.trade.pnl_usdt} USDT"
+            alerter.alert_fill(
+                symbol=symbol,
+                side=order.side.value,
+                size=str(order.filled_amount),
+                price=str(order.avg_fill_price or order.price or close),
+                strategy=strategy_name,
+                pnl=pnl_str,
+            )
+
+        # ── Kill-switch just triggered ──────────────────────────
+        if (
+            cfg.alert_on_kill_switch
+            and comp.kill_switch
+            and comp.kill_switch.is_triggered
+        ):
+            alerter.alert_kill_switch(
+                reason=comp.kill_switch.trigger_reason or "unknown",
+                equity=str(comp.pm.portfolio.equity),
+                peak_equity=str(comp.kill_switch.peak_equity),
+            )
+
+    except Exception as exc:
+        logger.debug("alerting: send failed (non-fatal)", error=str(exc))
 
 
 # ── fetch_candles (task 3.4) ─────────────────────────────────────────────────
@@ -560,9 +716,10 @@ def run_strategy_tick(self) -> Dict[str, Any]:  # noqa: ANN001
     populate the DB cache.  Also triggered immediately by the WebSocket
     stream runner (task 3.6) when a candle closes.
 
-    **Task 3.7 – Paper trading mode:**
-    Only runs when ``paper_trading.enabled`` is ``True`` in config.
-    Uses ``paper_trading.initial_capital`` for the starting balance.
+    **Task 3.7 / 4.1 – Trading mode:**
+    Runs when ``paper_trading.enabled`` or ``live_trading.enabled`` is
+    ``True`` in config.  Live mode uses ``BinanceExecutor`` for real
+    orders; paper mode uses ``PaperExecutor``.
 
     **Task 3.8 – State persistence:**
     After each tick, persists orders, trades, portfolio snapshots,
@@ -580,11 +737,11 @@ def run_strategy_tick(self) -> Dict[str, Any]:  # noqa: ANN001
     2. Checks stops via ``RiskEngine.check_stops()``.
     3. Evaluates the strategy via ``Strategy.evaluate()``.
     4. Passes the signal through ``RiskEngine.evaluate()`` for sizing.
-    5. Executes via ``PaperExecutor.execute()``.
+    5. Executes via ``PaperExecutor`` or ``BinanceExecutor``.
     6. Takes a portfolio snapshot.
     7. Persists execution results + state to the DB.
 
-    Strategy, PortfolioManager, RiskEngine and PaperExecutor instances
+    Strategy, PortfolioManager, RiskEngine and executor instances
     are kept alive in worker-process memory across ticks.
 
     Returns:
@@ -602,13 +759,14 @@ def run_strategy_tick(self) -> Dict[str, Any]:  # noqa: ANN001
     publisher = get_publisher()
     registry = _get_strategy_registry()
 
-    # ── Mode gate (task 3.7) ─────────────────────────────────────────
-    if not settings.paper_trading.enabled:
+    # ── Mode gate (task 3.7 / 4.1) ──────────────────────────────────
+    if not settings.paper_trading.enabled and not settings.live_trading.enabled:
         logger.info(
-            "run_strategy_tick: skipped (paper_trading not enabled)",
+            "run_strategy_tick: skipped (no trading mode enabled)",
             task_id=self.request.id,
         )
-        return {"skipped": True, "reason": "paper_trading_not_enabled"}
+        return {"skipped": True, "reason": "no_trading_mode_enabled"}
+    trading_mode = "live" if settings.live_trading.enabled else "paper"
 
     # ── Idempotency lock (task 3.6) ──────────────────────────────────
     # Peek at the latest candle timestamp from the DB to build the lock
@@ -674,6 +832,7 @@ def run_strategy_tick(self) -> Dict[str, Any]:  # noqa: ANN001
                     execution_config=settings.execution.model_dump(),
                     paper_config=settings.paper_trading.model_dump(),
                     initial_capital=settings.paper_trading.initial_capital,
+                    trading_mode=trading_mode,
                 )
 
                 # ── 1. Load data + indicators from DB cache ──────────
@@ -699,6 +858,17 @@ def run_strategy_tick(self) -> Dict[str, Any]:  # noqa: ANN001
                 if hasattr(candle_time, "to_pydatetime"):
                     candle_time = candle_time.to_pydatetime()
                 close = Decimal(str(market_data.candles["close"].iloc[-1]))
+
+                # ── Kill-switch gate (task 4.5) ─────────────────────
+                if comp.kill_switch and comp.kill_switch.is_triggered:
+                    log.warning(
+                        "run_strategy_tick: kill-switch active",
+                        reason=comp.kill_switch.trigger_reason,
+                    )
+                    # Still take a snapshot for monitoring, but skip trading
+                    comp.pm.update_equity(candle_time, {symbol: close})
+                    ticks_failed += 1
+                    continue
 
                 # ── 2. Check stops ───────────────────────────────────
                 stop_result = comp.risk_engine.check_stops(
@@ -743,6 +913,12 @@ def run_strategy_tick(self) -> Dict[str, Any]:  # noqa: ANN001
                 # ── 6. Equity snapshot ───────────────────────────────
                 snapshot = comp.pm.take_snapshot(candle_time, {symbol: close})
 
+                # ── Kill-switch check (task 4.5) ────────────────────
+                if comp.kill_switch:
+                    comp.kill_switch.check(
+                        comp.pm.portfolio.equity, candle_time,
+                    )
+
                 # ── 7. Persist to DB (tasks 3.7 / 3.8) ──────────────
                 try:
                     with get_session() as session:
@@ -765,6 +941,22 @@ def run_strategy_tick(self) -> Dict[str, Any]:  # noqa: ANN001
 
                 # ── 8. Trim in-memory history ────────────────────────
                 _trim_in_memory_history(comp.pm)
+
+                # ── 9. Alerts (task 4.9) ──────────────────────────────
+                _send_tick_alerts(
+                    strategy_name=strategy_name,
+                    symbol=symbol,
+                    execution_result=execution_result,
+                    stop_hit=stop_result.stop_hit,
+                    stop_type=(
+                        str(stop_result.decision.exit_reason)
+                        if stop_result.stop_hit
+                        else None
+                    ),
+                    close=close,
+                    comp=comp,
+                    settings=settings,
+                )
 
                 tick_key = f"{strategy_name}:{symbol}"
                 signals[tick_key] = signal.value
@@ -796,6 +988,17 @@ def run_strategy_tick(self) -> Dict[str, Any]:  # noqa: ANN001
                         "error": str(exc),
                     },
                 )
+                # Alert on error (task 4.9)
+                if settings.alerting.enabled and settings.alerting.alert_on_error:
+                    try:
+                        from core.alerting import get_alerter
+
+                        get_alerter().alert_error(
+                            task=f"tick:{strategy_name}:{symbol}",
+                            error=str(exc),
+                        )
+                    except Exception:
+                        pass
 
     summary: Dict[str, Any] = {
         "ticks_processed": ticks_processed,
@@ -1009,6 +1212,153 @@ def _reconcile_pair(
     }
 
 
+# ── Exchange reconciliation (task 4.8) ────────────────────────────────────────
+
+# Tolerance for balance/position comparison against exchange.
+# Binance balances include dust from rounding, fees, etc.
+_EXCHANGE_BALANCE_TOLERANCE = Decimal("0.01")  # USDT
+_EXCHANGE_POSITION_TOLERANCE = Decimal("0.00000100")  # asset qty (1 satoshi for BTC)
+
+
+def _reconcile_with_exchange(
+    session,  # noqa: ANN001 – SQLAlchemy Session
+    executor,  # noqa: ANN001 – BinanceExecutor
+    symbols: list[str],
+) -> Dict[str, Any]:
+    """
+    Compare local DB state against Binance account balances.
+
+    Runs two advisory checks per tracked symbol:
+
+    **Check D – USDT balance**
+
+    * ``state_data.usdt_balance`` ≈ Binance ``USDT`` free balance.
+
+    **Check E – Position size**
+
+    * ``PositionRecord.size`` ≈ Binance base-asset balance (e.g. ``BTC``
+      free + locked for ``BTCUSDT``).
+
+    All mismatches are **advisory** — no auto-repair is performed for
+    exchange discrepancies.  Differences are logged and published as
+    events for dashboard visibility.
+
+    Returns a result dict::
+
+        {
+            "status": "ok" | "mismatch",
+            "checks": [...],
+            "exchange_balances": {...},
+        }
+    """
+    from db.models import PositionRecord, StrategyStateRecord
+
+    checks: list[Dict[str, Any]] = []
+    has_mismatch = False
+
+    # Fetch exchange state
+    try:
+        account = executor.get_account_info()
+    except Exception as exc:
+        logger.error(
+            "reconcile_exchange: failed to fetch account",
+            error=str(exc),
+        )
+        return {
+            "status": "error",
+            "checks": [{"check": "exchange_account", "result": "error", "detail": str(exc)}],
+            "exchange_balances": {},
+        }
+
+    exchange_balances = account["balances"]
+
+    # ── Check D: USDT balance ────────────────────────────────────────
+    # Aggregate local USDT balance across all strategy state records.
+    state_recs = session.query(StrategyStateRecord).all()
+    local_usdt_total = Decimal("0")
+    for rec in state_recs:
+        data = rec.state_data or {}
+        local_usdt_total += Decimal(str(data.get("usdt_balance", 0)))
+
+    exchange_usdt = Decimal("0")
+    if "USDT" in exchange_balances:
+        exchange_usdt = exchange_balances["USDT"]["free"] + exchange_balances["USDT"]["locked"]
+
+    usdt_delta = abs(local_usdt_total - exchange_usdt)
+    if usdt_delta <= _EXCHANGE_BALANCE_TOLERANCE:
+        checks.append({"check": "exchange_usdt", "result": "ok"})
+    else:
+        has_mismatch = True
+        checks.append({
+            "check": "exchange_usdt",
+            "result": "warning",
+            "detail": (
+                f"local_usdt={local_usdt_total} vs "
+                f"exchange_usdt={exchange_usdt} (delta={usdt_delta})"
+            ),
+        })
+        logger.warning(
+            "reconcile_exchange: USDT balance mismatch",
+            local=str(local_usdt_total),
+            exchange=str(exchange_usdt),
+            delta=str(usdt_delta),
+        )
+
+    # ── Check E: Position sizes ──────────────────────────────────────
+    for symbol in symbols:
+        # Derive base asset: BTCUSDT → BTC, ETHUSDT → ETH
+        base_asset = symbol.replace("USDT", "")
+
+        # Local position size across all strategies for this symbol
+        pos_recs = (
+            session.query(PositionRecord)
+            .filter_by(symbol=symbol)
+            .all()
+        )
+        local_size = sum((r.size for r in pos_recs), Decimal("0"))
+
+        # Exchange balance for base asset
+        exchange_size = Decimal("0")
+        if base_asset in exchange_balances:
+            exchange_size = (
+                exchange_balances[base_asset]["free"]
+                + exchange_balances[base_asset]["locked"]
+            )
+
+        size_delta = abs(local_size - exchange_size)
+        if size_delta <= _EXCHANGE_POSITION_TOLERANCE:
+            checks.append({
+                "check": f"exchange_position_{symbol}",
+                "result": "ok",
+            })
+        else:
+            has_mismatch = True
+            checks.append({
+                "check": f"exchange_position_{symbol}",
+                "result": "warning",
+                "detail": (
+                    f"local_size={local_size} vs "
+                    f"exchange_size={exchange_size} (delta={size_delta})"
+                ),
+            })
+            logger.warning(
+                "reconcile_exchange: position size mismatch",
+                symbol=symbol,
+                local=str(local_size),
+                exchange=str(exchange_size),
+                delta=str(size_delta),
+            )
+
+    return {
+        "status": "mismatch" if has_mismatch else "ok",
+        "checks": checks,
+        "exchange_balances": {
+            asset: {k: str(v) for k, v in bals.items()}
+            for asset, bals in exchange_balances.items()
+        },
+    }
+
+
 # ── run_reconciliation (task 3.9) ────────────────────────────────────────────
 
 
@@ -1117,12 +1467,57 @@ def run_reconciliation(self) -> Dict[str, Any]:  # noqa: ANN001
                     "error": str(exc),
                 })
 
+    # ── Exchange reconciliation (task 4.8) ────────────────────────────
+    exchange_result: Dict[str, Any] | None = None
+    if settings.live_trading.enabled:
+        try:
+            from core.execution.binance import BinanceExecutor
+
+            # Build a temporary executor just for account queries
+            from core.portfolio import PortfolioManager as _PM
+
+            executor = BinanceExecutor.from_settings(
+                strategy_name="reconciliation",
+                portfolio_manager=_PM(initial_capital=Decimal("0")),
+            )
+            tracked_symbols = [s.symbol for s in settings.enabled_symbols]
+
+            with get_session() as session:
+                exchange_result = _reconcile_with_exchange(
+                    session, executor, tracked_symbols,
+                )
+
+            if exchange_result["status"] == "mismatch":
+                total_mismatches += 1
+                publisher.publish(
+                    EventChannel.SYSTEM,
+                    EventType.RECONCILIATION_MISMATCH,
+                    {
+                        "source": "exchange",
+                        "checks": exchange_result["checks"],
+                    },
+                )
+
+            logger.info(
+                "reconcile: exchange check done",
+                status=exchange_result["status"],
+            )
+        except Exception as exc:
+            logger.error(
+                "reconcile: exchange check failed",
+                error=str(exc),
+                exc_info=True,
+            )
+            exchange_result = {"status": "error", "error": str(exc)}
+
     summary: Dict[str, Any] = {
         "pairs_checked": pairs_checked,
         "mismatches": total_mismatches,
         "repairs": total_repairs,
         "details": details,
     }
+    if exchange_result is not None:
+        summary["exchange"] = exchange_result
 
     # Publish summary event
     if total_mismatches == 0:
@@ -1137,6 +1532,30 @@ def run_reconciliation(self) -> Dict[str, Any]:  # noqa: ANN001
             EventType.RECONCILIATION_MISMATCH,
             summary,
         )
+
+    # ── Alert on mismatches (task 4.9) ──────────────────────────────
+    if total_mismatches > 0 and settings.alerting.enabled:
+        try:
+            from core.alerting import get_alerter
+
+            alerter = get_alerter()
+            if alerter.enabled and settings.alerting.alert_on_reconciliation:
+                mismatch_checks = [
+                    c
+                    for d in details
+                    for c in d.get("checks", [])
+                    if c.get("result") in ("mismatch", "warning")
+                ]
+                detail_lines = [c.get("detail", c["check"]) for c in mismatch_checks[:5]]
+                if exchange_result and exchange_result.get("status") == "mismatch":
+                    for c in exchange_result.get("checks", []):
+                        if c.get("result") == "warning":
+                            detail_lines.append(c.get("detail", c["check"]))
+                alerter.alert_reconciliation_mismatch(
+                    details="\n".join(detail_lines) or f"{total_mismatches} mismatch(es) found",
+                )
+        except Exception:
+            pass  # fire-and-forget
 
     logger.info("run_reconciliation: complete", **summary, task_id=self.request.id)
     return summary

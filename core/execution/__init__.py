@@ -7,7 +7,15 @@ delegates accounting to PortfolioManager, and returns a filled
 ``Order`` wrapped in an ``ExecutionResult``.
 """
 
+from core.execution.binance import BinanceAPIError, BinanceExecutor
 from core.execution.paper import PaperExecutor
 from core.execution.retry import RetryConfig, RetryExhausted, with_retry
 
-__all__ = ["PaperExecutor", "RetryConfig", "RetryExhausted", "with_retry"]
+__all__ = [
+    "BinanceAPIError",
+    "BinanceExecutor",
+    "PaperExecutor",
+    "RetryConfig",
+    "RetryExhausted",
+    "with_retry",
+]

@@ -299,6 +299,13 @@ class PortfolioManager:
         sold_size = (position.size * sell_fraction).quantize(
             Decimal("0.00000001"), rounding=ROUND_HALF_UP
         )
+
+        if sold_size <= 0:
+            raise ValueError(
+                f"sell_fraction {sell_fraction} on size {position.size} "
+                f"quantizes to zero — nothing to sell"
+            )
+
         proceeds = sold_size * exit_price
         fee = self._apply_fee(proceeds)
         net_proceeds = proceeds - fee

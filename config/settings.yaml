@@ -121,6 +121,17 @@ ws_feed:
   ping_interval: 20          # seconds between pings
   ping_timeout: 10           # seconds to wait for pong
 
+# Alerting – Telegram notifications (Task 4.9)
+alerting:
+  enabled: false
+  bot_token_env: "TELEGRAM_BOT_TOKEN"    # env var name (not the token itself)
+  chat_id_env: "TELEGRAM_CHAT_ID"        # env var name (not the ID itself)
+  alert_on_fill: true                    # order fills (trade open/close)
+  alert_on_stop: true                    # stop-loss triggers
+  alert_on_kill_switch: true             # kill-switch activation
+  alert_on_reconciliation: true          # reconciliation mismatches
+  alert_on_error: false                  # task errors (noisy)
+
 # System
 system:
   timezone: "UTC"

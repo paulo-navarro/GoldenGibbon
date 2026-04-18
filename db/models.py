@@ -178,7 +178,11 @@ class OrderRecord(Base):
     slippage_percent: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 4), nullable=True)
     fee_usdt: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 8), nullable=True)
     exchange_order_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    
+    time_in_force: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    limit_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 8), nullable=True)
+    reject_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    exchange_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

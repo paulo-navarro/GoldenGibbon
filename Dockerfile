@@ -57,6 +57,8 @@ COPY core/ core/
 COPY config/ config/
 COPY db/ db/
 COPY api/ api/
+COPY alembic/ alembic/
+COPY alembic.ini .
 COPY main.py .
 
 RUN useradd --create-home appuser && \

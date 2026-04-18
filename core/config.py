@@ -327,6 +327,11 @@ class LiveTradingConfig(BaseModel):
     kill_switch_max_drawdown: float = Field(default=0.15, gt=0, le=1)
     reconcile_on_startup: bool = Field(default=True)
     reconciliation_interval_hours: int = Field(default=4, ge=1)
+    # Binance API credentials — env var names (keys themselves stay in .env)
+    api_key_env: str = Field(default="BINANCE_API_KEY")
+    api_secret_env: str = Field(default="BINANCE_API_SECRET")
+    # Use Binance testnet (testnet.binance.vision) — default True for safety
+    use_testnet: bool = Field(default=True)
 
 
 # ── WebSocket Feed Configuration ──────────────────────────────────────────────
@@ -340,6 +345,29 @@ class WebSocketFeedConfig(BaseModel):
     max_reconnect_delay: float = Field(default=60.0, gt=0, description="Maximum reconnect delay in seconds")
     ping_interval: int = Field(default=20, ge=5, description="WebSocket ping interval in seconds")
     ping_timeout: int = Field(default=10, ge=1, description="WebSocket ping timeout in seconds")
+
+
+# ── Alerting Configuration (task 4.9) ─────────────────────────────────────────
+
+class AlertingConfig(BaseModel):
+    """
+    Telegram alerting settings.
+
+    Sends notifications for important trading events (fills, stops,
+    kill-switch).  Credentials are read from environment variables
+    so they never appear in config files.
+    """
+
+    enabled: bool = Field(default=False)
+    # Env var names for Telegram Bot API credentials
+    bot_token_env: str = Field(default="TELEGRAM_BOT_TOKEN")
+    chat_id_env: str = Field(default="TELEGRAM_CHAT_ID")
+    # Which events trigger alerts
+    alert_on_fill: bool = Field(default=True, description="Alert on order fills (trade open/close)")
+    alert_on_stop: bool = Field(default=True, description="Alert on stop-loss triggers")
+    alert_on_kill_switch: bool = Field(default=True, description="Alert on kill-switch activation")
+    alert_on_reconciliation: bool = Field(default=True, description="Alert on reconciliation mismatches")
+    alert_on_error: bool = Field(default=False, description="Alert on task errors")
 
 
 # ── System Configuration ──────────────────────────────────────────────────────
@@ -379,6 +407,7 @@ class Settings(BaseModel):
     paper_trading: PaperTradingConfig
     live_trading: LiveTradingConfig
     ws_feed: WebSocketFeedConfig = Field(default_factory=WebSocketFeedConfig)
+    alerting: AlertingConfig = Field(default_factory=AlertingConfig)
     system: SystemConfig
     
     @classmethod

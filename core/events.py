@@ -107,6 +107,9 @@ class EventType(str, Enum):
     STARTUP = "startup"
     SHUTDOWN = "shutdown"
 
+    # ── Kill-switch (task 4.5) ──────────────────────────────────────
+    KILL_SWITCH_TRIGGERED = "kill_switch_triggered"
+
     # ── Reconciliation (task 3.9) ────────────────────────────────────
     RECONCILIATION_OK = "reconciliation_ok"
     RECONCILIATION_MISMATCH = "reconciliation_mismatch"

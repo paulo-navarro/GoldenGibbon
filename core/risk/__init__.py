@@ -594,10 +594,39 @@ class RiskEngine:
         """
         Best-effort inference of exit reason from indicators.
 
-        For now returns ``EMA_CROSS`` as a default for SELL_FULL.
-        The backtest runner / caller can override when more context
-        is available.
+        Checks indicator state to determine the most likely cause
+        for a SELL_FULL signal:
+
+        * EMA50 < EMA200 → ``EMA_CROSS``
+        * 2+ closes below EMA200 → ``CLOSE_BELOW_EMA200``
+        * ADX falling while price declining → ``MOMENTUM_FADE``
+        * Otherwise defaults to ``EMA_CROSS``.
         """
+        indicators = market_data.indicators
+        if not indicators:
+            return ExitReason.EMA_CROSS
+
+        # EMA cross: fast below slow
+        ema_fast = indicators.get("ema_fast") or indicators.get("ema_50")
+        ema_slow = indicators.get("ema_slow") or indicators.get("ema_200")
+        if ema_fast is not None and ema_slow is not None:
+            if len(ema_fast) > 0 and len(ema_slow) > 0:
+                if ema_fast.iloc[-1] < ema_slow.iloc[-1]:
+                    return ExitReason.EMA_CROSS
+
+        # Consecutive closes below EMA200
+        if ema_slow is not None and not market_data.candles.empty:
+            close = market_data.candles["close"]
+            if len(close) >= 2 and len(ema_slow) >= 2:
+                if close.iloc[-1] < ema_slow.iloc[-1] and close.iloc[-2] < ema_slow.iloc[-2]:
+                    return ExitReason.CLOSE_BELOW_EMA200
+
+        # Momentum fade: ADX declining
+        adx = indicators.get("adx")
+        if adx is not None and len(adx) >= 2:
+            if adx.iloc[-1] < adx.iloc[-2]:
+                return ExitReason.MOMENTUM_FADE
+
         return ExitReason.EMA_CROSS
 
     # ── Private: time-stop helpers ───────────────────────────────────
