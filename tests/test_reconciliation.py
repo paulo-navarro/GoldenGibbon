@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from db import get_session
-from db.models import PositionRecord, StrategyStateRecord, TradeRecord
+from db.models import PositionRecord, PortfolioSnapshot, StrategyStateRecord, TradeRecord
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -578,3 +578,184 @@ class TestStartupReconciliation:
                 mock_task.delay.assert_not_called()
         finally:
             settings.live_trading.reconcile_on_startup = original
+
+
+# ── Exchange reconciliation (task 4.8) ──────────────────────────────────────
+
+
+class TestReconcileWithExchange:
+    """Verify Check D (USDT balance) and Check E (position size) vs Binance."""
+
+    def _make_executor(self, balances: dict) -> MagicMock:
+        """Build a mock executor that returns given balances."""
+        executor = MagicMock()
+        executor.get_account_info.return_value = {
+            "balances": balances,
+            "can_trade": True,
+        }
+        return executor
+
+    def test_ok_when_balances_match(self, _seed_state):
+        """Local USDT + position matches exchange → ok."""
+        _seed_state(
+            state="position",
+            position=True,
+            position_size=Decimal("0.01"),
+            state_data={
+                "run_id": "test",
+                "usdt_balance": "5000",
+                "equity": "5500",
+                "total_pnl": "0",
+                "cooldown_remaining": 0,
+            },
+        )
+
+        executor = self._make_executor({
+            "USDT": {"free": Decimal("5000"), "locked": Decimal("0")},
+            "BTC": {"free": Decimal("0.01"), "locked": Decimal("0")},
+        })
+
+        from core.tasks import _reconcile_with_exchange
+
+        with get_session() as session:
+            result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+
+        assert result["status"] == "ok"
+        usdt_check = next(c for c in result["checks"] if c["check"] == "exchange_usdt")
+        assert usdt_check["result"] == "ok"
+        pos_check = next(c for c in result["checks"] if c["check"] == "exchange_position_BTCUSDT")
+        assert pos_check["result"] == "ok"
+
+    def test_usdt_mismatch_detected(self, _seed_state):
+        """Local USDT differs from exchange → warning."""
+        _seed_state(
+            state="flat",
+            state_data={
+                "run_id": "test",
+                "usdt_balance": "10000",
+                "equity": "10000",
+                "total_pnl": "0",
+                "cooldown_remaining": 0,
+            },
+        )
+
+        executor = self._make_executor({
+            "USDT": {"free": Decimal("8000"), "locked": Decimal("0")},
+        })
+
+        from core.tasks import _reconcile_with_exchange
+
+        with get_session() as session:
+            result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+
+        assert result["status"] == "mismatch"
+        usdt_check = next(c for c in result["checks"] if c["check"] == "exchange_usdt")
+        assert usdt_check["result"] == "warning"
+        assert "10000" in usdt_check["detail"]
+        assert "8000" in usdt_check["detail"]
+
+    def test_position_mismatch_detected(self, _seed_state):
+        """Local position size differs from exchange → warning."""
+        _seed_state(
+            state="position",
+            position=True,
+            position_size=Decimal("0.05"),
+        )
+
+        executor = self._make_executor({
+            "USDT": {"free": Decimal("10000"), "locked": Decimal("0")},
+            "BTC": {"free": Decimal("0.02"), "locked": Decimal("0")},
+        })
+
+        from core.tasks import _reconcile_with_exchange
+
+        with get_session() as session:
+            result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+
+        assert result["status"] == "mismatch"
+        pos_check = next(c for c in result["checks"] if c["check"] == "exchange_position_BTCUSDT")
+        assert pos_check["result"] == "warning"
+        assert "0.05" in pos_check["detail"]
+
+    def test_no_position_no_exchange_balance_ok(self, _seed_state):
+        """No local position + no exchange balance → ok."""
+        _seed_state(
+            state="flat",
+            state_data={
+                "run_id": "test",
+                "usdt_balance": "1000",
+                "equity": "1000",
+                "total_pnl": "0",
+                "cooldown_remaining": 0,
+            },
+        )
+
+        executor = self._make_executor({
+            "USDT": {"free": Decimal("1000"), "locked": Decimal("0")},
+        })
+
+        from core.tasks import _reconcile_with_exchange
+
+        with get_session() as session:
+            result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+
+        assert result["status"] == "ok"
+
+    def test_api_error_returns_error_status(self):
+        """Binance API failure → status=error, no crash."""
+        executor = MagicMock()
+        executor.get_account_info.side_effect = ConnectionError("timeout")
+
+        from core.tasks import _reconcile_with_exchange
+
+        with get_session() as session:
+            result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+
+        assert result["status"] == "error"
+        assert result["checks"][0]["result"] == "error"
+
+    def test_multiple_symbols_checked(self, _seed_state):
+        """All tracked symbols get a position check."""
+        _seed_state(state="flat")
+
+        executor = self._make_executor({
+            "USDT": {"free": Decimal("10000"), "locked": Decimal("0")},
+        })
+
+        from core.tasks import _reconcile_with_exchange
+
+        with get_session() as session:
+            result = _reconcile_with_exchange(
+                session, executor, ["BTCUSDT", "ETHUSDT"],
+            )
+
+        check_names = [c["check"] for c in result["checks"]]
+        assert "exchange_position_BTCUSDT" in check_names
+        assert "exchange_position_ETHUSDT" in check_names
+
+    def test_tolerance_within_threshold(self, _seed_state):
+        """Small differences within tolerance → ok."""
+        _seed_state(
+            state="position",
+            position=True,
+            position_size=Decimal("0.01000000"),
+            state_data={
+                "run_id": "test",
+                "usdt_balance": "5000.005",
+                "equity": "5500",
+                "total_pnl": "0",
+                "cooldown_remaining": 0,
+            },
+        )
+
+        executor = self._make_executor({
+            "USDT": {"free": Decimal("5000"), "locked": Decimal("0")},
+            "BTC": {"free": Decimal("0.01000050"), "locked": Decimal("0")},
+        })
+
+        from core.tasks import _reconcile_with_exchange
+
+        with get_session() as session:
+            result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+
+        assert result["status"] == "ok"

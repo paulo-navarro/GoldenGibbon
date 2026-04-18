@@ -136,16 +136,16 @@
 ## Phase 4 – Real Trading
 ### Tasks
 
-- [ ] **4.1** BinanceExecutor – real `buy()` / `sell()` with order lifecycle (PENDING → FILLED / REJECTED / CANCELLED)
-- [ ] **4.2** Order model – MARKET + LIMIT support, status tracking
+- [x] **4.1** BinanceExecutor – real `buy()` / `sell()` with order lifecycle (PENDING → FILLED / REJECTED / CANCELLED)
+- [x] **4.2** Order model – MARKET + LIMIT support, status tracking
 - [x] **4.3** Retry logic – exponential backoff on executor failures
 - [x] **4.4** Capital limits – max position size, max daily trades
-- [ ] **4.5** Max drawdown kill-switch – global emergency stop
+- [x] **4.5** Max drawdown kill-switch – global emergency stop
 - [x] **4.6** Trade size limits – per-trade and per-symbol caps
-- [ ] **4.7** Crash recovery – restore state from Postgres after unexpected restart
-- [ ] **4.8** Reconciliation job – compare local portfolio vs Binance account on startup
-- [ ] **4.9** Alerting – notifications on trades, stops hit, kill-switch activation
-- [ ] **4.10** Deployment – docker-compose production profile, env-based config, restart policies
+- [x] **4.7** Crash recovery – restore state from Postgres after unexpected restart
+- [x] **4.8** Reconciliation job – compare local portfolio vs Binance account on startup
+- [x] **4.9** Alerting – notifications on trades, stops hit, kill-switch activation
+- [x] **4.10** Deployment – docker-compose production profile, env-based config, restart policies
 
 ---
 

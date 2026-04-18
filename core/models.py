@@ -54,6 +54,13 @@ class OrderStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class TimeInForce(str, Enum):
+    """Time-in-force policies for limit orders."""
+    GTC = "GTC"  # Good 'Til Cancelled
+    IOC = "IOC"  # Immediate Or Cancel
+    FOK = "FOK"  # Fill Or Kill
+
+
 class ExitReason(str, Enum):
     """Reasons for trade exit."""
     EMA_CROSS = "ema_cross"                    # EMA50 < EMA200
@@ -365,6 +372,10 @@ class Order(BaseModel):
     slippage_percent: Optional[Decimal] = None
     fee_usdt: Optional[Decimal] = None
     exchange_order_id: Optional[str] = None  # Binance order ID
+    time_in_force: Optional[TimeInForce] = None  # GTC/IOC/FOK for limit orders
+    limit_price: Optional[Decimal] = None  # Explicit limit price (separate from fill price)
+    reject_reason: Optional[str] = None  # Why the exchange rejected/cancelled
+    exchange_status: Optional[str] = None  # Raw exchange status string for debugging
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: Optional[datetime] = None
     filled_at: Optional[datetime] = None
@@ -661,4 +672,5 @@ __all__ = [
     "BacktestMetrics",
     "BacktestResult",
     "PortfolioSnapshot",
+    "TimeInForce",
 ]

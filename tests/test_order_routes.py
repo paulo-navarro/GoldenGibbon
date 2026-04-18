@@ -233,7 +233,8 @@ class TestGetOrders:
         expected_keys = {
             "run_id", "symbol", "side", "order_type", "amount", "price",
             "status", "filled_amount", "avg_fill_price", "slippage_percent",
-            "fee_usdt", "exchange_order_id", "created_at", "updated_at",
+            "fee_usdt", "exchange_order_id", "time_in_force", "limit_price",
+            "reject_reason", "exchange_status", "created_at", "updated_at",
             "filled_at",
         }
         assert expected_keys == set(order.keys())
@@ -365,7 +366,8 @@ class TestGetOrderById:
         expected_keys = {
             "run_id", "symbol", "side", "order_type", "amount", "price",
             "status", "filled_amount", "avg_fill_price", "slippage_percent",
-            "fee_usdt", "exchange_order_id", "created_at", "updated_at",
+            "fee_usdt", "exchange_order_id", "time_in_force", "limit_price",
+            "reject_reason", "exchange_status", "created_at", "updated_at",
             "filled_at",
         }
         assert expected_keys == set(data.keys())
