@@ -156,9 +156,19 @@
 - [ ] **5.2** Multi-strategy support – run multiple strategies in parallel via Celery workers
 - [ ] **5.3** Strategy comparison – side-by-side backtest metrics across strategies
 - [ ] **5.4** Portfolio allocation engine – distribute capital across strategies (regime-based: Smart Hodler ↔ Mean Reversion)
+  - [ ] **5.4a** Allocation model – fixed weight distribution per strategy
+  - [ ] **5.4b** Regime detector – classify market as trending vs ranging
+  - [ ] **5.4c** Auto-rebalance – shift allocation based on detected regime
+  - [ ] **5.4d** Multi-strategy backtest – validate allocation with historical data
 - [ ] **5.5** Advanced dashboard features – strategy switcher, parameter tuning UI
+  - [ ] **5.5a** Strategy switcher – dropdown to select active strategy in dashboard
+  - [ ] **5.5b** Parameter tuning UI – form to edit strategy parameters
+  - [ ] **5.5c** Side-by-side comparison view – visual diff of strategy performance
 - [ ] **5.6** Parameter optimization – grid search / walk-forward analysis for strategy tuning
 - [ ] **5.7** Config migration – Hybrid loader (DB → ENV → YAML priority), strategy_configs table, admin UI CRUD
+  - [ ] **5.7a** strategy_configs DB table + SQLx migration
+  - [ ] **5.7b** Hybrid config loader – DB → ENV → YAML priority chain
+  - [ ] **5.7c** Admin UI CRUD – create/edit/delete strategy configs from dashboard
 
 ---
 
