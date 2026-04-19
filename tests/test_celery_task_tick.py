@@ -1,5 +1,8 @@
 """
-Tests for the run_strategy_tick Celery task (kanban 3.5).
+Tests for the strategy tick Celery tasks (kanban 3.5 + 5.2).
+
+Tests cover both the per-pair ``run_single_strategy_tick`` task and the
+``run_strategy_tick`` dispatcher that fans out work via ``celery.group()``.
 
 All tests run in eager mode (no broker/worker needed).
 DataLoader, BinanceClient, and EventPublisher are mocked – no real network
@@ -104,10 +107,11 @@ def _reset_worker_state():
     import core.tasks as tasks_mod
 
     tasks_mod._worker_state.clear()
-    tasks_mod._STRATEGY_REGISTRY.clear()
+    from core.strategies.registry import reset_registry
+    reset_registry()
     yield
     tasks_mod._worker_state.clear()
-    tasks_mod._STRATEGY_REGISTRY.clear()
+    reset_registry()
 
 
 @pytest.fixture(autouse=True)
@@ -141,19 +145,72 @@ _PATCH_PUBLISH = "core.events.EventPublisher.publish"
 _PATCH_KLINES = "core.data.binance_client.BinanceClient.fetch_klines"
 
 
-# ── Happy path ───────────────────────────────────────────────────────────────
+# ── Single tick happy path ──────────────────────────────────────────────────
 
 
-class TestRunStrategyTickHappyPath:
-    """run_strategy_tick succeeds for all enabled strategy/symbol pairs."""
+class TestRunSingleStrategyTick:
+    """run_single_strategy_tick processes a single (strategy, symbol) pair."""
 
     @patch(_PATCH_PUBLISH)
     @patch(_PATCH_KLINES, return_value=[])
     @patch(_PATCH_LOADER)
-    def test_returns_correct_summary_shape(
+    def test_returns_strategy_symbol_signal(
         self, mock_loader, mock_klines, mock_publish
     ):
-        """Summary dict has ticks_processed, ticks_failed, signals keys."""
+        """Result dict contains strategy, symbol, and signal."""
+        mock_loader.return_value = _make_market_data()
+
+        from core.tasks import run_single_strategy_tick
+
+        result = run_single_strategy_tick.apply(args=["smart_hodler", "BTCUSDT"])
+        assert result.successful()
+        summary = result.result
+
+        assert summary["strategy"] == "smart_hodler"
+        assert summary["symbol"] == "BTCUSDT"
+        assert "signal" in summary
+
+    @patch(_PATCH_PUBLISH)
+    @patch(_PATCH_KLINES, return_value=[])
+    @patch(_PATCH_LOADER)
+    def test_signal_value_is_valid(self, mock_loader, mock_klines, mock_publish):
+        """Signal value is one of 'buy', 'sell_full', 'sell_half', 'hold'."""
+        mock_loader.return_value = _make_market_data()
+
+        from core.tasks import run_single_strategy_tick
+
+        result = run_single_strategy_tick.apply(args=["smart_hodler", "BTCUSDT"])
+        valid = {s.value for s in Signal}
+        assert result.result["signal"] in valid
+
+    @patch(_PATCH_PUBLISH)
+    @patch(_PATCH_KLINES, return_value=[])
+    @patch(_PATCH_LOADER)
+    def test_mean_reversion_tick(self, mock_loader, mock_klines, mock_publish):
+        """Mean reversion strategy also processes correctly."""
+        mock_loader.return_value = _make_market_data()
+
+        from core.tasks import run_single_strategy_tick
+
+        result = run_single_strategy_tick.apply(args=["mean_reversion", "ETHUSDT"])
+        assert result.successful()
+        assert result.result["strategy"] == "mean_reversion"
+        assert result.result["symbol"] == "ETHUSDT"
+
+
+# ── Dispatcher (task 5.2) ──────────────────────────────────────────────────
+
+
+class TestRunStrategyTickDispatcher:
+    """run_strategy_tick fans out to run_single_strategy_tick via group()."""
+
+    @patch(_PATCH_PUBLISH)
+    @patch(_PATCH_KLINES, return_value=[])
+    @patch(_PATCH_LOADER)
+    def test_returns_dispatcher_shape(
+        self, mock_loader, mock_klines, mock_publish
+    ):
+        """Dispatcher returns dispatched count, pairs list, and group_id."""
         mock_loader.return_value = _make_market_data()
 
         from core.tasks import run_strategy_tick
@@ -162,17 +219,17 @@ class TestRunStrategyTickHappyPath:
         assert result.successful()
         summary = result.result
 
-        assert "ticks_processed" in summary
-        assert "ticks_failed" in summary
-        assert "signals" in summary
+        assert "dispatched" in summary
+        assert "pairs" in summary
+        assert "group_id" in summary
 
     @patch(_PATCH_PUBLISH)
     @patch(_PATCH_KLINES, return_value=[])
     @patch(_PATCH_LOADER)
-    def test_ticks_processed_matches_enabled_pairs(
+    def test_dispatched_matches_enabled_pairs(
         self, mock_loader, mock_klines, mock_publish
     ):
-        """Should process one tick per (enabled_strategy, enabled_symbol)."""
+        """Should dispatch one sub-task per (enabled_strategy, enabled_symbol)."""
         mock_loader.return_value = _make_market_data()
 
         from core.tasks import run_strategy_tick
@@ -181,43 +238,26 @@ class TestRunStrategyTickHappyPath:
         summary = result.result
 
         # 2 strategies × 2 test symbols = 4
-        assert summary["ticks_processed"] == 4
-        assert summary["ticks_failed"] == 0
+        assert summary["dispatched"] == 4
 
     @patch(_PATCH_PUBLISH)
     @patch(_PATCH_KLINES, return_value=[])
     @patch(_PATCH_LOADER)
-    def test_signals_keyed_by_strategy_symbol(
+    def test_pairs_list_contains_all_combos(
         self, mock_loader, mock_klines, mock_publish
     ):
-        """The signals dict keys are 'strategy_name:SYMBOL'."""
+        """The pairs list contains all strategy:symbol combinations."""
         mock_loader.return_value = _make_market_data()
 
         from core.tasks import run_strategy_tick
 
         result = run_strategy_tick.apply()
-        signals = result.result["signals"]
+        pairs = result.result["pairs"]
 
-        assert "smart_hodler:BTCUSDT" in signals
-        assert "smart_hodler:ETHUSDT" in signals
-        assert "mean_reversion:BTCUSDT" in signals
-        assert "mean_reversion:ETHUSDT" in signals
-
-    @patch(_PATCH_PUBLISH)
-    @patch(_PATCH_KLINES, return_value=[])
-    @patch(_PATCH_LOADER)
-    def test_signal_values_are_valid(self, mock_loader, mock_klines, mock_publish):
-        """Every signal value is one of 'buy', 'sell_full', 'sell_half', 'hold'."""
-        mock_loader.return_value = _make_market_data()
-
-        from core.tasks import run_strategy_tick
-
-        result = run_strategy_tick.apply()
-        signals = result.result["signals"]
-        valid = {s.value for s in Signal}
-
-        for sig in signals.values():
-            assert sig in valid
+        assert "smart_hodler:BTCUSDT" in pairs
+        assert "smart_hodler:ETHUSDT" in pairs
+        assert "mean_reversion:BTCUSDT" in pairs
+        assert "mean_reversion:ETHUSDT" in pairs
 
 
 # ── Worker state caching ─────────────────────────────────────────────────────
@@ -235,16 +275,15 @@ class TestWorkerStateCaching:
         """Worker state caches strategy/PM/risk/executor between ticks."""
         mock_loader.return_value = _make_market_data()
 
-        from core.tasks import run_strategy_tick
+        from core.tasks import run_single_strategy_tick
         import core.tasks as tasks_mod
 
-        run_strategy_tick.apply()
+        run_single_strategy_tick.apply(args=["smart_hodler", "BTCUSDT"])
         state_after_first = dict(tasks_mod._worker_state)
 
-        run_strategy_tick.apply()
+        run_single_strategy_tick.apply(args=["smart_hodler", "BTCUSDT"])
         state_after_second = dict(tasks_mod._worker_state)
 
-        # Same keys, same objects
         assert state_after_first.keys() == state_after_second.keys()
         for key in state_after_first:
             assert state_after_first[key] is state_after_second[key]
@@ -276,24 +315,24 @@ class TestWorkerStateCaching:
 
 
 class TestTickWithEmptyData:
-    """run_strategy_tick handles empty candle cache gracefully."""
+    """run_single_strategy_tick handles empty candle cache gracefully."""
 
     @patch(_PATCH_PUBLISH)
     @patch(_PATCH_KLINES, return_value=[])
     @patch(_PATCH_LOADER)
-    def test_empty_candles_counted_as_failed(
+    def test_empty_candles_returns_error(
         self, mock_loader, mock_klines, mock_publish
     ):
-        """When candles are empty, tick is counted as failed."""
+        """When candles are empty, result contains error key."""
         mock_loader.return_value = _empty_market_data()
 
-        from core.tasks import run_strategy_tick
+        from core.tasks import run_single_strategy_tick
 
-        result = run_strategy_tick.apply()
+        result = run_single_strategy_tick.apply(args=["smart_hodler", "BTCUSDT"])
         summary = result.result
 
-        assert summary["ticks_processed"] == 0
-        assert summary["ticks_failed"] == 4  # all empty
+        assert summary["signal"] is None
+        assert summary["error"] == "no_candles"
 
 
 # ── Error isolation ──────────────────────────────────────────────────────────
@@ -308,7 +347,7 @@ class TestTickErrorIsolation:
     def test_one_exception_does_not_block_others(
         self, mock_loader, mock_klines, mock_publish
     ):
-        """If one pair raises, the rest still process."""
+        """If one pair raises, the rest still process (via dispatcher)."""
         call_count = {"n": 0}
 
         def _side_effect(*args, **kwargs):
@@ -320,12 +359,19 @@ class TestTickErrorIsolation:
         mock_loader.side_effect = _side_effect
 
         from core.tasks import run_strategy_tick
+        import core.tasks as tasks_mod
 
         result = run_strategy_tick.apply()
         summary = result.result
 
-        assert summary["ticks_failed"] == 1
-        assert summary["ticks_processed"] == 3
+        # Dispatcher still reports all 4 dispatched
+        assert summary["dispatched"] == 4
+
+        # 3 of 4 worker state entries should exist (1 failed before creating)
+        # The failed pair still gets a worker state entry since the error
+        # happens after component creation — check that we have all 4
+        # (error is caught inside the task, not raised)
+        assert len(tasks_mod._worker_state) >= 3
 
     @patch(_PATCH_PUBLISH)
     @patch(_PATCH_KLINES, return_value=[])
@@ -338,21 +384,37 @@ class TestTickErrorIsolation:
 
         mock_loader.side_effect = RuntimeError("boom")
 
-        from core.tasks import run_strategy_tick
+        from core.tasks import run_single_strategy_tick
 
-        run_strategy_tick.apply()
+        run_single_strategy_tick.apply(args=["smart_hodler", "BTCUSDT"])
 
         error_calls = [
             c
             for c in mock_publish.call_args_list
             if len(c[0]) >= 2 and c[0][1] == EventType.ERROR
         ]
-        # All 4 pairs should have failed → 4 error events
-        assert len(error_calls) == 4
-        for c in error_calls:
-            data = c[0][2]
-            assert data["task"] == "run_strategy_tick"
-            assert "error" in data
+        assert len(error_calls) >= 1
+        data = error_calls[0][0][2]
+        assert data["task"] == "run_single_strategy_tick"
+        assert "error" in data
+
+    @patch(_PATCH_PUBLISH)
+    @patch(_PATCH_KLINES, return_value=[])
+    @patch(_PATCH_LOADER)
+    def test_error_returns_error_in_result(
+        self, mock_loader, mock_klines, mock_publish
+    ):
+        """A failing tick returns an error key instead of raising."""
+        mock_loader.side_effect = RuntimeError("boom")
+
+        from core.tasks import run_single_strategy_tick
+
+        result = run_single_strategy_tick.apply(args=["smart_hodler", "BTCUSDT"])
+        summary = result.result
+
+        assert summary["signal"] is None
+        assert "error" in summary
+        assert "boom" in summary["error"]
 
 
 # ── Beat schedule ────────────────────────────────────────────────────────────

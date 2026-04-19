@@ -40,10 +40,11 @@ def _reset_worker_state():
     import core.tasks as tasks_mod
 
     tasks_mod._worker_state.clear()
-    tasks_mod._STRATEGY_REGISTRY.clear()
+    from core.strategies.registry import reset_registry
+    reset_registry()
     yield
     tasks_mod._worker_state.clear()
-    tasks_mod._STRATEGY_REGISTRY.clear()
+    reset_registry()
 
 
 @pytest.fixture(autouse=True)

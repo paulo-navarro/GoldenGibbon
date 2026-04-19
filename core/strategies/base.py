@@ -37,6 +37,7 @@ class Strategy(ABC):
         self.config = config
         self._state: StrategyState = StrategyState.FLAT
         self._conditions: StrategyConditions = StrategyConditions()
+        self._cooldown_remaining: int = 0
 
     # ── Abstract interface ───────────────────────────────────────────────
 
@@ -139,6 +140,35 @@ class Strategy(ABC):
             )
 
         return signal
+
+    def to_state_dict(self) -> Dict[str, Any]:
+        """
+        Serialize strategy-specific state for persistence.
+
+        Subclasses should override and include their own fields::
+
+            def to_state_dict(self):
+                d = super().to_state_dict()
+                d["my_counter"] = self._my_counter
+                return d
+        """
+        return {
+            "state": self._state.value,
+            "cooldown_remaining": getattr(self, "_cooldown_remaining", 0),
+        }
+
+    def from_state_dict(self, data: Dict[str, Any]) -> None:
+        """
+        Restore strategy-specific state from a persisted dict.
+
+        Subclasses should override and restore their own fields::
+
+            def from_state_dict(self, data):
+                super().from_state_dict(data)
+                self._my_counter = data.get("my_counter", 0)
+        """
+        self._state = StrategyState(data.get("state", "flat"))
+        self._cooldown_remaining = data.get("cooldown_remaining", 0)
 
     def reset(self) -> None:
         """

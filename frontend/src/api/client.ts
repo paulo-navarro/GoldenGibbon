@@ -51,3 +51,55 @@ export async function fetchApi<T>(
 
   return (await res.json()) as T;
 }
+
+/**
+ * Send a POST request with a JSON body.
+ */
+export async function postApi<T>(
+  url: string,
+  body: Record<string, unknown>,
+): Promise<T> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    let data: unknown;
+    try {
+      data = await res.json();
+    } catch {
+      data = await res.text();
+    }
+    throw new ApiError(res.status, res.statusText, data);
+  }
+
+  return (await res.json()) as T;
+}
+
+/**
+ * Send a PATCH request with a JSON body.
+ */
+export async function patchApi<T>(
+  url: string,
+  body: Record<string, unknown>,
+): Promise<T> {
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    let data: unknown;
+    try {
+      data = await res.json();
+    } catch {
+      data = await res.text();
+    }
+    throw new ApiError(res.status, res.statusText, data);
+  }
+
+  return (await res.json()) as T;
+}

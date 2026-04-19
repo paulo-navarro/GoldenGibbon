@@ -187,9 +187,9 @@ class TestTaskStubs:
                 assert result.successful()
                 summary = result.result
                 assert isinstance(summary, dict)
-                assert "ticks_processed" in summary
-                assert "ticks_failed" in summary
-                assert "signals" in summary
+                assert "dispatched" in summary
+                assert "pairs" in summary
+                assert "group_id" in summary
         finally:
             settings.paper_trading.enabled = original
 

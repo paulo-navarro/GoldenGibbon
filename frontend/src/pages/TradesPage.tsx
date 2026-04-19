@@ -179,6 +179,11 @@ function TradeStatsCards({ filters }: { filters: Filters }) {
 }
 
 function TradeFilters({ filters, onChange }: { filters: Filters; onChange: (f: Filters) => void }) {
+  const trades = useTradesStore((s) => s.trades);
+
+  const symbols = useMemo(() => [...new Set(trades.map((t) => t.symbol))].sort(), [trades]);
+  const strategies = useMemo(() => [...new Set(trades.map((t) => t.strategy))].sort(), [trades]);
+
   return (
     <Card sx={{ p: 2 }}>
       <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -188,8 +193,9 @@ function TradeFilters({ filters, onChange }: { filters: Filters; onChange: (f: F
           sx={{ minWidth: 140 }}
         >
           <MenuItem value="">All</MenuItem>
-          <MenuItem value="BTCUSDT">BTCUSDT</MenuItem>
-          <MenuItem value="ETHUSDT">ETHUSDT</MenuItem>
+          {symbols.map((s) => (
+            <MenuItem key={s} value={s}>{s}</MenuItem>
+          ))}
         </TextField>
         <TextField
           select size="small" label="Strategy" value={filters.strategy}
@@ -197,8 +203,9 @@ function TradeFilters({ filters, onChange }: { filters: Filters; onChange: (f: F
           sx={{ minWidth: 160 }}
         >
           <MenuItem value="">All</MenuItem>
-          <MenuItem value="smart_hodler">Smart Hodler</MenuItem>
-          <MenuItem value="mean_reversion">Mean Reversion</MenuItem>
+          {strategies.map((s) => (
+            <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>
+          ))}
         </TextField>
         <TextField
           select size="small" label="Exit Reason" value={filters.exit_reason}

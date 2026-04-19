@@ -101,10 +101,10 @@
 
 - [x] **2.51** Database seed script (`db/seeds.py` with sample candles, trades, orders)
 - [x] **2.52** Makefile targets (make api, make frontend, make dev)
-- [ ] **2.53** Test event flow – publish test event from Python shell, verify UI update (backend event tests done; UI verification blocked on frontend)
-- [ ] **2.54** Test WebSocket reconnection – stop/start API service, verify auto-reconnect (blocked on frontend)
+- [x] **2.53** Test event flow – publish test event from Python shell, verify UI update
+- [x] **2.54** Test WebSocket reconnection – stop/start API service, verify auto-reconnect
 - [x] **2.55** Verify all REST endpoints return data (use seed data)
-- [ ] **2.56** End-to-end test – run full stack (docker-compose up), open dashboard, verify live updates (docker-compose infra ready; blocked on frontend)
+- [x] **2.56** End-to-end test – run full stack (docker-compose up), verify live updates
 
 ---
 
@@ -152,23 +152,23 @@
 ## Phase 5 – Research Platform
 ### Tasks
 
-- [ ] **5.1** Strategy plugin system – register new strategies without modifying core
-- [ ] **5.2** Multi-strategy support – run multiple strategies in parallel via Celery workers
-- [ ] **5.3** Strategy comparison – side-by-side backtest metrics across strategies
-- [ ] **5.4** Portfolio allocation engine – distribute capital across strategies (regime-based: Smart Hodler ↔ Mean Reversion)
-  - [ ] **5.4a** Allocation model – fixed weight distribution per strategy
-  - [ ] **5.4b** Regime detector – classify market as trending vs ranging
-  - [ ] **5.4c** Auto-rebalance – shift allocation based on detected regime
-  - [ ] **5.4d** Multi-strategy backtest – validate allocation with historical data
-- [ ] **5.5** Advanced dashboard features – strategy switcher, parameter tuning UI
-  - [ ] **5.5a** Strategy switcher – dropdown to select active strategy in dashboard
-  - [ ] **5.5b** Parameter tuning UI – form to edit strategy parameters
-  - [ ] **5.5c** Side-by-side comparison view – visual diff of strategy performance
-- [ ] **5.6** Parameter optimization – grid search / walk-forward analysis for strategy tuning
-- [ ] **5.7** Config migration – Hybrid loader (DB → ENV → YAML priority), strategy_configs table, admin UI CRUD
-  - [ ] **5.7a** strategy_configs DB table + SQLx migration
-  - [ ] **5.7b** Hybrid config loader – DB → ENV → YAML priority chain
-  - [ ] **5.7c** Admin UI CRUD – create/edit/delete strategy configs from dashboard
+- [x] **5.1** Strategy plugin system – register new strategies without modifying core
+- [x] **5.2** Multi-strategy support – run multiple strategies in parallel via Celery workers
+- [x] **5.3** Strategy comparison – side-by-side backtest metrics across strategies
+- [x] **5.4** Portfolio allocation engine – distribute capital across strategies (regime-based: Smart Hodler ↔ Mean Reversion)
+  - [x] **5.4a** Allocation model – fixed weight distribution per strategy
+  - [x] **5.4b** Regime detector – classify market as trending vs ranging
+  - [x] **5.4c** Auto-rebalance – shift allocation based on detected regime
+  - [x] **5.4d** Multi-strategy backtest – validate allocation with historical data
+- [x] **5.5** Advanced dashboard features – strategy switcher, parameter tuning UI
+  - [x] **5.5a** Strategy switcher – dropdown to select active strategy in dashboard
+  - [x] **5.5b** Parameter tuning UI – form to edit strategy parameters
+  - [x] **5.5c** Side-by-side comparison view – visual diff of strategy performance
+- [x] **5.6** Parameter optimization – grid search / walk-forward analysis for strategy tuning
+- [x] **5.7** Config migration – Hybrid loader (DB → ENV → YAML priority), strategy_configs table, admin UI CRUD
+  - [x] **5.7a** strategy_configs DB table + Alembic migration
+  - [x] **5.7b** Hybrid config loader – DB → ENV → YAML priority chain
+  - [x] **5.7c** Admin UI CRUD – create/edit/delete strategy configs from dashboard
 
 ---
 

@@ -3,9 +3,13 @@
 // checklist, scaled-entry progress, and cooldown timer.
 // Refactored: all per-strategy information grouped into one card each.
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import Accordion from '@mui/material/Accordion';
+import AccordionDetails from '@mui/material/AccordionDetails';
+import AccordionSummary from '@mui/material/AccordionSummary';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
 import Chip from '@mui/material/Chip';
@@ -17,12 +21,17 @@ import ListItem from '@mui/material/ListItem';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
 import Skeleton from '@mui/material/Skeleton';
+import Switch from '@mui/material/Switch';
+import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import TimerIcon from '@mui/icons-material/Timer';
+import TuneIcon from '@mui/icons-material/Tune';
 
-import { useStrategyState, useStrategySignals, usePortfolio } from '../api';
+import { useStrategyState, useStrategySignals, usePortfolio, useStrategyConfig, useUpdateStrategyConfig, useResetStrategyConfig } from '../api';
+import type { FieldMeta } from '../api';
 import { useStrategyStore } from '../stores/strategyStore';
 import type { Signal, StrategyState } from '../types/enums';
 
@@ -217,8 +226,196 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
             </Box>
           </>
         )}
+        {/* ── Parameter Tuning (task 5.5b) ───────────────────────── */}
+        <ParameterTuning strategyName={st.strategy} />
       </CardContent>
     </Card>
+  );
+}
+
+// ── Parameter Tuning (task 5.5b) ─────────────────────────────────────────────
+
+const SOURCE_COLORS: Record<string, 'info' | 'warning' | 'default'> = {
+  db: 'info',
+  env: 'warning',
+  yaml: 'default',
+};
+
+function ParameterTuning({ strategyName }: { strategyName: string }) {
+  const { data, isLoading, error } = useStrategyConfig(strategyName);
+  const { update, isPending, isError, isSuccess } = useUpdateStrategyConfig(strategyName);
+  const resetMutation = useResetStrategyConfig(strategyName);
+
+  const [edits, setEdits] = useState<Record<string, unknown>>({});
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isSuccess) {
+      setEdits({});
+      setStatusMsg('Saved to database');
+      const t = setTimeout(() => setStatusMsg(null), 2000);
+      return () => clearTimeout(t);
+    }
+    if (isError) {
+      setStatusMsg('Failed to save');
+      const t = setTimeout(() => setStatusMsg(null), 3000);
+      return () => clearTimeout(t);
+    }
+  }, [isSuccess, isError]);
+
+  useEffect(() => {
+    if (resetMutation.isSuccess) {
+      setEdits({});
+      setStatusMsg('Reset to YAML defaults');
+      const t = setTimeout(() => setStatusMsg(null), 2000);
+      return () => clearTimeout(t);
+    }
+  }, [resetMutation.isSuccess]);
+
+  const grouped = useMemo(() => {
+    if (!data) return {};
+    const groups: Record<string, FieldMeta[]> = {};
+    for (const field of data.fields) {
+      const g = field.group;
+      if (!groups[g]) groups[g] = [];
+      groups[g].push(field);
+    }
+    return groups;
+  }, [data]);
+
+  const handleChange = useCallback((name: string, value: unknown) => {
+    setEdits((prev) => ({ ...prev, [name]: value }));
+  }, []);
+
+  const handleApply = useCallback(() => {
+    if (Object.keys(edits).length === 0) return;
+    update(edits);
+  }, [edits, update]);
+
+  const handleReset = useCallback(() => {
+    if (!data) return;
+    const defaults: Record<string, unknown> = {};
+    for (const field of data.fields) {
+      if (field.default != null) {
+        defaults[field.name] = field.default;
+      }
+    }
+    update(defaults);
+  }, [data, update]);
+
+  const hasEdits = Object.keys(edits).length > 0;
+
+  if (isLoading) return <Skeleton variant="rounded" height={60} />;
+  if (error) return <Alert severity="error" variant="outlined" sx={{ mt: 1 }}>Failed to load config</Alert>;
+  if (!data) return null;
+
+  return (
+    <Accordion sx={{ mt: 1 }}>
+      <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <TuneIcon fontSize="small" color="primary" />
+          <Typography variant="body2">Parameters</Typography>
+        </Box>
+      </AccordionSummary>
+      <AccordionDetails>
+        {Object.entries(grouped).map(([group, fields]) => (
+          <Box key={group} sx={{ mb: 2 }}>
+            <Typography variant="overline" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
+              {group}
+            </Typography>
+            <Grid container spacing={1.5}>
+              {fields.map((field) => {
+                const currentValue = field.name in edits ? edits[field.name] : field.value;
+
+                if (field.type === 'bool') {
+                  return (
+                    <Grid size={{ xs: 12, sm: 6, md: 4 }} key={field.name}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                          <Typography variant="body2">{labelFromKey(field.name)}</Typography>
+                          {field.source !== 'yaml' && (
+                            <Chip label={field.source} size="small" color={SOURCE_COLORS[field.source]} sx={{ fontSize: 9, height: 16 }} />
+                          )}
+                        </Box>
+                        <Switch
+                          size="small"
+                          checked={!!currentValue}
+                          onChange={(_, checked) => handleChange(field.name, checked)}
+                        />
+                      </Box>
+                    </Grid>
+                  );
+                }
+
+                if (field.type === 'list') return null;
+
+                return (
+                  <Grid size={{ xs: 6, sm: 4, md: 3 }} key={field.name}>
+                    <TextField
+                      fullWidth
+                      size="small"
+                      label={`${labelFromKey(field.name)}${field.source !== 'yaml' ? ` [${field.source}]` : ''}`}
+                      type={field.type === 'int' || field.type === 'float' ? 'number' : 'text'}
+                      value={currentValue ?? ''}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        if (field.type === 'int') handleChange(field.name, raw === '' ? '' : parseInt(raw, 10));
+                        else if (field.type === 'float') handleChange(field.name, raw === '' ? '' : parseFloat(raw));
+                        else handleChange(field.name, raw);
+                      }}
+                      slotProps={{
+                        htmlInput: {
+                          min: field.min,
+                          max: field.max,
+                          step: field.type === 'float' ? 0.01 : 1,
+                        },
+                      }}
+                      helperText={field.description}
+                    />
+                  </Grid>
+                );
+              })}
+            </Grid>
+          </Box>
+        ))}
+
+        <Box sx={{ display: 'flex', gap: 1, mt: 2, alignItems: 'center' }}>
+          <Button
+            variant="contained"
+            size="small"
+            onClick={handleApply}
+            disabled={!hasEdits || isPending}
+          >
+            {isPending ? 'Applying...' : 'Apply'}
+          </Button>
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={handleReset}
+            disabled={isPending || resetMutation.isPending}
+          >
+            Reset to Defaults
+          </Button>
+          <Button
+            variant="outlined"
+            size="small"
+            color="warning"
+            onClick={() => resetMutation.mutate()}
+            disabled={isPending || resetMutation.isPending}
+          >
+            Reset to YAML
+          </Button>
+          {statusMsg && (
+            <Chip
+              label={statusMsg}
+              size="small"
+              color={statusMsg === 'Applied' ? 'success' : 'error'}
+              variant="outlined"
+            />
+          )}
+        </Box>
+      </AccordionDetails>
+    </Accordion>
   );
 }
 
