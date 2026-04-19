@@ -1,8 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import ConnectionStatus from '../components/ConnectionStatus';
 import PriceTicker from '../components/PriceTicker';
 import { useWebSocket } from '../hooks';
+import type { Event } from '../types/events';
+import { useMarketStore } from '../stores/marketStore';
+import { useStrategyStore } from '../stores/strategyStore';
+import { usePortfolioStore } from '../stores/portfolioStore';
+import { useTradesStore } from '../stores/tradesStore';
+import { useOrdersStore } from '../stores/ordersStore';
+import { useSystemStore } from '../stores/systemStore';
 import AppBar from '@mui/material/AppBar';
 import Box from '@mui/material/Box';
 import Divider from '@mui/material/Divider';
@@ -49,7 +56,27 @@ function utcClock(): string {
 export default function AppLayout() {
   const { pathname } = useLocation();
   const [clock, setClock] = useState(utcClock);
-  const { status: wsStatus, isHealthy: wsHealthy } = useWebSocket();
+
+  const marketHandleEvent = useMarketStore((s) => s.handleEvent);
+  const strategyHandleEvent = useStrategyStore((s) => s.handleEvent);
+  const portfolioHandleEvent = usePortfolioStore((s) => s.handleEvent);
+  const tradesHandleEvent = useTradesStore((s) => s.handleEvent);
+  const ordersHandleEvent = useOrdersStore((s) => s.handleEvent);
+  const systemHandleEvent = useSystemStore((s) => s.handleEvent);
+
+  const onEvent = useCallback(
+    (event: Event) => {
+      marketHandleEvent(event);
+      strategyHandleEvent(event);
+      portfolioHandleEvent(event);
+      tradesHandleEvent(event);
+      ordersHandleEvent(event);
+      systemHandleEvent(event);
+    },
+    [marketHandleEvent, strategyHandleEvent, portfolioHandleEvent, tradesHandleEvent, ordersHandleEvent, systemHandleEvent],
+  );
+
+  const { status: wsStatus, isHealthy: wsHealthy } = useWebSocket({ onEvent });
 
   useEffect(() => {
     const id = setInterval(() => setClock(utcClock()), 1_000);

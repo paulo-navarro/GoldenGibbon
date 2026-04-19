@@ -80,6 +80,40 @@ pull-historical-data: ## Pull historical candles (DAYS=730)
 	docker compose run --rm -e PYTHONPATH=/app app \
 		python scripts/pull_historical_data.py --days $(or $(DAYS),730)
 
+test-event-flow: ## Test event flow end-to-end: Python → Redis → WebSocket
+	docker compose run --rm -e PYTHONPATH=/app app \
+		python scripts/test_event_flow.py --ws-url ws://api:8000/ws
+
+test-ws-reconnect: ## Test WebSocket auto-reconnection after API restart (runs on host)
+	@test -d .venv-test || python3 -m venv .venv-test && .venv-test/bin/pip install -q websocket-client
+	.venv-test/bin/python3 scripts/test_ws_reconnect.py
+
+test-e2e: ## Full stack end-to-end test (runs on host, expects 'make dev' already up)
+	@test -d .venv-test || python3 -m venv .venv-test && .venv-test/bin/pip install -q websocket-client
+	.venv-test/bin/python3 scripts/test_e2e_stack.py
+
+test-all: ## Run all Docker tests (unit + smoke — no stack required)
+	@echo "═══ pytest (unit/integration) ═══"
+	docker compose run --rm app python -m pytest tests/ -v $(TEST_ARGS)
+	@echo ""
+	@echo "═══ smoke: indicators ═══"
+	docker compose run --rm -e PYTHONPATH=/app app python scripts/test_indicators.py
+	@echo ""
+	@echo "═══ smoke: data loader ═══"
+	docker compose run --rm -e PYTHONPATH=/app app python scripts/test_data_loader.py
+	@echo ""
+	@echo "═══ smoke: event flow ═══"
+	docker compose run --rm -e PYTHONPATH=/app app python scripts/test_event_flow.py --ws-url ws://api:8000/ws
+
+test-full: test-all ## Run ALL tests including e2e (requires 'make dev' running)
+	@echo ""
+	@echo "═══ e2e: WebSocket reconnection ═══"
+	@test -d .venv-test || python3 -m venv .venv-test && .venv-test/bin/pip install -q websocket-client
+	.venv-test/bin/python3 scripts/test_ws_reconnect.py
+	@echo ""
+	@echo "═══ e2e: full stack ═══"
+	.venv-test/bin/python3 scripts/test_e2e_stack.py
+
 # ── Deploy to VPS ─────────────────────────────────
 
 VPS      ?= root@76.13.172.71

@@ -35,6 +35,7 @@ dev = [
     "ruff>=0.3,<1",
     "mypy>=1.8,<2",
     "ipython>=8.0,<9",
+    "websocket-client>=1.7,<2",
 ]
 
 [build-system]
