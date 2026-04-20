@@ -190,6 +190,24 @@
 
 ---
 
+## Phase 7 – Symbol Management (Add / Remove Trading Pairs)
+### Tasks
+
+- [ ] **7.1** DB table `symbol_configs` – Alembic migration with columns: `id`, `symbol`, `exchange`, `timeframes` (JSONB), `enabled`, `description`, `created_at`, `updated_at`. Unique index on `symbol` `infra`
+- [ ] **7.2** Hybrid symbol loader – extend `core/config.py` to merge DB symbols on top of YAML (DB wins on conflict, union of both sources). Add `save_symbol()` and `delete_symbol()` helpers `core`
+- [ ] **7.3** REST endpoint `GET /api/config/symbols` – return all symbols (enabled + disabled) with source label (`yaml` / `db`) `api`
+- [ ] **7.4** REST endpoint `POST /api/config/symbols` – add a new pair. Validate symbol exists on Binance (`GET /api/v3/exchangeInfo`), reject duplicates `api`
+- [ ] **7.5** REST endpoint `DELETE /api/config/symbols/{symbol}` – remove a pair. Block if open positions exist for that symbol, return error with position details `api`
+- [ ] **7.6** REST endpoint `PATCH /api/config/symbols/{symbol}` – toggle `enabled` flag or update `timeframes` / `description` `api`
+- [ ] **7.7** Frontend – Symbols management page (`pages/SymbolsPage.tsx`) with table listing current pairs (symbol, exchange, timeframes, enabled status, source badge) `ui`
+- [ ] **7.8** Frontend – "Add Symbol" dialog with symbol input (autocomplete optional), exchange selector, timeframe checkboxes, validation feedback `ui`
+- [ ] **7.9** Frontend – Delete button per row with confirmation dialog showing open-position warning when applicable `ui`
+- [ ] **7.10** Frontend – Enable/disable toggle per row (calls PATCH endpoint) `ui`
+- [ ] **7.11** Config reload – after add/remove/toggle, call `get_settings(reload=True)` so Celery workers pick up changes on next tick `core`
+- [ ] **7.12** Tests – unit tests for hybrid symbol loader, endpoint validation (duplicate, invalid symbol, open-position block), toggle behavior `test`
+
+---
+
 ## Labels
 
 | `core` | Part of the core pipeline (data → indicators → strategy → risk → execution → portfolio) |
