@@ -208,6 +208,13 @@
 
 ---
 
+## Errors
+
+- [x] `.venv-test/` was accidentally committed to `main` — remove it from tracking and add to `.gitignore`
+- [x] Deploy pipeline improvements — preflight checks, auto-migration, scripts in prod image, app-prod restart fix
+
+---
+
 ## Labels
 
 | `core` | Part of the core pipeline (data → indicators → strategy → risk → execution → portfolio) |

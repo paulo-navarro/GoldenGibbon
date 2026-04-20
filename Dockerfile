@@ -57,6 +57,7 @@ COPY core/ core/
 COPY config/ config/
 COPY db/ db/
 COPY api/ api/
+COPY scripts/ scripts/
 COPY alembic/ alembic/
 COPY alembic.ini .
 COPY main.py .

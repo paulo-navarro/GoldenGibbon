@@ -17,20 +17,22 @@ services:
     command: python main.py
 
   # ── App (prod) ─────────────────────────────────
+  # Utility container for one-off commands (migrations, scripts).
+  # Not a long-running service — no restart policy.
   app-prod:
     build:
       context: .
       target: prod
-    container_name: trade-app
+    container_name: trade-app-prod
     env_file: .env
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    restart: unless-stopped
     profiles: [prod]
-    command: python main.py
+    restart: "no"
+    command: ["echo", "ready — use 'docker compose run --rm app-prod <cmd>'"]
 
   # ── API (dev) ──────────────────────────────────
   api:

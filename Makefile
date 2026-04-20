@@ -126,14 +126,27 @@ PROD_IMAGES = \
 	goldengibbon-ws-feed-prod \
 	goldengibbon-frontend-prod
 
-deploy-build: ## Build all prod images locally
+deploy-preflight: ## Pre-deploy checks (TS type check + pytest)
+	@echo "═══ TypeScript type check ═══"
+	cd frontend && npx tsc --noEmit
+	@echo ""
+	@echo "═══ pytest ═══"
+	docker compose run --rm app python -m pytest tests/ -q
+	@echo ""
+	@echo "✓ Preflight passed"
+
+deploy-build: deploy-preflight ## Preflight + build all prod images locally
 	docker compose --profile prod build
 
-deploy-ship: deploy-build ## Build + stream images to VPS
+deploy-ship: deploy-build ## Preflight + build + stream images to VPS
 	@echo "Streaming $$(echo $(PROD_IMAGES) | wc -w) images to $(VPS)..."
 	docker save $(PROD_IMAGES) | gzip | ssh $(VPS) 'gunzip | docker load'
 
-deploy-vps: deploy-ship ## Build, ship, restart prod stack on VPS
-	@echo "Pulling main + restarting prod stack on $(VPS)..."
-	ssh $(VPS) 'cd $(VPS_PATH) && git pull origin main && docker compose --profile prod up -d'
+deploy-vps: deploy-ship ## Full deploy: preflight, build, ship, migrate, restart
+	@echo "Pulling main on $(VPS)..."
+	ssh $(VPS) 'cd $(VPS_PATH) && git pull origin main'
+	@echo "Running migrations..."
+	ssh $(VPS) 'cd $(VPS_PATH) && docker compose run --rm app-prod alembic upgrade head'
+	@echo "Restarting prod stack..."
+	ssh $(VPS) 'cd $(VPS_PATH) && docker compose --profile prod up -d'
 	@echo "Deploy complete. Check: ssh $(VPS) 'docker ps --filter name=trade-'"
