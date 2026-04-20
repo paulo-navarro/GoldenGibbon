@@ -483,7 +483,7 @@ function ComparisonEquityChart({ curves }: { curves: Record<string, Array<{ time
           <Tooltip
             contentStyle={CHART_TOOLTIP_STYLE}
             labelStyle={{ color: '#9e9e9e' }}
-            formatter={(v: number | undefined, name: string) => [`$${(v ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, name]}
+            formatter={((v: number | undefined, name: string | undefined) => [`$${(v ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, name ?? '']) as never}
           />
           <Legend wrapperStyle={{ fontSize: 12 }} />
           {seriesKeys.map((key, i) => (
