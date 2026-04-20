@@ -21,7 +21,7 @@ import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
-import Divider from '@mui/material/Divider';
+
 import Tabs from '@mui/material/Tabs';
 import Tab from '@mui/material/Tab';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
@@ -483,7 +483,7 @@ function ComparisonEquityChart({ curves }: { curves: Record<string, Array<{ time
           <Tooltip
             contentStyle={CHART_TOOLTIP_STYLE}
             labelStyle={{ color: '#9e9e9e' }}
-            formatter={(v: number, name: string) => [`$${v.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, name]}
+            formatter={(v: number | undefined, name: string) => [`$${(v ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, name]}
           />
           <Legend wrapperStyle={{ fontSize: 12 }} />
           {seriesKeys.map((key, i) => (
