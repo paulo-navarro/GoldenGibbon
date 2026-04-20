@@ -48,12 +48,10 @@ def _make_pm(capital: str = "10000") -> PortfolioManager:
 
 
 def _make_strategy():
-    """Return a lightweight mock strategy with state attributes."""
-    s = MagicMock()
-    s._state = StrategyState.FLAT
-    s._cooldown_remaining = 0
-    s._consecutive_below_ema200 = 0
-    return s
+    """Return a real SmartHodler instance for state recovery tests."""
+    from core.strategies.smart_hodler import SmartHodler
+
+    return SmartHodler({"cooldown_candles": 16})
 
 
 def _make_risk_engine():

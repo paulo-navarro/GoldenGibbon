@@ -2,12 +2,14 @@
 // Task 2.38 – Overview page: price tickers, portfolio summary, mini equity
 // curve, open positions, recent signals, and system status.
 
+import { useMemo, useState } from 'react';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
 import Chip from '@mui/material/Chip';
 import Grid from '@mui/material/Grid';
+import MenuItem from '@mui/material/MenuItem';
 import Skeleton from '@mui/material/Skeleton';
 import Table from '@mui/material/Table';
 import TableBody from '@mui/material/TableBody';
@@ -15,6 +17,7 @@ import TableCell from '@mui/material/TableCell';
 import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
+import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import {
   Area,
@@ -33,12 +36,13 @@ import {
   useHealth,
 } from '../api';
 import { useMarketStore } from '../stores/marketStore';
+import { useStrategyStore } from '../stores/strategyStore';
 import type { PriceResponse } from '../types/market';
 import type { Signal, StrategyState } from '../types/enums';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-const SYMBOLS = ['BTCUSDT', 'ETHUSDT'] as const;
+const FALLBACK_SYMBOLS = ['BTCUSDT', 'ETHUSDT'];
 
 function fmt(value: string | null | undefined, decimals = 2): string {
   if (value == null) return '—';
@@ -273,12 +277,18 @@ function OpenPositionsTable() {
   );
 }
 
-function RecentSignals() {
+function RecentSignals({ activeStrategy }: { activeStrategy: string }) {
   const { data, isLoading, error } = useStrategySignals();
+
+  const filtered = useMemo(() => {
+    if (!data) return [];
+    if (activeStrategy === 'all') return data;
+    return data.filter((s) => s.strategy === activeStrategy);
+  }, [data, activeStrategy]);
 
   if (isLoading) return <Skeleton variant="rounded" height={180} />;
   if (error) return <Alert severity="error" variant="outlined">Failed to load signals</Alert>;
-  if (!data || data.length === 0) {
+  if (filtered.length === 0) {
     return (
       <Card sx={{ p: 2, height: '100%' }}>
         <Typography variant="body2" color="text.secondary" gutterBottom>Recent Signals</Typography>
@@ -304,7 +314,7 @@ function RecentSignals() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {data.map((s) => (
+              {filtered.map((s) => (
                 <TableRow key={`${s.symbol}:${s.strategy}`} hover>
                   <TableCell>{s.symbol}</TableCell>
                   <TableCell>{s.strategy}</TableCell>
@@ -375,15 +385,45 @@ function SystemStatus() {
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
+  const [activeStrategy, setActiveStrategy] = useState('all');
+
+  const storeSignals = useStrategyStore((s) => s.signals);
+
+  const strategies = useMemo(
+    () => [...new Set(Object.values(storeSignals).map((s) => s.strategy))].sort(),
+    [storeSignals],
+  );
+
+  const symbols = useMemo(() => {
+    const fromStore = Object.values(storeSignals)
+      .filter((s) => activeStrategy === 'all' || s.strategy === activeStrategy)
+      .map((s) => s.symbol);
+    const unique = [...new Set(fromStore)].sort();
+    return unique.length > 0 ? unique : FALLBACK_SYMBOLS;
+  }, [storeSignals, activeStrategy]);
+
   return (
     <Box>
-      <Typography variant="h5" sx={{ mb: 3 }}>
-        Dashboard
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
+        <Typography variant="h5">Dashboard</Typography>
+        <TextField
+          select
+          size="small"
+          label="Strategy"
+          value={activeStrategy}
+          onChange={(e) => setActiveStrategy(e.target.value)}
+          sx={{ width: 180 }}
+        >
+          <MenuItem value="all">All Strategies</MenuItem>
+          {strategies.map((s) => (
+            <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>
+          ))}
+        </TextField>
+      </Box>
 
       <Grid container spacing={2}>
         {/* ── Price Tickers ──────────────────────────────────────── */}
-        {SYMBOLS.map((symbol) => (
+        {symbols.map((symbol) => (
           <Grid size={{ xs: 12, sm: 6 }} key={symbol}>
             <PriceTickerCard symbol={symbol} />
           </Grid>
@@ -404,7 +444,7 @@ export default function DashboardPage() {
 
         {/* ── Recent Signals + System Status ──────────────────────── */}
         <Grid size={{ xs: 12, md: 6 }}>
-          <RecentSignals />
+          <RecentSignals activeStrategy={activeStrategy} />
         </Grid>
         <Grid size={{ xs: 12, md: 6 }}>
           <SystemStatus />

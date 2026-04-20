@@ -1,19 +1,18 @@
 """
 Configuration loading and validation using Pydantic.
 
-Loads YAML configuration files from the config/ directory and provides
-type-safe access to settings throughout the application.
-
-TODO Phase 5 (Task 5.7): Add DB config layer with priority: DB > ENV > YAML
-Current implementation uses YAML as the sole source of truth.
+Loads configuration with priority: DB > ENV > YAML.
 """
 
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import structlog
 import yaml
 from pydantic import BaseModel, Field, field_validator
+
+logger = structlog.get_logger(__name__)
 
 
 # ── Path Resolution ──────────────────────────────────────────────────────────
@@ -81,9 +80,10 @@ class SessionDeadZone(BaseModel):
 
 class SmartHodlerConfig(BaseModel):
     """Configuration for the Smart Hodler strategy."""
-    
+
     enabled: bool = Field(default=True)
     description: Optional[str] = None
+    allocation_pct: Optional[float] = Field(default=None, ge=0, le=1, description="Capital allocation weight (0–1). None = equal split.")
     
     # Timeframes
     timeframe_primary: str = Field(default="15m")
@@ -141,6 +141,7 @@ class MeanReversionStrategyConfig(BaseModel):
 
     enabled: bool = Field(default=True)
     description: Optional[str] = None
+    allocation_pct: Optional[float] = Field(default=None, ge=0, le=1, description="Capital allocation weight (0–1). None = equal split.")
 
     # Timeframes
     timeframe_primary: str = Field(default="15m")
@@ -192,10 +193,20 @@ class MeanReversionStrategyConfig(BaseModel):
 class StrategiesConfig(BaseModel):
     """Root configuration for all strategies."""
 
+    model_config = {"extra": "allow"}
+
     smart_hodler: SmartHodlerConfig
     mean_reversion: MeanReversionStrategyConfig = Field(
         default_factory=MeanReversionStrategyConfig
     )
+
+    def get_strategy_config(self, name: str) -> BaseModel | Dict | None:
+        """Return the config for a strategy by name, or None."""
+        val = getattr(self, name, None)
+        if val is not None:
+            return val
+        extra = self.model_extra or {}
+        return extra.get(name)
 
 
 # ── Risk Configuration ────────────────────────────────────────────────────────
@@ -387,6 +398,22 @@ class SystemConfig(BaseModel):
         return v
 
 
+# ── Regime Detection Configuration (task 5.4b) ──────────────────────────────
+
+class RegimeConfig(BaseModel):
+    """Market regime detection and rebalancing settings."""
+
+    adx_trending_threshold: float = Field(default=25.0, gt=0, le=100)
+    adx_ranging_threshold: float = Field(default=20.0, ge=0, le=100)
+    smoothing_window: int = Field(default=3, ge=1, le=50)
+    rebalance_enabled: bool = Field(default=False, description="Enable regime-based allocation rebalancing")
+    regime_shift_pct: float = Field(default=0.2, ge=0, le=0.5, description="Max weight shift on regime change")
+    strategy_regime_map: Dict[str, str] = Field(
+        default_factory=lambda: {"smart_hodler": "trending", "mean_reversion": "ranging"},
+        description="Which regime each strategy favors",
+    )
+
+
 # ── Root Settings ─────────────────────────────────────────────────────────────
 
 class Settings(BaseModel):
@@ -408,6 +435,7 @@ class Settings(BaseModel):
     live_trading: LiveTradingConfig
     ws_feed: WebSocketFeedConfig = Field(default_factory=WebSocketFeedConfig)
     alerting: AlertingConfig = Field(default_factory=AlertingConfig)
+    regime: RegimeConfig = Field(default_factory=RegimeConfig)
     system: SystemConfig
     
     @classmethod
@@ -464,6 +492,126 @@ class Settings(BaseModel):
         return [s for s in self.symbols if s.enabled]
 
 
+# ── DB Config Persistence (task 5.7b) ─────────────────────────────────────────
+
+
+def _load_db_config(strategy_name: str) -> Optional[Dict[str, Any]]:
+    """Load config overrides from the strategy_configs table, or None."""
+    try:
+        from db import get_session
+        from db.models import StrategyConfigRecord
+        from sqlalchemy import select
+
+        with get_session() as session:
+            stmt = select(StrategyConfigRecord).where(
+                StrategyConfigRecord.strategy_name == strategy_name
+            )
+            record = session.execute(stmt).scalar_one_or_none()
+            if record and record.config_json:
+                return dict(record.config_json)
+    except Exception as exc:
+        logger.debug("config.db_load_failed", strategy=strategy_name, error=str(exc))
+    return None
+
+
+def save_db_config(strategy_name: str, config: Dict[str, Any]) -> None:
+    """Persist strategy config overrides to the database."""
+    from db import get_session
+    from db.models import StrategyConfigRecord
+    from sqlalchemy import select
+
+    with get_session() as session:
+        stmt = select(StrategyConfigRecord).where(
+            StrategyConfigRecord.strategy_name == strategy_name
+        )
+        record = session.execute(stmt).scalar_one_or_none()
+        if record:
+            record.config_json = config
+        else:
+            record = StrategyConfigRecord(
+                strategy_name=strategy_name,
+                config_json=config,
+            )
+            session.add(record)
+        session.commit()
+
+
+def delete_db_config(strategy_name: str) -> bool:
+    """Delete DB overrides for a strategy. Returns True if a row was deleted."""
+    from db import get_session
+    from db.models import StrategyConfigRecord
+    from sqlalchemy import delete
+
+    with get_session() as session:
+        stmt = delete(StrategyConfigRecord).where(
+            StrategyConfigRecord.strategy_name == strategy_name
+        )
+        result = session.execute(stmt)
+        session.commit()
+        return result.rowcount > 0
+
+
+def _load_env_overrides(strategy_name: str) -> Dict[str, Any]:
+    """Load config overrides from environment variables.
+
+    Convention: GG_STRATEGY_{UPPER_NAME}_{UPPER_FIELD}=value
+    e.g. GG_STRATEGY_SMART_HODLER_EMA_FAST=30
+    """
+    prefix = f"GG_STRATEGY_{strategy_name.upper()}_"
+    overrides: Dict[str, Any] = {}
+
+    for key, value in os.environ.items():
+        if key.startswith(prefix):
+            field_name = key[len(prefix):].lower()
+            if value.lower() in ("true", "false"):
+                overrides[field_name] = value.lower() == "true"
+            else:
+                try:
+                    overrides[field_name] = int(value)
+                except ValueError:
+                    try:
+                        overrides[field_name] = float(value)
+                    except ValueError:
+                        overrides[field_name] = value
+
+    return overrides
+
+
+def get_config_source(strategy_name: str, base_config: Dict[str, Any]) -> Dict[str, str]:
+    """Return the source of each field: 'yaml', 'env', or 'db'."""
+    sources: Dict[str, str] = {k: "yaml" for k in base_config}
+
+    env_overrides = _load_env_overrides(strategy_name)
+    for k in env_overrides:
+        if k in sources:
+            sources[k] = "env"
+
+    db_overrides = _load_db_config(strategy_name)
+    if db_overrides:
+        for k in db_overrides:
+            if k in sources:
+                sources[k] = "db"
+
+    return sources
+
+
+def _apply_overrides(strategy_name: str, base_config: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply ENV then DB overrides on top of YAML base config."""
+    merged = dict(base_config)
+
+    env_overrides = _load_env_overrides(strategy_name)
+    if env_overrides:
+        merged.update(env_overrides)
+        logger.debug("config.env_applied", strategy=strategy_name, fields=list(env_overrides.keys()))
+
+    db_overrides = _load_db_config(strategy_name)
+    if db_overrides:
+        merged.update(db_overrides)
+        logger.debug("config.db_applied", strategy=strategy_name, fields=list(db_overrides.keys()))
+
+    return merged
+
+
 # ── Singleton Instance ────────────────────────────────────────────────────────
 
 _settings_instance: Optional[Settings] = None
@@ -472,23 +620,34 @@ _settings_instance: Optional[Settings] = None
 def get_settings(reload: bool = False) -> Settings:
     """
     Get the global settings instance (singleton pattern).
-    
-    Args:
-        reload: If True, reload settings from files even if already loaded
-    
-    Returns:
-        Settings: The global configuration object
+
+    Loads from YAML, then applies ENV and DB overrides to strategy configs.
     """
     global _settings_instance
-    
+
     if _settings_instance is None or reload:
-        _settings_instance = Settings.from_yaml_files()
-    
+        settings = Settings.from_yaml_files()
+
+        for strategy_name in list(settings.strategies.__class__.model_fields.keys()):
+            cfg = getattr(settings.strategies, strategy_name, None)
+            if cfg is None:
+                continue
+            base = cfg.model_dump() if hasattr(cfg, "model_dump") else dict(cfg)
+            merged = _apply_overrides(strategy_name, base)
+            if merged != base:
+                try:
+                    validated = cfg.__class__(**merged)
+                    setattr(settings.strategies, strategy_name, validated)
+                except Exception as exc:
+                    logger.warning("config.override_failed", strategy=strategy_name, error=str(exc))
+
+        _settings_instance = settings
+
     return _settings_instance
 
 
 # ── Module-level convenience ──────────────────────────────────────────────────
 
 def reload_settings() -> Settings:
-    """Reload settings from YAML files."""
+    """Reload settings from YAML files + ENV + DB overrides."""
     return get_settings(reload=True)

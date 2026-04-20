@@ -1,4 +1,4 @@
-export { fetchApi, ApiError } from './client';
+export { fetchApi, postApi, patchApi, ApiError } from './client';
 
 export {
   // Market
@@ -18,6 +18,17 @@ export {
   // System
   useHealth,
   useLogs,
+  // Backtest
+  useCompare,
+  useMultiStrategy,
+  // Config
+  useStrategyList,
+  useStrategyConfig,
+  useUpdateStrategyConfig,
+  useResetStrategyConfig,
+  // Optimization
+  useOptimize,
+  useWalkForward,
 } from './queries';
 
 export type {
@@ -28,4 +39,20 @@ export type {
   UseOrdersParams,
   UseStrategyParams,
   UseLogsParams,
+  UseCompareParams,
+  ComparisonMetricsRow,
+  ComparisonResponse,
+  UseMultiStrategyParams,
+  RegimeEvent,
+  StrategyBreakdown,
+  MultiStrategyResponse,
+  FieldMeta,
+  StrategyConfigResponse,
+  StrategyListResponse,
+  GridSearchRow,
+  OptimizationRequest,
+  OptimizationResponse,
+  WalkForwardFold,
+  WalkForwardRequest,
+  WalkForwardResponse,
 } from './queries';

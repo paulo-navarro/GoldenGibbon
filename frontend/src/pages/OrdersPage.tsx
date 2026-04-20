@@ -56,6 +56,9 @@ interface Filters {
 }
 
 function OrderFilters({ filters, onChange }: { filters: Filters; onChange: (f: Filters) => void }) {
+  const orders = useOrdersStore((s) => s.orders);
+  const symbols = useMemo(() => [...new Set(orders.map((o) => o.symbol))].sort(), [orders]);
+
   return (
     <Card sx={{ p: 2 }}>
       <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -65,8 +68,9 @@ function OrderFilters({ filters, onChange }: { filters: Filters; onChange: (f: F
           sx={{ minWidth: 140 }}
         >
           <MenuItem value="">All</MenuItem>
-          <MenuItem value="BTCUSDT">BTCUSDT</MenuItem>
-          <MenuItem value="ETHUSDT">ETHUSDT</MenuItem>
+          {symbols.map((s) => (
+            <MenuItem key={s} value={s}>{s}</MenuItem>
+          ))}
         </TextField>
         <TextField
           select size="small" label="Side" value={filters.side}

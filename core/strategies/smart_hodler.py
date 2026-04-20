@@ -149,6 +149,15 @@ class SmartHodler(Strategy):
         # 4. Default
         return Signal.HOLD
 
+    def to_state_dict(self) -> Dict[str, Any]:  # noqa: D102
+        d = super().to_state_dict()
+        d["consecutive_below_ema200"] = self._consecutive_below_ema200
+        return d
+
+    def from_state_dict(self, data: Dict[str, Any]) -> None:  # noqa: D102
+        super().from_state_dict(data)
+        self._consecutive_below_ema200 = data.get("consecutive_below_ema200", 0)
+
     def reset(self) -> None:  # noqa: D102
         super().reset()
         self._consecutive_below_ema200 = 0

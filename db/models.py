@@ -335,6 +335,30 @@ class StrategyStateRecord(Base):
         return f"<StrategyStateRecord(symbol={self.symbol}, strategy={self.strategy}, state={self.state})>"
 
 
+# ── Strategy Config Persistence (task 5.7a) ───────────────────────────────────
+
+class StrategyConfigRecord(Base):
+    """
+    Persisted strategy configuration overrides.
+
+    Stores per-strategy config as JSONB. These override YAML/ENV defaults.
+    """
+    __tablename__ = "strategy_configs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    strategy_name: Mapped[str] = mapped_column(String(50), nullable=False, unique=True, index=True)
+    config_json: Mapped[Dict] = mapped_column(JSONB, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    def __repr__(self) -> str:
+        return f"<StrategyConfigRecord(strategy_name={self.strategy_name})>"
+
+
 # ── Exports ──────────────────────────────────────────────────────────────────
 
 __all__ = [
@@ -345,4 +369,5 @@ __all__ = [
     "PortfolioSnapshot",
     "BacktestResult",
     "StrategyStateRecord",
+    "StrategyConfigRecord",
 ]
