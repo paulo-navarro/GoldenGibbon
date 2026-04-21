@@ -116,14 +116,17 @@ def _reset_worker_state():
 
 @pytest.fixture(autouse=True)
 def _enable_paper_trading():
-    """Enable paper trading so mode gate doesn't skip the tick."""
+    """Enable paper trading and disable live trading so tests use paper mode."""
     from core.config import get_settings
 
     settings = get_settings()
-    original = settings.paper_trading.enabled
+    original_paper = settings.paper_trading.enabled
+    original_live = settings.live_trading.enabled
     settings.paper_trading.enabled = True
+    settings.live_trading.enabled = False
     yield
-    settings.paper_trading.enabled = original
+    settings.paper_trading.enabled = original_paper
+    settings.live_trading.enabled = original_live
 
 
 @pytest.fixture(autouse=True)
@@ -464,3 +467,98 @@ class TestStrategyRegistry:
 
         registry = _get_strategy_registry()
         assert registry["mean_reversion"] is MeanReversion
+
+
+# ── Trading mode switch ────────────────────────────────────────────────────
+
+
+_PATCH_BINANCE_EXECUTOR = "core.execution.binance.BinanceExecutor.from_settings"
+_PATCH_GET_SETTINGS = "core.config.get_settings"
+
+
+class TestTradingModeSwitch:
+    """
+    When live_trading.enabled is toggled on, workers must rebuild their
+    cached components with a BinanceExecutor instead of reusing the
+    stale PaperExecutor from the previous paper-trading session.
+    """
+
+    @patch(_PATCH_PUBLISH)
+    @patch(_PATCH_KLINES, return_value=[])
+    @patch(_PATCH_LOADER)
+    def test_settings_reloaded_on_every_tick(self, mock_loader, mock_klines, mock_publish):
+        """get_settings is always called with reload=True so workers see latest config."""
+        mock_loader.return_value = _make_market_data()
+
+        from core.config import get_settings
+
+        # Build a controlled paper-mode settings object and patch get_settings
+        # so that reload=True inside the task returns it (no real DB query).
+        paper_settings = get_settings()
+        paper_settings.paper_trading.enabled = True
+        paper_settings.live_trading.enabled = False
+
+        with patch(_PATCH_GET_SETTINGS, return_value=paper_settings) as spy:
+            from core.tasks import run_single_strategy_tick
+            run_single_strategy_tick.apply(args=["smart_hodler", "BTCUSDT"])
+
+        reload_calls = [
+            c for c in spy.call_args_list
+            if c.kwargs.get("reload") is True or (c.args and c.args[0] is True)
+        ]
+        assert len(reload_calls) >= 1, "get_settings must be called with reload=True during tick"
+
+    @patch(_PATCH_PUBLISH)
+    @patch(_PATCH_KLINES, return_value=[])
+    @patch(_PATCH_LOADER)
+    def test_mode_switch_paper_to_live_evicts_worker_state(self, mock_loader, mock_klines, mock_publish):
+        """
+        After a paper tick has cached _TickComponents, switching to live mode
+        on the next tick must evict the stale entry and rebuild with
+        BinanceExecutor (mocked here to avoid real credentials).
+        """
+        from decimal import Decimal
+        from core.execution.paper import PaperExecutor
+        from core.tasks import _worker_state, run_single_strategy_tick
+        from core.config import get_settings
+        from unittest.mock import MagicMock
+
+        # Shared settings object — we mutate mode flags between steps.
+        settings = get_settings()
+
+        # ── 1. Paper tick ────────────────────────────────────────────────
+        settings.paper_trading.enabled = True
+        settings.live_trading.enabled = False
+
+        with patch(_PATCH_GET_SETTINGS, return_value=settings):
+            mock_loader.return_value = _make_market_data()
+            run_single_strategy_tick.apply(args=["smart_hodler", "BTCUSDT"])
+
+        key = ("smart_hodler", "BTCUSDT")
+        assert key in _worker_state
+        assert _worker_state[key].trading_mode == "paper"
+        assert isinstance(_worker_state[key].executor, PaperExecutor)
+
+        # ── 2. Switch to live mode (mutate same settings object) ─────────────
+        settings.paper_trading.enabled = False
+        settings.live_trading.enabled = True
+        settings.live_trading.api_key = "fake_key"
+        settings.live_trading.api_secret = "fake_secret"
+
+        mock_executor = MagicMock()
+        mock_executor.load_exchange_filters = MagicMock()
+        mock_executor.get_account_info.return_value = {
+            "balances": {"USDT": {"free": Decimal("5000"), "locked": Decimal("0")}},
+            "can_trade": True,
+        }
+
+        with patch(_PATCH_GET_SETTINGS, return_value=settings):
+            with patch(_PATCH_BINANCE_EXECUTOR, return_value=mock_executor):
+                mock_loader.return_value = _make_market_data()
+                run_single_strategy_tick.apply(args=["smart_hodler", "BTCUSDT"])
+
+        # ── 3. Assert stale entry was evicted and rebuilt as live ──────────
+        assert key in _worker_state
+        assert _worker_state[key].trading_mode == "live", (
+            "stale paper entry was not evicted; worker kept using PaperExecutor"
+        )

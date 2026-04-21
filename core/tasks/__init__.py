@@ -109,15 +109,16 @@ _WorkerStateKey = Tuple[str, str]  # (strategy_name, symbol)
 class _TickComponents:
     """Holds the live objects for one (strategy, symbol) pair."""
 
-    __slots__ = ("strategy", "pm", "risk_engine", "executor", "run_id", "kill_switch")
+    __slots__ = ("strategy", "pm", "risk_engine", "executor", "run_id", "kill_switch", "trading_mode")
 
-    def __init__(self, strategy, pm, risk_engine, executor, run_id: str, kill_switch=None):  # noqa: ANN001
+    def __init__(self, strategy, pm, risk_engine, executor, run_id: str, kill_switch=None, trading_mode: str = "paper"):  # noqa: ANN001
         self.strategy = strategy
         self.pm = pm
         self.risk_engine = risk_engine
         self.executor = executor
         self.run_id = run_id
         self.kill_switch = kill_switch
+        self.trading_mode = trading_mode
 
 
 _worker_state: Dict[_WorkerStateKey, _TickComponents] = {}
@@ -388,6 +389,7 @@ def _get_or_create_components(
 
         _worker_state[key] = _TickComponents(
             strategy, pm, risk_engine, executor, run_id, kill_switch,
+            trading_mode=trading_mode,
         )
 
         logger.info(
@@ -917,7 +919,9 @@ def run_single_strategy_tick(
     from core.models import Signal, StrategyState
     from db import get_session
 
-    settings = get_settings()
+    # Always reload settings from DB so workers pick up config changes
+    # (e.g. live_trading.enabled toggled via Settings UI) without restart.
+    settings = get_settings(reload=True)
     publisher = get_publisher()
 
     # ── Mode gate ───────────────────────────────────────────────────
@@ -945,6 +949,17 @@ def run_single_strategy_tick(
     secondary_tf = strategy_config.get("timeframe_confirmation", "1h")
 
     log = logger.bind(strategy=strategy_name, symbol=symbol, task_id=self.request.id)
+
+    # Evict stale components if trading mode changed (e.g. paper → live).
+    # Forces _get_or_create_components to rebuild with the correct executor.
+    _tick_key: _WorkerStateKey = (strategy_name, symbol)
+    if _tick_key in _worker_state and _worker_state[_tick_key].trading_mode != trading_mode:
+        log.info(
+            "single_tick: trading mode changed, evicting stale components",
+            old_mode=_worker_state[_tick_key].trading_mode,
+            new_mode=trading_mode,
+        )
+        del _worker_state[_tick_key]
 
     try:
         initial_capital = _resolve_allocated_capital(

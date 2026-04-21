@@ -473,12 +473,11 @@ class TestBinanceAPIError:
 class TestFactory:
     """BinanceExecutor.from_settings factory method."""
 
-    @patch.dict("os.environ", {"BINANCE_API_KEY": "key123", "BINANCE_API_SECRET": "secret456"})
     def test_from_settings_creates_executor(self):
         with patch("core.config.get_settings") as mock_settings:
             mock_live = MagicMock()
-            mock_live.api_key_env = "BINANCE_API_KEY"
-            mock_live.api_secret_env = "BINANCE_API_SECRET"
+            mock_live.api_key = "key123"
+            mock_live.api_secret = "secret456"
             mock_live.use_testnet = True
             mock_live.max_order_size_usdt = 500.0
 
@@ -497,15 +496,14 @@ class TestFactory:
             assert ex._base_url == BinanceExecutor._TESTNET_BASE
             assert ex._max_order_size_usdt == Decimal("500.0")
 
-    @patch.dict("os.environ", {}, clear=True)
     def test_from_settings_raises_on_missing_credentials(self):
         with patch("core.config.get_settings") as mock_settings:
             mock_live = MagicMock()
-            mock_live.api_key_env = "BINANCE_API_KEY"
-            mock_live.api_secret_env = "BINANCE_API_SECRET"
+            mock_live.api_key = ""
+            mock_live.api_secret = ""
 
             mock_settings.return_value.live_trading = mock_live
 
             pm = _pm()
-            with pytest.raises(RuntimeError, match="credentials not found"):
+            with pytest.raises(RuntimeError, match="credentials not configured"):
                 BinanceExecutor.from_settings("smart_hodler", pm)

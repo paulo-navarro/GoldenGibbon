@@ -328,8 +328,8 @@ class LiveTradingConfig(BaseModel):
     kill_switch_max_drawdown: float = Field(default=0.15, gt=0, le=1)
     reconcile_on_startup: bool = Field(default=True)
     reconciliation_interval_hours: int = Field(default=4, ge=1)
-    api_key_env: str = Field(default="BINANCE_API_KEY")
-    api_secret_env: str = Field(default="BINANCE_API_SECRET")
+    api_key: str = Field(default="")
+    api_secret: str = Field(default="")
     use_testnet: bool = Field(default=True)
 
 

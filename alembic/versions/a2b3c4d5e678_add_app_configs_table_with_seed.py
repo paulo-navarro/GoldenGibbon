@@ -79,8 +79,8 @@ SEED_APP_CONFIGS = {
         "kill_switch_max_drawdown": 0.15,
         "reconcile_on_startup": True,
         "reconciliation_interval_hours": 4,
-        "api_key_env": "BINANCE_API_KEY",
-        "api_secret_env": "BINANCE_API_SECRET",
+        "api_key": "",
+        "api_secret": "",
         "use_testnet": True,
     },
     "ws_feed": {

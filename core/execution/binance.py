@@ -867,13 +867,13 @@ class BinanceExecutor:
         live = settings.live_trading
         execution = settings.execution
 
-        api_key = os.environ.get(live.api_key_env, "")
-        api_secret = os.environ.get(live.api_secret_env, "")
+        api_key = live.api_key
+        api_secret = live.api_secret
 
         if not api_key or not api_secret:
             raise RuntimeError(
-                f"Binance API credentials not found. Set {live.api_key_env} "
-                f"and {live.api_secret_env} environment variables."
+                "Binance API credentials not configured. "
+                "Set api_key and api_secret in the live_trading config."
             )
 
         retry_cfg = RetryConfig(
