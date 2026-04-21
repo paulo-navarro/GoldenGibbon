@@ -173,6 +173,8 @@ def _include_routes(application: FastAPI) -> None:
         ("api.routes.system", "/api/system", ["system"]),
         ("api.routes.backtest", "/api/backtest", ["backtest"]),
         ("api.routes.config", "/api/strategy/config", ["config"]),
+        ("api.routes.symbols", "/api/config/symbols", ["symbols"]),
+        ("api.routes.app_config", "/api/config", ["app-config"]),
     ]
 
     for module_path, prefix, tags in route_modules:

@@ -26,6 +26,8 @@ import DashboardIcon from '@mui/icons-material/Dashboard';
 import ReceiptIcon from '@mui/icons-material/Receipt';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
+import CurrencyExchangeIcon from '@mui/icons-material/CurrencyExchange';
+import SettingsIcon from '@mui/icons-material/Settings';
 import TerminalIcon from '@mui/icons-material/Terminal';
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -40,6 +42,8 @@ const NAV_ITEMS = [
   { label: 'Trades', path: '/trades', icon: <SwapHorizIcon /> },
   { label: 'Orders', path: '/orders', icon: <ReceiptIcon /> },
   { label: 'Metrics', path: '/metrics', icon: <BarChartIcon /> },
+  { label: 'Symbols', path: '/symbols', icon: <CurrencyExchangeIcon /> },
+  { label: 'Settings', path: '/settings', icon: <SettingsIcon /> },
   { label: 'Logs', path: '/logs', icon: <TerminalIcon /> },
 ];
 

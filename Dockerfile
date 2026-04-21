@@ -54,7 +54,6 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir .
 
 COPY core/ core/
-COPY config/ config/
 COPY db/ db/
 COPY api/ api/
 COPY scripts/ scripts/

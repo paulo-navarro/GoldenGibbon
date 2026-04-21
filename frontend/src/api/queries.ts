@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect } from 'react';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
-import { fetchApi, postApi, patchApi } from './client';
+import { fetchApi, postApi, patchApi, deleteApi } from './client';
 
 import type { Candle, PriceResponse } from '../types/market';
 import type { PortfolioResponse, PortfolioSnapshot } from '../types/portfolio';
@@ -581,5 +581,153 @@ export function useWalkForward() {
   return useMutation({
     mutationFn: (req: WalkForwardRequest) =>
       postApi<WalkForwardResponse>('/api/backtest/walk-forward', req as unknown as Record<string, unknown>),
+  });
+}
+
+// ── Symbol Management (task 7.7–7.10) ────────────────────────────────────────
+
+export interface SymbolItem {
+  symbol: string;
+  exchange: string;
+  timeframes: string[];
+  enabled: boolean;
+  description: string | null;
+  source: string;
+}
+
+export interface SymbolListResponse {
+  symbols: SymbolItem[];
+}
+
+export interface AddSymbolRequest {
+  symbol: string;
+  exchange?: string;
+  timeframes?: string[];
+  enabled?: boolean;
+  description?: string;
+}
+
+export interface AddSymbolResponse {
+  symbol: SymbolItem;
+  message: string;
+}
+
+export interface PatchSymbolRequest {
+  enabled?: boolean;
+  timeframes?: string[];
+  description?: string;
+}
+
+export function useSymbols() {
+  return useQuery<SymbolListResponse>({
+    queryKey: ['symbols'],
+    queryFn: () => fetchApi<SymbolListResponse>('/api/config/symbols'),
+  });
+}
+
+export function useAddSymbol() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (req: AddSymbolRequest) =>
+      postApi<AddSymbolResponse>('/api/config/symbols', req as unknown as Record<string, unknown>),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['symbols'] });
+    },
+  });
+}
+
+export function useDeleteSymbol() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (symbol: string) =>
+      deleteApi<{ message: string }>(`/api/config/symbols/${symbol}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['symbols'] });
+    },
+  });
+}
+
+export function usePatchSymbol() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ symbol, ...body }: PatchSymbolRequest & { symbol: string }) =>
+      patchApi<SymbolItem>(`/api/config/symbols/${symbol}`, body as Record<string, unknown>),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['symbols'] });
+    },
+  });
+}
+
+// ── App Config (Namespace-based settings) ─────────────────────────────────────
+
+export interface NamespaceFieldMeta {
+  name: string;
+  value: unknown;
+  default: unknown;
+  type: string;
+  description?: string;
+  min?: number;
+  max?: number;
+}
+
+export interface NamespaceConfigResponse {
+  namespace: string;
+  source: string;
+  fields: NamespaceFieldMeta[];
+}
+
+export interface NamespaceListResponse {
+  namespaces: string[];
+}
+
+export function useNamespaceList() {
+  return useQuery({
+    queryKey: ['namespace-list'],
+    queryFn: () => fetchApi<NamespaceListResponse>('/api/config/namespaces'),
+  });
+}
+
+export function useNamespaceConfig(namespace: string) {
+  return useQuery({
+    queryKey: ['namespace-config', namespace],
+    queryFn: () => fetchApi<NamespaceConfigResponse>(`/api/config/${namespace}`),
+    enabled: !!namespace,
+  });
+}
+
+export function useUpdateNamespaceConfig(namespace: string) {
+  const queryClient = useQueryClient();
+
+  const mutation = useMutation({
+    mutationFn: (updates: Record<string, unknown>) =>
+      patchApi<NamespaceConfigResponse>(`/api/config/${namespace}`, updates),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['namespace-config', namespace], data);
+    },
+  });
+
+  const update = useCallback(
+    (updates: Record<string, unknown>) => mutation.mutate(updates),
+    [mutation],
+  );
+
+  return { ...mutation, update };
+}
+
+export function useResetNamespaceConfig(namespace: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/config/${namespace}/reset`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Reset failed');
+      return (await res.json()) as NamespaceConfigResponse;
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(['namespace-config', namespace], data);
+    },
   });
 }

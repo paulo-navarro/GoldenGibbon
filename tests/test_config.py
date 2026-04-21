@@ -255,46 +255,28 @@ class TestSystemConfig:
 # ── Full Settings Integration Tests ───────────────────────────────────────────
 
 class TestSettings:
-    """Tests for full settings loading from YAML files."""
-    
-    def test_load_from_yaml_files(self):
-        """Test that settings can be loaded from actual YAML files."""
-        settings = Settings.from_yaml_files()
-        
-        # Verify symbols loaded
+    """Tests for full settings loading."""
+
+    def test_load_settings(self):
+        """Test that settings load with correct defaults."""
+        settings = get_settings(reload=True)
+
         assert len(settings.symbols) > 0
         assert any(s.symbol == "BTCUSDT" for s in settings.symbols)
-        
-        # Verify strategy config loaded
-        assert settings.strategies.smart_hodler.enabled is True
-        assert settings.strategies.smart_hodler.ema_fast == 50
-        assert settings.strategies.smart_hodler.ema_slow == 200
-        
-        # Verify risk config loaded
+
         assert settings.risk.max_drawdown_per_trade == 0.03
-        
-        # Verify execution config loaded
         assert settings.execution.slippage == 0.001
         assert settings.execution.taker_fee == 0.001
-        
-        # Verify logging config loaded
         assert settings.logging.level == "INFO"
-        
-        # Verify backtest config loaded
         assert settings.backtest.initial_capital == 10000
-        
-        # Verify system config loaded
         assert settings.system.timezone == "UTC"
-    
+
     def test_enabled_symbols_property(self):
         """Test that enabled_symbols returns only enabled symbols."""
-        settings = Settings.from_yaml_files()
+        settings = get_settings(reload=True)
         enabled = settings.enabled_symbols
-        
-        # All returned symbols should be enabled
+
         assert all(s.enabled for s in enabled)
-        
-        # Should match the symbols in the config (assuming all are enabled)
         assert len(enabled) == len([s for s in settings.symbols if s.enabled])
     
     def test_singleton_pattern(self):
@@ -313,7 +295,7 @@ class TestSettings:
         # Should have the same values but be different instances
         assert settings1.strategies.smart_hodler.ema_fast == settings2.strategies.smart_hodler.ema_fast
         # Note: Due to module-level caching, we can't easily test that they're different instances
-        # without modifying the YAML between calls
+        # without modifying config between calls
 
 
 # ── Edge Cases ────────────────────────────────────────────────────────────────

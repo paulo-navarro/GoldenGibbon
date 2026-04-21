@@ -359,6 +359,54 @@ class StrategyConfigRecord(Base):
         return f"<StrategyConfigRecord(strategy_name={self.strategy_name})>"
 
 
+# ── App Config Persistence (task 8.1) ────────────────────────────────────────
+
+class AppConfigRecord(Base):
+    """Persisted application configuration by namespace (risk, execution, etc.)."""
+    __tablename__ = "app_configs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    namespace: Mapped[str] = mapped_column(String(50), nullable=False, unique=True, index=True)
+    config_json: Mapped[Dict] = mapped_column(JSONB, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    def __repr__(self) -> str:
+        return f"<AppConfigRecord(namespace={self.namespace})>"
+
+
+# ── Symbol Config Persistence (task 7.1) ─────────────────────────────────────
+
+class SymbolConfigRecord(Base):
+    """Persisted symbol (trading pair) configuration."""
+    __tablename__ = "symbol_configs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(20), nullable=False, unique=True, index=True)
+    exchange: Mapped[str] = mapped_column(String(20), nullable=False, default="binance")
+    timeframes: Mapped[Dict] = mapped_column(JSONB, nullable=False, default=lambda: ["15m", "1h"])
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    description: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    def __repr__(self) -> str:
+        return f"<SymbolConfigRecord(symbol={self.symbol}, enabled={self.enabled})>"
+
+
 # ── Exports ──────────────────────────────────────────────────────────────────
 
 __all__ = [
@@ -370,4 +418,6 @@ __all__ = [
     "BacktestResult",
     "StrategyStateRecord",
     "StrategyConfigRecord",
+    "SymbolConfigRecord",
+    "AppConfigRecord",
 ]

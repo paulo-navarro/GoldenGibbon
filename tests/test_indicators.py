@@ -762,7 +762,7 @@ class TestMultiTimeframeIndicators:
 
     @pytest.fixture
     def smart_hodler_config(self):
-        """Strategy config matching strategies.yaml smart_hodler section."""
+        """Strategy config matching smart_hodler defaults."""
         return {
             'ema_fast': 50,
             'ema_slow': 200,

@@ -15,7 +15,7 @@ import pytest
 
 from core.strategies.session_filter import is_in_dead_zone
 
-# ── Shared dead-zone config (mirrors strategies.yaml) ────────────────────────
+# ── Shared dead-zone config (mirrors smart_hodler defaults) ──────────────────
 
 DEAD_ZONES = [
     {"name": "Weekend", "start_utc": "Saturday 21:00", "end_utc": "Sunday 20:00"},

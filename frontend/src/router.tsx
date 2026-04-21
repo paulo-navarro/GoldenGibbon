@@ -7,6 +7,8 @@ import TradesPage from './pages/TradesPage';
 import OrdersPage from './pages/OrdersPage';
 import MetricsPage from './pages/MetricsPage';
 import LogsPage from './pages/LogsPage';
+import SymbolsPage from './pages/SymbolsPage';
+import SettingsPage from './pages/SettingsPage';
 
 const router = createBrowserRouter([
   {
@@ -19,6 +21,8 @@ const router = createBrowserRouter([
       { path: 'trades', element: <TradesPage /> },
       { path: 'orders', element: <OrdersPage /> },
       { path: 'metrics', element: <MetricsPage /> },
+      { path: 'symbols', element: <SymbolsPage /> },
+      { path: 'settings', element: <SettingsPage /> },
       { path: 'logs', element: <LogsPage /> },
     ],
   },

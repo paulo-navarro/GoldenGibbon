@@ -235,10 +235,9 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
 
 // ── Parameter Tuning (task 5.5b) ─────────────────────────────────────────────
 
-const SOURCE_COLORS: Record<string, 'info' | 'warning' | 'default'> = {
+const SOURCE_COLORS: Record<string, 'info' | 'default'> = {
   db: 'info',
-  env: 'warning',
-  yaml: 'default',
+  default: 'default',
 };
 
 function ParameterTuning({ strategyName }: { strategyName: string }) {
@@ -266,7 +265,7 @@ function ParameterTuning({ strategyName }: { strategyName: string }) {
   useEffect(() => {
     if (resetMutation.isSuccess) {
       setEdits({});
-      setStatusMsg('Reset to YAML defaults');
+      setStatusMsg('Reset to defaults');
       const t = setTimeout(() => setStatusMsg(null), 2000);
       return () => clearTimeout(t);
     }
@@ -333,7 +332,7 @@ function ParameterTuning({ strategyName }: { strategyName: string }) {
                       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                           <Typography variant="body2">{labelFromKey(field.name)}</Typography>
-                          {field.source !== 'yaml' && (
+                          {field.source !== 'default' && (
                             <Chip label={field.source} size="small" color={SOURCE_COLORS[field.source]} sx={{ fontSize: 9, height: 16 }} />
                           )}
                         </Box>
@@ -354,7 +353,7 @@ function ParameterTuning({ strategyName }: { strategyName: string }) {
                     <TextField
                       fullWidth
                       size="small"
-                      label={`${labelFromKey(field.name)}${field.source !== 'yaml' ? ` [${field.source}]` : ''}`}
+                      label={`${labelFromKey(field.name)}${field.source !== 'default' ? ` [${field.source}]` : ''}`}
                       type={field.type === 'int' || field.type === 'float' ? 'number' : 'text'}
                       value={currentValue ?? ''}
                       onChange={(e) => {
@@ -391,19 +390,11 @@ function ParameterTuning({ strategyName }: { strategyName: string }) {
           <Button
             variant="outlined"
             size="small"
-            onClick={handleReset}
-            disabled={isPending || resetMutation.isPending}
-          >
-            Reset to Defaults
-          </Button>
-          <Button
-            variant="outlined"
-            size="small"
             color="warning"
             onClick={() => resetMutation.mutate()}
             disabled={isPending || resetMutation.isPending}
           >
-            Reset to YAML
+            Reset to Defaults
           </Button>
           {statusMsg && (
             <Chip

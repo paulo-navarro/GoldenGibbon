@@ -110,7 +110,7 @@ class FieldMeta(BaseModel):
     min: Optional[float] = None
     max: Optional[float] = None
     group: str = "Other"
-    source: str = "yaml"
+    source: str = "default"
 
 
 class StrategyConfigResponse(BaseModel):
@@ -163,7 +163,7 @@ def get_strategy_config(name: str) -> StrategyConfigResponse:
             continue
         meta = _field_meta(field_name, field_info, values.get(field_name))
         meta["group"] = _group_for_field(field_name)
-        meta["source"] = sources.get(field_name, "yaml")
+        meta["source"] = sources.get(field_name, "default")
         fields.append(FieldMeta(**meta))
 
     return StrategyConfigResponse(strategy=name, fields=fields)
@@ -199,13 +199,14 @@ def update_strategy_config(name: str, updates: Dict[str, Any]) -> StrategyConfig
     db_overrides = _load_db_config(name) or {}
     db_overrides.update(updates)
     save_db_config(name, db_overrides)
+    reload_settings()
 
     return get_strategy_config(name)
 
 
 @router.delete("/{name}/reset")
 def reset_strategy_config(name: str) -> StrategyConfigResponse:
-    """Delete DB overrides, revert to YAML+ENV defaults."""
+    """Delete DB overrides, revert to Pydantic defaults."""
     from core.config import delete_db_config, reload_settings
 
     _get_strategy_model(name)

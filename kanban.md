@@ -193,18 +193,56 @@
 ## Phase 7 – Symbol Management (Add / Remove Trading Pairs)
 ### Tasks
 
-- [ ] **7.1** DB table `symbol_configs` – Alembic migration with columns: `id`, `symbol`, `exchange`, `timeframes` (JSONB), `enabled`, `description`, `created_at`, `updated_at`. Unique index on `symbol` `infra`
-- [ ] **7.2** Hybrid symbol loader – extend `core/config.py` to merge DB symbols on top of YAML (DB wins on conflict, union of both sources). Add `save_symbol()` and `delete_symbol()` helpers `core`
-- [ ] **7.3** REST endpoint `GET /api/config/symbols` – return all symbols (enabled + disabled) with source label (`yaml` / `db`) `api`
-- [ ] **7.4** REST endpoint `POST /api/config/symbols` – add a new pair. Validate symbol exists on Binance (`GET /api/v3/exchangeInfo`), reject duplicates `api`
-- [ ] **7.5** REST endpoint `DELETE /api/config/symbols/{symbol}` – remove a pair. Block if open positions exist for that symbol, return error with position details `api`
-- [ ] **7.6** REST endpoint `PATCH /api/config/symbols/{symbol}` – toggle `enabled` flag or update `timeframes` / `description` `api`
-- [ ] **7.7** Frontend – Symbols management page (`pages/SymbolsPage.tsx`) with table listing current pairs (symbol, exchange, timeframes, enabled status, source badge) `ui`
-- [ ] **7.8** Frontend – "Add Symbol" dialog with symbol input (autocomplete optional), exchange selector, timeframe checkboxes, validation feedback `ui`
-- [ ] **7.9** Frontend – Delete button per row with confirmation dialog showing open-position warning when applicable `ui`
-- [ ] **7.10** Frontend – Enable/disable toggle per row (calls PATCH endpoint) `ui`
-- [ ] **7.11** Config reload – after add/remove/toggle, call `get_settings(reload=True)` so Celery workers pick up changes on next tick `core`
-- [ ] **7.12** Tests – unit tests for hybrid symbol loader, endpoint validation (duplicate, invalid symbol, open-position block), toggle behavior `test`
+- [x] **7.1** DB table `symbol_configs` – Alembic migration with columns: `id`, `symbol`, `exchange`, `timeframes` (JSONB), `enabled`, `description`, `created_at`, `updated_at`. Unique index on `symbol` `infra`
+- [x] **7.2** Hybrid symbol loader – extend `core/config.py` to merge DB symbols on top of YAML (DB wins on conflict, union of both sources). Add `save_symbol()` and `delete_symbol()` helpers `core`
+- [x] **7.3** REST endpoint `GET /api/config/symbols` – return all symbols (enabled + disabled) with source label (`yaml` / `db`) `api`
+- [x] **7.4** REST endpoint `POST /api/config/symbols` – add a new pair. Validate symbol exists on Binance (`GET /api/v3/exchangeInfo`), reject duplicates `api`
+- [x] **7.5** REST endpoint `DELETE /api/config/symbols/{symbol}` – remove a pair. Block if open positions exist for that symbol, return error with position details `api`
+- [x] **7.6** REST endpoint `PATCH /api/config/symbols/{symbol}` – toggle `enabled` flag or update `timeframes` / `description` `api`
+- [x] **7.7** Frontend – Symbols management page (`pages/SymbolsPage.tsx`) with table listing current pairs (symbol, exchange, timeframes, enabled status, source badge) `ui`
+- [x] **7.8** Frontend – "Add Symbol" dialog with symbol input (autocomplete optional), exchange selector, timeframe checkboxes, validation feedback `ui`
+- [x] **7.9** Frontend – Delete button per row with confirmation dialog showing open-position warning when applicable `ui`
+- [x] **7.10** Frontend – Enable/disable toggle per row (calls PATCH endpoint) `ui`
+- [x] **7.11** Config reload – after add/remove/toggle, call `get_settings(reload=True)` so Celery workers pick up changes on next tick `core`
+- [x] **7.12** Tests – unit tests for hybrid symbol loader, endpoint validation (duplicate, invalid symbol, open-position block), toggle behavior `test`
+
+---
+
+## Phase 8 – DB-Only Configuration (Remove YAML Config Layer)
+
+> Goal: single source of truth for business config. Defaults live in Pydantic models (code).
+> DB overrides defaults. ENV stays for infrastructure only (DB_URL, REDIS_URL, LOG_LEVEL, CORS, ports).
+> YAML config files are deleted after migration.
+
+### Tasks – DB Schema & Seed
+
+- [x] **8.1** New DB table `app_configs` – Alembic migration. Columns: `id`, `namespace` (String, e.g. "risk", "execution", "backtest"), `config_json` (JSONB), `updated_at`. Unique index on `namespace` `infra`
+- [x] **8.2** Seed migration – insert default rows for: symbols (BTCUSDT + ETHUSDT), strategies (smart_hodler + mean_reversion), risk, execution, data, backtest, paper_trading, live_trading, ws_feed, alerting, regime, system. Values come from current YAML defaults `infra`
+
+### Tasks – Config Loader Rewrite
+
+- [x] **8.3** Rewrite `core/config.py` loader — `get_settings()` reads from `app_configs` + `strategy_configs` + `symbol_configs` tables. Pydantic model defaults are the fallback when a namespace has no DB row. Remove YAML loading, remove `_load_env_overrides` for strategy fields, remove `_merge_symbols` YAML logic `core`
+- [x] **8.4** Update `save_db_config()` / `delete_db_config()` to work with `app_configs` table for non-strategy namespaces (risk, execution, etc.) `core`
+- [x] **8.5** Graceful fallback — if DB is unreachable on startup, use Pydantic defaults + ENV and log a warning (don't crash) `core`
+
+### Tasks – API Updates
+
+- [x] **8.6** New endpoints `GET /api/config/{namespace}` and `PATCH /api/config/{namespace}` — generic config CRUD for risk, execution, data, backtest, etc. Same pattern as strategy config endpoints `api`
+- [x] **8.7** Update existing symbol endpoints — remove YAML source logic, `get_symbol_source()` always returns "db" or "default" `api`
+- [x] **8.8** Update strategy config endpoints — remove YAML/ENV source logic, simplify to DB vs Pydantic default `api`
+
+### Tasks – Frontend Updates
+
+- [x][x] **8.9** Settings page (`pages/SettingsPage.tsx`) — editable forms for risk, execution, backtest, paper_trading, live_trading config. Same field-meta pattern as strategy config tuning UI `ui`
+- [x][x] **8.10** Add "Settings" nav item in sidebar (below Symbols, above Logs) `ui`
+- [x][x] **8.11** Update source badges across UI — replace "yaml"/"env"/"db" with "default"/"custom" (simplified) `ui`
+
+### Tasks – Cleanup & Testing
+
+- [x][x] **8.12** Delete `config/symbols.yaml`, `config/strategies.yaml`, `config/settings.yaml`. Remove `load_yaml()`, `from_yaml_files()`, `get_config_dir()` from `core/config.py` `core`
+- [x][x] **8.13** Update Dockerfile — remove `COPY config/ config/` from prod stage `infra`
+- [x][x] **8.14** Update tests — replace YAML-dependent fixtures with DB seeds or Pydantic defaults. Update test_config.py, test_symbols.py `test`
+- [x][x] **8.15** End-to-end verification — fresh DB + `alembic upgrade head` seeds all defaults, app starts and runs without any config files `test`
 
 ---
 

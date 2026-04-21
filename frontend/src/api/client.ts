@@ -79,6 +79,25 @@ export async function postApi<T>(
 }
 
 /**
+ * Send a DELETE request.
+ */
+export async function deleteApi<T>(url: string): Promise<T> {
+  const res = await fetch(url, { method: 'DELETE' });
+
+  if (!res.ok) {
+    let data: unknown;
+    try {
+      data = await res.json();
+    } catch {
+      data = await res.text();
+    }
+    throw new ApiError(res.status, res.statusText, data);
+  }
+
+  return (await res.json()) as T;
+}
+
+/**
  * Send a PATCH request with a JSON body.
  */
 export async function patchApi<T>(

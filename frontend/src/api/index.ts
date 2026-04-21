@@ -1,4 +1,4 @@
-export { fetchApi, postApi, patchApi, ApiError } from './client';
+export { fetchApi, postApi, patchApi, deleteApi, ApiError } from './client';
 
 export {
   // Market
@@ -29,6 +29,16 @@ export {
   // Optimization
   useOptimize,
   useWalkForward,
+  // Symbols
+  useSymbols,
+  useAddSymbol,
+  useDeleteSymbol,
+  usePatchSymbol,
+  // App Config (Settings)
+  useNamespaceList,
+  useNamespaceConfig,
+  useUpdateNamespaceConfig,
+  useResetNamespaceConfig,
 } from './queries';
 
 export type {
@@ -55,4 +65,12 @@ export type {
   WalkForwardFold,
   WalkForwardRequest,
   WalkForwardResponse,
+  SymbolItem,
+  SymbolListResponse,
+  AddSymbolRequest,
+  AddSymbolResponse,
+  PatchSymbolRequest,
+  NamespaceFieldMeta,
+  NamespaceConfigResponse,
+  NamespaceListResponse,
 } from './queries';

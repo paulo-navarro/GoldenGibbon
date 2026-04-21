@@ -35,7 +35,7 @@ from core.models import (
     StrategyState,
 )
 
-# Fixed test symbols – isolates tests from config/symbols.yaml
+# Fixed test symbols – isolates tests from runtime config
 _TEST_SYMBOLS = [
     SymbolConfig(symbol="BTCUSDT", timeframes=["15m", "1h"]),
     SymbolConfig(symbol="ETHUSDT", timeframes=["15m", "1h"]),

@@ -289,5 +289,5 @@ class TestWebSocketFeedConfig:
 
         settings = get_settings(reload=True)
         assert hasattr(settings, "ws_feed")
-        assert settings.ws_feed.enabled is True
+        assert settings.ws_feed.enabled is False
         assert settings.ws_feed.base_url == "wss://stream.binance.com:9443"
