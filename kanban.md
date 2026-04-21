@@ -246,10 +246,15 @@
 
 ---
 
-## Errors
+## Bugs
 
 - [x] `.venv-test/` was accidentally committed to `main` — remove it from tracking and add to `.gitignore`
 - [x] Deploy pipeline improvements — preflight checks, auto-migration, scripts in prod image, app-prod restart fix
+- [ ] **Stale strategy_state for removed symbols** — When a symbol is removed from the enabled list (via Symbols page), its `strategy_state` rows in PostgreSQL are not cleaned up. The heartbeat task only upserts state for currently enabled symbols but never deletes rows for symbols that were disabled/removed. This causes the Strategy page to keep showing cards for old pairs (e.g. LINKUSDT, SOLUSDT) with stale conditions and timestamps. **Fix:** the heartbeat (or a config-reload hook) should delete `strategy_state` rows where the symbol is no longer in `enabled_symbols`. Also consider cleaning up related `portfolio_snapshots` entries for removed symbols. `core`
+- [ ] **Nginx proxy timeout on backtest endpoints** — The `/api/` location in the VPS nginx config (`/etc/nginx/sites-enabled/gg.paulonavarro.com`) has no `proxy_read_timeout`, defaulting to 60s. Long-running endpoints like `/api/backtest/compare` (90-day backtest takes 60–90s on VPS) get silently killed by nginx before the API responds. The browser receives no data and React Query resets to idle state with no error shown. **Fix:** add `proxy_read_timeout 120s;` and `proxy_send_timeout 120s;` to the `/api/` location block. `infra`
+- [ ] **smart_hodler backtest crash with 90-day data on VPS** — Running comparison with 90 days on the VPS produces `"The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all()"` for smart_hodler on both BTCUSDT and ETHUSDT. Works fine in dev with 30-day data. Likely a pandas Series being used in a boolean context (e.g. `if series:` instead of `if series.any():`) in the smart_hodler strategy or backtest runner, triggered only with longer data windows. `strategy`
+- [ ] **React error #185 on comparison render (intermittent)** — After the comparison backtest completes, the page occasionally crashes with React error #185 ("Objects are not valid as a React child"). Suspected re-rendering loop — happens when the machine responds fast, does not reproduce on slow machines. Possibly a Recharts Tooltip formatter receiving an unexpected object value, or a race condition in React Query state transitions. Needs investigation with React DevTools profiler in dev mode. `ui`
+- [ ] **Paper/Live trading toggles should be mutually exclusive** — The Settings page currently has independent toggles for `paper_trading.enabled` and `live_trading.enabled`, allowing both to be on simultaneously which makes no sense — the system is either paper or live. **Fix:** replace the two toggles with a single mode selector (Paper / Live). When switching to Live: (1) disable paper mode automatically, (2) fetch actual balances from Binance API and create a fresh portfolio snapshot reflecting the real account state (currently it keeps showing stale paper-trading balances like $1,250 when the real account has $0), (3) clear or archive old paper-trading snapshots so the equity curve starts clean. When switching to Paper: disable live mode and reset to the configured `initial_capital`. `core` `ui`
 
 ---
 
