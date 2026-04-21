@@ -586,7 +586,8 @@ function MultiStrategyBacktest() {
 
         {data?.errors && data.errors.length > 0 && (
           <Alert severity="warning" variant="outlined" sx={{ mb: 2 }}>
-            {data.errors.length} pair(s) failed: {data.errors.map((e) => `${e.strategy ?? ''}:${e.symbol ?? ''}`).join(', ')}
+            {data.errors.length} pair(s) failed:{' '}
+            {data.errors.map((e) => `${e.strategy ?? ''}:${e.symbol ?? ''}`).join(', ')}
           </Alert>
         )}
 
