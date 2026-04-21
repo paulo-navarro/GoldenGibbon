@@ -109,6 +109,24 @@ class PatchSymbolRequest(BaseModel):
         return v
 
 
+def _cleanup_strategy_state(symbol: str) -> None:
+    """Delete strategy_state rows for a removed/disabled symbol."""
+    try:
+        from db import get_session
+        from db.models import StrategyStateRecord
+
+        with get_session() as session:
+            deleted = (
+                session.query(StrategyStateRecord)
+                .filter_by(symbol=symbol)
+                .delete()
+            )
+            if deleted:
+                logger.info("symbols.strategy_state_cleaned", symbol=symbol, rows=deleted)
+    except Exception as exc:
+        logger.warning("symbols.strategy_state_cleanup_failed", symbol=symbol, error=str(exc))
+
+
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 
@@ -197,10 +215,12 @@ def remove_symbol(symbol: str):
     if source == "default":
         save_symbol(symbol=symbol, enabled=False)
         reload_settings()
+        _cleanup_strategy_state(symbol)
         return {"message": f"{symbol} disabled (built-in default, cannot delete)"}
 
     delete_symbol(symbol)
     reload_settings()
+    _cleanup_strategy_state(symbol)
     return {"message": f"{symbol} removed successfully"}
 
 
@@ -226,6 +246,9 @@ def update_symbol(symbol: str, req: PatchSymbolRequest):
         description=description,
     )
     reload_settings()
+
+    if enabled is False:
+        _cleanup_strategy_state(symbol)
 
     return SymbolItem(
         symbol=symbol,

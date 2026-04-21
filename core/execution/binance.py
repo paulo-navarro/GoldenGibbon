@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json as _json
 import os
 import time as _time
 from datetime import datetime, timezone
@@ -776,6 +777,31 @@ class BinanceExecutor:
             "balances": balances,
             "can_trade": data.get("canTrade", False),
         }
+
+    def get_ticker_prices(self, symbols: list[str]) -> Dict[str, Decimal]:
+        """
+        Fetch current prices for a list of symbols via the public ticker endpoint.
+
+        Returns ``{"BTCUSDT": Decimal("67500.12"), ...}``.
+        Symbols with no data are silently omitted.
+        """
+        prices: Dict[str, Decimal] = {}
+        if not symbols:
+            return prices
+
+        try:
+            resp = self._session.get(
+                f"{self._base_url}/api/v3/ticker/price",
+                params={"symbols": _json.dumps(symbols)},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            for item in resp.json():
+                prices[item["symbol"]] = Decimal(item["price"])
+        except Exception as exc:
+            logger.warning("get_ticker_prices: failed", error=str(exc))
+
+        return prices
 
     # ── Private: signed HTTP requests ────────────────────────────────────
 

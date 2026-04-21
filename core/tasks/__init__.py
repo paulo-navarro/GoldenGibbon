@@ -319,8 +319,44 @@ def _get_or_create_components(
                 strategy_name=strategy_name,
                 portfolio_manager=pm,
             )
-            # Load exchange filters for quantity/price formatting
             executor.load_exchange_filters([symbol])
+
+            # Sync portfolio with real Binance balances
+            try:
+                account = executor.get_account_info()
+                balances = account["balances"]
+
+                usdt_bal = balances.get("USDT", {})
+                real_usdt = usdt_bal.get("free", Decimal("0")) + usdt_bal.get("locked", Decimal("0"))
+                pm._portfolio.usdt_balance = real_usdt
+
+                # Check if this symbol's base asset has a balance on the exchange
+                base_asset = symbol.replace("USDT", "")
+                if base_asset in balances:
+                    asset_bal = balances[base_asset]
+                    qty = asset_bal.get("free", Decimal("0")) + asset_bal.get("locked", Decimal("0"))
+                    if qty > 0:
+                        prices = executor.get_ticker_prices([symbol])
+                        price = prices.get(symbol)
+                        value = qty * price if price else Decimal("0")
+                        logger.warning(
+                            "tick_components: asset found on exchange but no local position — "
+                            "reconciliation will report this divergence",
+                            strategy=strategy_name, symbol=symbol,
+                            asset=base_asset, qty=str(qty),
+                            value_usdt=str(value),
+                        )
+
+                logger.info(
+                    "tick_components: synced real balance",
+                    strategy=strategy_name, symbol=symbol,
+                    config_capital=str(cap), real_usdt=str(real_usdt),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "tick_components: failed to fetch real balance, using config value",
+                    strategy=strategy_name, symbol=symbol, error=str(exc),
+                )
         else:
             executor = PaperExecutor(
                 strategy_name=strategy_name,
@@ -1107,6 +1143,12 @@ def run_strategy_tick(self) -> Dict[str, Any]:  # noqa: ANN001
             task_id=self.request.id,
         )
         return {"skipped": True, "reason": "no_enabled_pairs"}
+
+    active_keys = {(s, sym) for s, sym, _ in pairs}
+    stale_keys = [k for k in _worker_state if k not in active_keys]
+    for k in stale_keys:
+        del _worker_state[k]
+        logger.info("run_strategy_tick: evicted stale worker state", strategy=k[0], symbol=k[1])
 
     job = group(
         run_single_strategy_tick.s(strategy_name, symbol)
