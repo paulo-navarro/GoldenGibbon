@@ -291,17 +291,6 @@ function ParameterTuning({ strategyName }: { strategyName: string }) {
     update(edits);
   }, [edits, update]);
 
-  const handleReset = useCallback(() => {
-    if (!data) return;
-    const defaults: Record<string, unknown> = {};
-    for (const field of data.fields) {
-      if (field.default != null) {
-        defaults[field.name] = field.default;
-      }
-    }
-    update(defaults);
-  }, [data, update]);
-
   const hasEdits = Object.keys(edits).length > 0;
 
   if (isLoading) return <Skeleton variant="rounded" height={60} />;
