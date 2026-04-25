@@ -289,6 +289,7 @@ function RecentSignals({
                 <TableCell>Strategy</TableCell>
                 <TableCell>State</TableCell>
                 <TableCell>Signal</TableCell>
+                <TableCell>Updated</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -301,6 +302,11 @@ function RecentSignals({
                   </TableCell>
                   <TableCell>
                     <Chip label={s.signal} size="small" color={signalColor(s.signal)} variant="filled" />
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2" sx={{ fontSize: '0.75rem', whiteSpace: 'nowrap' }}>
+                      {new Date(s.updated_at).toLocaleString()}
+                    </Typography>
                   </TableCell>
                 </TableRow>
               ))}

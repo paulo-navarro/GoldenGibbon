@@ -352,8 +352,6 @@ class AlertingConfig(BaseModel):
     """Telegram alerting settings."""
 
     enabled: bool = Field(default=False)
-    bot_token_env: str = Field(default="TELEGRAM_BOT_TOKEN")
-    chat_id_env: str = Field(default="TELEGRAM_CHAT_ID")
     alert_on_fill: bool = Field(default=True, description="Alert on order fills (trade open/close)")
     alert_on_stop: bool = Field(default=True, description="Alert on stop-loss triggers")
     alert_on_kill_switch: bool = Field(default=True, description="Alert on kill-switch activation")

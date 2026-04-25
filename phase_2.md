@@ -28,7 +28,12 @@
 - [ ] API: todos os endpoints que retornam orders, trades, portfolio e equity-curve devem aceitar (e filtrar por) `trading_mode`. Default determinado pela config `live_trading.enabled`:
   - Se live trading ligado → default `'live'`
   - Se desligado → default `'paper'`
-- [ ] Frontend: **não** expor seletor de modo ao usuário. O front lê o estado de `live_trading.enabled` (já disponível via `GET /api/config/settings`) e passa `trading_mode` automaticamente em todas as chamadas de API. Se live → mostra só dados live. Se paper → mostra só dados paper. Transparente para o usuário.
+- [ ] O front lê o estado de `live_trading.enabled` (já disponível via `GET /api/config/settings`) e passa `trading_mode` automaticamente em todas as chamadas de API. Se live → mostra só dados live. Se paper → mostra só dados paper. Transparente para o usuário.
+
+## Alerting Cleanup
+
+- [x] Remover `bot_token_env` e `chat_id_env` do `AlertingConfig` (DB/interface). Hardcodar os nomes `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID` direto no código (`get_alerter()`). Credenciais vêm exclusivamente do `.env`, sem indireção via DB.
+- [x] Remover esses dois campos da interface de Settings no frontend (namespace `alerting`). Manter apenas: `enabled`, `alert_on_fill`, `alert_on_stop`, `alert_on_kill_switch`, `alert_on_reconciliation`, `alert_on_error`.
 
 ## Bugs
 

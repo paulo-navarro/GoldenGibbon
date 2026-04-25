@@ -198,8 +198,8 @@ def get_alerter() -> Alerter:
             # Disabled alerter — all methods are no-ops
             _alerter = Alerter(bot_token="", chat_id="")
         else:
-            bot_token = os.environ.get(cfg.bot_token_env, "")
-            chat_id = os.environ.get(cfg.chat_id_env, "")
+            bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+            chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
             _alerter = Alerter(bot_token=bot_token, chat_id=chat_id)
 
     return _alerter

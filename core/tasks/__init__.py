@@ -1024,6 +1024,16 @@ def run_single_strategy_tick(
                     )
             except Exception as persist_exc:
                 log.error("single_tick: kill-switch persist failed", error=str(persist_exc))
+            _send_tick_alerts(
+                strategy_name=strategy_name,
+                symbol=symbol,
+                execution_result=None,
+                stop_hit=False,
+                stop_type=None,
+                close=close,
+                comp=comp,
+                settings=settings,
+            )
             return {"strategy": strategy_name, "symbol": symbol, "signal": None, "kill_switch": True}
 
         # ── 2. Check stops ───────────────────────────────────
