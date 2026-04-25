@@ -177,7 +177,8 @@ class TestMarketOrderFill:
             price="51000.00", qty="0.10000"
         )
         close_response["side"] = "SELL"
-        with patch.object(ex, "_signed_request", return_value=close_response):
+        with patch.object(ex, "_get_available_balance", return_value=Decimal("0.10000")), \
+             patch.object(ex, "_signed_request", return_value=close_response):
             result = ex.execute(close_decision, T0)
 
         assert result is not None
