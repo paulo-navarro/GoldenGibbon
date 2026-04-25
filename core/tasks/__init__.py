@@ -1052,7 +1052,24 @@ def run_single_strategy_tick(
             execution_result = comp.executor.execute(
                 stop_result.decision, candle_time,
             )
-            if stop_result.cooldown_candles and stop_result.cooldown_candles > 0:
+            if execution_result is None:
+                log.error(
+                    "single_tick: stop execution FAILED — position still open",
+                    exit_reason=str(stop_result.decision.exit_reason),
+                    symbol=symbol,
+                    strategy=strategy_name,
+                    close=str(close),
+                )
+                if settings.alerting.enabled:
+                    try:
+                        from core.alerting import get_alerter
+                        get_alerter().alert_error(
+                            task=f"stop:{strategy_name}:{symbol}",
+                            error=f"Stop {stop_result.decision.exit_reason} triggered but sell order FAILED. Position still open at {close}.",
+                        )
+                    except Exception:
+                        pass
+            elif stop_result.cooldown_candles and stop_result.cooldown_candles > 0:
                 comp.strategy._cooldown_remaining = stop_result.cooldown_candles
                 comp.strategy._state = StrategyState.COOLDOWN
         elif comp.pm.has_position(symbol):

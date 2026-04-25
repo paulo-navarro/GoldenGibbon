@@ -80,8 +80,13 @@ def get_strategy_signals(
     """
     Return derived signal snapshots for each symbol/strategy pair.
 
-    Signal is currently always HOLD — live condition evaluation will be
-    added when state persistence lands (Phase 3, task 3.8).
+    Results are ordered by most recently updated first.
     """
-    records = _filtered_query(db, symbol=symbol, strategy=strategy)
+    stmt = select(StrategyStateRecord)
+    if symbol is not None:
+        stmt = stmt.where(StrategyStateRecord.symbol == symbol.upper())
+    if strategy is not None:
+        stmt = stmt.where(StrategyStateRecord.strategy == strategy)
+    stmt = stmt.order_by(StrategyStateRecord.id.desc())
+    records = list(db.execute(stmt).scalars().all())
     return [orm_to_signal_snapshot(r) for r in records]

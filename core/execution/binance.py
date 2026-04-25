@@ -258,6 +258,13 @@ class BinanceExecutor:
         """OPEN -> buy, open new position."""
         order = self._place_and_fill(decision, OrderSide.BUY)
         if order is None or order.status != OrderStatus.FILLED:
+            logger.error(
+                "binance.open_failed",
+                symbol=decision.symbol,
+                size=str(decision.size),
+                order_status=order.status.value if order else "no_order",
+                reject_reason=order.reject_reason if order else "unknown",
+            )
             return None
 
         fill_price = order.avg_fill_price or decision.price
@@ -291,6 +298,13 @@ class BinanceExecutor:
         """SCALE_IN -> buy, add to position."""
         order = self._place_and_fill(decision, OrderSide.BUY)
         if order is None or order.status != OrderStatus.FILLED:
+            logger.error(
+                "binance.scale_in_failed",
+                symbol=decision.symbol,
+                size=str(decision.size),
+                order_status=order.status.value if order else "no_order",
+                reject_reason=order.reject_reason if order else "unknown",
+            )
             return None
 
         fill_price = order.avg_fill_price or decision.price
@@ -322,6 +336,13 @@ class BinanceExecutor:
         """CLOSE -> sell entire position."""
         order = self._place_and_fill(decision, OrderSide.SELL)
         if order is None or order.status != OrderStatus.FILLED:
+            logger.error(
+                "binance.close_failed",
+                symbol=decision.symbol,
+                size=str(decision.size),
+                order_status=order.status.value if order else "no_order",
+                reject_reason=order.reject_reason if order else "unknown",
+            )
             return None
 
         fill_price = order.avg_fill_price or decision.price
@@ -352,6 +373,13 @@ class BinanceExecutor:
         """REDUCE -> sell fraction of position."""
         order = self._place_and_fill(decision, OrderSide.SELL)
         if order is None or order.status != OrderStatus.FILLED:
+            logger.error(
+                "binance.reduce_failed",
+                symbol=decision.symbol,
+                size=str(decision.size),
+                order_status=order.status.value if order else "no_order",
+                reject_reason=order.reject_reason if order else "unknown",
+            )
             return None
 
         fill_price = order.avg_fill_price or decision.price
