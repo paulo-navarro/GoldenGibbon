@@ -464,15 +464,15 @@ def _persist_tick_results(
 
     # ── 1. Order + Trade audit trail ─────────────────────────────────
     if execution_result is not None:
-        order_rec = order_to_orm(execution_result.order, run_id=run_id)
+        order_rec = order_to_orm(execution_result.order, run_id=run_id, trading_mode=comp.trading_mode)
         session.add(order_rec)
 
         if execution_result.trade is not None:
-            trade_rec = trade_to_orm(execution_result.trade, run_id=run_id)
+            trade_rec = trade_to_orm(execution_result.trade, run_id=run_id, trading_mode=comp.trading_mode)
             session.add(trade_rec)
 
     # ── 2. Portfolio snapshot ────────────────────────────────────────
-    snap_rec = portfolio_snapshot_to_orm(snapshot, run_id=run_id)
+    snap_rec = portfolio_snapshot_to_orm(snapshot, run_id=run_id, trading_mode=comp.trading_mode)
     session.add(snap_rec)
 
     # ── 3. Position upsert / delete ──────────────────────────────────

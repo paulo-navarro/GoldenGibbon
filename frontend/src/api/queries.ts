@@ -38,6 +38,15 @@ interface RunFilterParams extends TimeRangeParams {
   run_id?: string;
 }
 
+// ── Trading Mode ────────────────────────────────────────────────────────────
+
+export function useTradingMode(): string {
+  const { data } = useNamespaceConfig('live_trading');
+  if (!data) return 'paper';
+  const enabled = data.fields.find(f => f.name === 'enabled');
+  return enabled?.value === true ? 'live' : 'paper';
+}
+
 // ── Market ───────────────────────────────────────────────────────────────────
 
 export interface UseCandlesParams extends TimeRangeParams {
@@ -95,9 +104,11 @@ export function usePrice(symbol: string, params: UsePriceParams = {}) {
 // ── Portfolio ────────────────────────────────────────────────────────────────
 
 export function usePortfolio() {
+  const tradingMode = useTradingMode();
+
   const query = useQuery({
-    queryKey: ['portfolio'],
-    queryFn: () => fetchApi<PortfolioResponse>('/api/portfolio/'),
+    queryKey: ['portfolio', tradingMode],
+    queryFn: () => fetchApi<PortfolioResponse>('/api/portfolio/', { trading_mode: tradingMode }),
   });
 
   useEffect(() => {
@@ -115,12 +126,14 @@ export interface UseEquityCurveParams extends RunFilterParams {
 
 export function useEquityCurve(params: UseEquityCurveParams = {}) {
   const { run_id, limit, start, end } = params;
+  const tradingMode = useTradingMode();
 
   const query = useQuery({
-    queryKey: ['equity-curve', run_id, limit, start, end],
+    queryKey: ['equity-curve', tradingMode, run_id, limit, start, end],
     queryFn: () =>
       fetchApi<PortfolioSnapshot[]>('/api/portfolio/equity-curve', {
         run_id,
+        trading_mode: run_id ? undefined : tradingMode,
         limit,
         start,
         end,
@@ -147,12 +160,14 @@ export interface UseTradesParams extends RunFilterParams {
 
 export function useTrades(params: UseTradesParams = {}) {
   const { run_id, symbol, strategy, exit_reason, limit, start, end } = params;
+  const tradingMode = useTradingMode();
 
   const query = useQuery({
-    queryKey: ['trades', run_id, symbol, strategy, exit_reason, limit, start, end],
+    queryKey: ['trades', tradingMode, run_id, symbol, strategy, exit_reason, limit, start, end],
     queryFn: () =>
       fetchApi<Trade[]>('/api/trades/', {
         run_id,
+        trading_mode: run_id ? undefined : tradingMode,
         symbol,
         strategy,
         exit_reason,
@@ -173,12 +188,14 @@ export function useTrades(params: UseTradesParams = {}) {
 
 export function useTradeStats(params: UseTradesParams = {}) {
   const { run_id, symbol, strategy, exit_reason, limit, start, end } = params;
+  const tradingMode = useTradingMode();
 
   const query = useQuery({
-    queryKey: ['trade-stats', run_id, symbol, strategy, exit_reason, limit, start, end],
+    queryKey: ['trade-stats', tradingMode, run_id, symbol, strategy, exit_reason, limit, start, end],
     queryFn: () =>
       fetchApi<TradeStatsResponse>('/api/trades/stats', {
         run_id,
+        trading_mode: run_id ? undefined : tradingMode,
         symbol,
         strategy,
         exit_reason,
@@ -208,12 +225,14 @@ export interface UseOrdersParams extends RunFilterParams {
 
 export function useOrders(params: UseOrdersParams = {}) {
   const { run_id, symbol, side, status, limit, start, end } = params;
+  const tradingMode = useTradingMode();
 
   const query = useQuery({
-    queryKey: ['orders', run_id, symbol, side, status, limit, start, end],
+    queryKey: ['orders', tradingMode, run_id, symbol, side, status, limit, start, end],
     queryFn: () =>
       fetchApi<Order[]>('/api/orders/', {
         run_id,
+        trading_mode: run_id ? undefined : tradingMode,
         symbol,
         side,
         status,

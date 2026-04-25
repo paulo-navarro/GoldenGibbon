@@ -92,6 +92,7 @@ def _seed_snapshots(
     count: int = 10,
     base_time: datetime = BASE_TIME,
     base_equity: Decimal = Decimal("10000"),
+    trading_mode: str = "paper",
 ) -> list[PortfolioSnapshotRecord]:
     """Insert *count* portfolio snapshots for a given run."""
     records = []
@@ -105,6 +106,7 @@ def _seed_snapshots(
             daily_pnl=Decimal("50") if i > 0 else None,
             total_pnl=Decimal(str(i * 50)),
             open_positions_count=2,
+            trading_mode=trading_mode,
         )
         db.add(r)
         records.append(r)
@@ -180,6 +182,7 @@ def multi_run_client():
                 db, run_id="run-old", count=5,
                 base_time=BASE_TIME - timedelta(days=7),
                 base_equity=Decimal("8000"),
+                trading_mode="live",
             )
             _seed_backtest_result(db, "run-new")
             _seed_snapshots(
@@ -360,10 +363,10 @@ class TestGetEquityCurve:
         # Hours 3..7 → 5 snapshots
         assert len(data) == 5
 
-    def test_defaults_to_latest_run(self, multi_run_client):
-        """Without run_id, uses the most recently timestamped run."""
+    def test_defaults_to_paper_mode(self, multi_run_client):
+        """Without params, returns only paper trading_mode snapshots."""
         data = multi_run_client.get("/api/portfolio/equity-curve").json()
-        # run-new has 10 snapshots; run-old has 5
+        # run-new (paper) has 10 snapshots; run-old (live) is excluded
         assert len(data) == 10
 
     def test_explicit_run_id(self, multi_run_client):

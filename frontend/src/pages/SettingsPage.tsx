@@ -15,6 +15,7 @@ import {
   Alert,
 } from '@mui/material';
 import SettingsIcon from '@mui/icons-material/Settings';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   useNamespaceList,
   useNamespaceConfig,
@@ -29,7 +30,7 @@ function labelFromKey(key: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function NamespaceEditor({ namespace }: { namespace: string }) {
+function NamespaceEditor({ namespace, onSaved }: { namespace: string; onSaved?: () => void }) {
   const { data, isLoading, error } = useNamespaceConfig(namespace);
   const { update, isPending, isError, isSuccess } = useUpdateNamespaceConfig(namespace);
   const resetMutation = useResetNamespaceConfig(namespace);
@@ -46,6 +47,7 @@ function NamespaceEditor({ namespace }: { namespace: string }) {
     if (isSuccess) {
       setEdits({});
       setStatusMsg('Saved');
+      onSaved?.();
       const t = setTimeout(() => setStatusMsg(null), 2000);
       return () => clearTimeout(t);
     }
@@ -54,16 +56,17 @@ function NamespaceEditor({ namespace }: { namespace: string }) {
       const t = setTimeout(() => setStatusMsg(null), 3000);
       return () => clearTimeout(t);
     }
-  }, [isSuccess, isError]);
+  }, [isSuccess, isError, onSaved]);
 
   useEffect(() => {
     if (resetMutation.isSuccess) {
       setEdits({});
       setStatusMsg('Reset to defaults');
+      onSaved?.();
       const t = setTimeout(() => setStatusMsg(null), 2000);
       return () => clearTimeout(t);
     }
-  }, [resetMutation.isSuccess]);
+  }, [resetMutation.isSuccess, onSaved]);
 
   const handleChange = useCallback((name: string, value: unknown) => {
     setEdits((prev) => ({ ...prev, [name]: value }));
@@ -164,17 +167,69 @@ function NamespaceEditor({ namespace }: { namespace: string }) {
   );
 }
 
+const TRADING_MODE_KEY = '_trading_mode';
+const MERGED_NAMESPACES = new Set(['paper_trading', 'live_trading']);
+
+function TradingModeEditor() {
+  const queryClient = useQueryClient();
+
+  const refreshLive = useCallback(
+    () => { queryClient.invalidateQueries({ queryKey: ['namespace-config', 'live_trading'] }); },
+    [queryClient],
+  );
+  const refreshPaper = useCallback(
+    () => { queryClient.invalidateQueries({ queryKey: ['namespace-config', 'paper_trading'] }); },
+    [queryClient],
+  );
+
+  return (
+    <Box>
+      <Typography variant="h6" sx={{ mb: 2 }}>Trading Mode</Typography>
+      <Grid container spacing={2}>
+        <Grid size={{ xs: 12, md: 6 }}>
+          <Paper variant="outlined" sx={{ p: 2 }}>
+            <NamespaceEditor namespace="live_trading" onSaved={refreshPaper} />
+          </Paper>
+        </Grid>
+        <Grid size={{ xs: 12, md: 6 }}>
+          <Paper variant="outlined" sx={{ p: 2 }}>
+            <NamespaceEditor namespace="paper_trading" onSaved={refreshLive} />
+          </Paper>
+        </Grid>
+      </Grid>
+    </Box>
+  );
+}
+
 export default function SettingsPage() {
   const { data: listData, isLoading } = useNamespaceList();
   const [selected, setSelected] = useState('');
 
-  const namespaces = useMemo(() => listData?.namespaces ?? [], [listData]);
+  const menuItems = useMemo(() => {
+    const raw = listData?.namespaces ?? [];
+    const items: string[] = [];
+    let tradingInserted = false;
+    for (const ns of raw) {
+      if (MERGED_NAMESPACES.has(ns)) {
+        if (!tradingInserted) {
+          items.push(TRADING_MODE_KEY);
+          tradingInserted = true;
+        }
+      } else {
+        items.push(ns);
+      }
+    }
+    if (!tradingInserted && raw.some((ns) => MERGED_NAMESPACES.has(ns))) {
+      items.unshift(TRADING_MODE_KEY);
+    }
+    return items;
+  }, [listData]);
 
   useEffect(() => {
-    if (namespaces.length > 0 && !selected) {
-      setSelected(namespaces[0]);
+    if (menuItems.length > 0 && !selected) {
+      setSelected(menuItems[0]);
     }
-  }, [namespaces, selected]);
+  }, [menuItems, selected]);
 
   return (
     <Box sx={{ p: 2 }}>
@@ -190,14 +245,16 @@ export default function SettingsPage() {
               <Skeleton variant="rounded" height={300} />
             ) : (
               <List dense disablePadding>
-                {namespaces.map((ns) => (
+                {menuItems.map((key) => (
                   <ListItemButton
-                    key={ns}
-                    selected={ns === selected}
-                    onClick={() => setSelected(ns)}
+                    key={key}
+                    selected={key === selected}
+                    onClick={() => setSelected(key)}
                     sx={{ borderRadius: 1 }}
                   >
-                    <ListItemText primary={labelFromKey(ns)} />
+                    <ListItemText
+                      primary={key === TRADING_MODE_KEY ? 'Trading Mode' : labelFromKey(key)}
+                    />
                   </ListItemButton>
                 ))}
               </List>
@@ -207,7 +264,9 @@ export default function SettingsPage() {
 
         <Grid size={{ xs: 12, md: 9 }}>
           <Paper variant="outlined" sx={{ p: 2 }}>
-            {selected ? (
+            {selected === TRADING_MODE_KEY ? (
+              <TradingModeEditor />
+            ) : selected ? (
               <NamespaceEditor namespace={selected} />
             ) : (
               <Typography color="text.secondary">Select a category</Typography>

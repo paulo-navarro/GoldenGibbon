@@ -186,6 +186,7 @@ def orm_to_position(record: orm_models.PositionRecord) -> pydantic_models.Positi
 def trade_to_orm(
     trade: pydantic_models.Trade,
     run_id: str | None = None,
+    trading_mode: str = "paper",
 ) -> orm_models.TradeRecord:
     """
     Convert Pydantic Trade to ORM TradeRecord.
@@ -209,9 +210,10 @@ def trade_to_orm(
         pnl_usdt=trade.pnl_usdt,
         pnl_percent=trade.pnl_percent,
         duration_minutes=trade.duration_minutes,
-        exit_reason=trade.exit_reason.value,  # Convert enum to string
+        exit_reason=trade.exit_reason.value,
         max_favorable_excursion=trade.max_favorable_excursion,
         max_adverse_excursion=trade.max_adverse_excursion,
+        trading_mode=trading_mode,
     )
 
 
@@ -247,6 +249,7 @@ def orm_to_trade(record: orm_models.TradeRecord) -> pydantic_models.Trade:
 def order_to_orm(
     order: pydantic_models.Order,
     run_id: str | None = None,
+    trading_mode: str = "paper",
 ) -> orm_models.OrderRecord:
     """
     Convert Pydantic Order to ORM OrderRecord.
@@ -278,6 +281,7 @@ def order_to_orm(
         created_at=order.created_at,
         updated_at=order.updated_at,
         filled_at=order.filled_at,
+        trading_mode=trading_mode,
     )
 
 
@@ -319,6 +323,7 @@ def orm_to_order(record: orm_models.OrderRecord) -> pydantic_models.Order:
 def portfolio_snapshot_to_orm(
     snapshot: pydantic_models.PortfolioSnapshot,
     run_id: str | None = None,
+    trading_mode: str = "paper",
 ) -> orm_models.PortfolioSnapshot:
     """
     Convert Pydantic PortfolioSnapshot to ORM PortfolioSnapshot.
@@ -339,6 +344,7 @@ def portfolio_snapshot_to_orm(
         daily_pnl=snapshot.daily_pnl,
         total_pnl=snapshot.total_pnl,
         open_positions_count=snapshot.open_positions_count,
+        trading_mode=trading_mode,
     )
 
 

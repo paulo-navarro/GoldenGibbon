@@ -212,6 +212,7 @@ def _seed_live_portfolio_snapshot() -> None:
             daily_pnl=Decimal("0"),
             total_pnl=Decimal("0"),
             open_positions_count=asset_count,
+            trading_mode="live",
         )
 
         with get_session() as session:

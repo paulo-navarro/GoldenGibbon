@@ -62,6 +62,7 @@ def _seed_trades(
     base_time: datetime = BASE_TIME,
     symbol: str = "BTCUSDT",
     strategy: str = "smart_hodler",
+    trading_mode: str = "paper",
 ) -> list[TradeRecord]:
     """Insert *count* trade records with alternating win/loss."""
     records = []
@@ -89,6 +90,7 @@ def _seed_trades(
             pnl_percent=pnl_pct,
             duration_minutes=60 + i * 5,
             exit_reason=exit_reasons[i % len(exit_reasons)],
+            trading_mode=trading_mode,
         )
         db.add(r)
         records.append(r)
@@ -162,6 +164,7 @@ def multi_run_client():
             _seed_trades(
                 db, run_id="run-old", count=5,
                 base_time=BASE_TIME - timedelta(days=7),
+                trading_mode="live",
             )
             _seed_backtest_result(db, "run-new")
             _seed_trades(
@@ -250,9 +253,10 @@ class TestGetTrades:
         resp = seeded_client.get("/api/trades/", params={"limit": 10001})
         assert resp.status_code == 422
 
-    def test_defaults_to_latest_run(self, multi_run_client):
-        """Without run_id, uses the most recently timestamped run."""
+    def test_defaults_to_paper_mode(self, multi_run_client):
+        """Without params, returns only paper trading_mode trades."""
         data = multi_run_client.get("/api/trades/").json()
+        # run-new (paper) has 10 trades; run-old (live) is excluded
         assert len(data) == 10
 
     def test_explicit_run_id(self, multi_run_client):

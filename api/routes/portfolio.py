@@ -26,11 +26,17 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from core.config import get_settings
 from core.models import Position, PortfolioSnapshot
 from db import get_db
 from db.models import PositionRecord, TradeRecord
 from db.models import PortfolioSnapshot as PortfolioSnapshotRecord
 from db.utils import orm_to_position, orm_to_portfolio_snapshot
+
+
+def _default_trading_mode() -> str:
+    settings = get_settings()
+    return "live" if settings.live_trading.enabled else "paper"
 
 router = APIRouter()
 
@@ -55,6 +61,7 @@ class PortfolioResponse(BaseModel):
 
 @router.get("/", response_model=PortfolioResponse)
 def get_portfolio(
+    trading_mode: Optional[str] = Query(None, description="Filter by trading mode (paper/live). Defaults to live_trading.enabled setting."),
     db: Session = Depends(get_db),
 ) -> PortfolioResponse:
     """
@@ -64,14 +71,17 @@ def get_portfolio(
     latest ``portfolio_snapshots`` row for balance and equity figures.
     When no snapshot exists yet, all monetary fields default to ``"0"``.
     """
+    mode = trading_mode or _default_trading_mode()
+
     # Fetch open positions
     pos_stmt = select(PositionRecord).order_by(PositionRecord.entry_time)
     position_records = list(db.execute(pos_stmt).scalars().all())
     positions = [orm_to_position(r) for r in position_records]
 
-    # Fetch latest snapshot for balance/equity summary
+    # Fetch latest snapshot for balance/equity summary, filtered by trading_mode
     snap_stmt = (
         select(PortfolioSnapshotRecord)
+        .where(PortfolioSnapshotRecord.trading_mode == mode)
         .order_by(PortfolioSnapshotRecord.timestamp.desc())
         .limit(1)
     )
@@ -88,16 +98,14 @@ def get_portfolio(
             last_updated=None,
         )
 
-    total_pnl = Decimal("0")
-    if snapshot.run_id:
-        total_pnl = (
-            db.execute(
-                select(func.sum(TradeRecord.pnl_usdt)).where(
-                    TradeRecord.run_id == snapshot.run_id
-                )
-            ).scalar()
-            or Decimal("0")
-        )
+    total_pnl = (
+        db.execute(
+            select(func.sum(TradeRecord.pnl_usdt)).where(
+                TradeRecord.trading_mode == mode
+            )
+        ).scalar()
+        or Decimal("0")
+    )
 
     return PortfolioResponse(
         usdt_balance=str(snapshot.usdt_balance),
@@ -113,8 +121,9 @@ def get_portfolio(
 @router.get("/equity-curve", response_model=list[PortfolioSnapshot])
 def get_equity_curve(
     run_id: Optional[str] = Query(
-        None, description="Backtest run ID (defaults to latest run)"
+        None, description="Backtest run ID (overrides trading_mode filter)"
     ),
+    trading_mode: Optional[str] = Query(None, description="Filter by trading mode (paper/live). Defaults to live_trading.enabled setting."),
     limit: int = Query(
         500, ge=1, le=10000, description="Max snapshots to return"
     ),
@@ -123,37 +132,29 @@ def get_equity_curve(
     db: Session = Depends(get_db),
 ) -> list[PortfolioSnapshot]:
     """
-    Return equity-curve snapshots for a backtest run.
+    Return equity-curve snapshots.
 
-    Results are sorted chronologically (oldest first).  When no
-    ``run_id`` is given, the most recent run is used.  When neither
+    Results are sorted chronologically (oldest first).  Filtered by
+    ``trading_mode`` (defaults to current config).  An explicit
+    ``run_id`` overrides the trading_mode filter.  When neither
     ``start`` nor ``end`` is supplied the most recent *limit* snapshots
     are returned.
     """
-    # Resolve run_id — default to the latest run
-    effective_run_id = run_id
-    if effective_run_id is None:
-        latest_stmt = (
-            select(PortfolioSnapshotRecord.run_id)
-            .where(PortfolioSnapshotRecord.run_id.is_not(None))
-            .order_by(PortfolioSnapshotRecord.timestamp.desc())
-            .limit(1)
+    if run_id is not None:
+        stmt = select(PortfolioSnapshotRecord).where(
+            PortfolioSnapshotRecord.run_id == run_id,
         )
-        row = db.execute(latest_stmt).scalars().first()
-        if row is None:
-            return []
-        effective_run_id = row
-
-    stmt = select(PortfolioSnapshotRecord).where(
-        PortfolioSnapshotRecord.run_id == effective_run_id,
-    )
+    else:
+        mode = trading_mode or _default_trading_mode()
+        stmt = select(PortfolioSnapshotRecord).where(
+            PortfolioSnapshotRecord.trading_mode == mode,
+        )
 
     if start is not None:
         stmt = stmt.where(PortfolioSnapshotRecord.timestamp >= start)
     if end is not None:
         stmt = stmt.where(PortfolioSnapshotRecord.timestamp <= end)
 
-    # When no date range, return latest snapshots (DESC + limit + reverse).
     if start is None and end is None:
         stmt = stmt.order_by(PortfolioSnapshotRecord.timestamp.desc()).limit(limit)
         records = list(db.execute(stmt).scalars().all())

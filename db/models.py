@@ -140,15 +140,18 @@ class TradeRecord(Base):
     max_favorable_excursion: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 8), nullable=True)
     max_adverse_excursion: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 8), nullable=True)
     
+    trading_mode: Mapped[str] = mapped_column(String(10), nullable=False, default="paper", server_default="paper")
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now()
     )
-    
+
     __table_args__ = (
         Index("ix_trade_records_symbol_strategy_entry", "symbol", "strategy", "entry_time"),
         Index("ix_trade_records_strategy_exit", "strategy", "exit_time"),
+        Index("ix_trade_records_trading_mode", "trading_mode"),
     )
     
     def __repr__(self) -> str:
@@ -183,6 +186,8 @@ class OrderRecord(Base):
     reject_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     exchange_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
+    trading_mode: Mapped[str] = mapped_column(String(10), nullable=False, default="paper", server_default="paper")
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -198,10 +203,11 @@ class OrderRecord(Base):
         DateTime(timezone=True),
         nullable=True
     )
-    
+
     __table_args__ = (
         Index("ix_order_records_symbol_created", "symbol", "created_at"),
         Index("ix_order_records_status_created", "status", "created_at"),
+        Index("ix_order_records_trading_mode", "trading_mode"),
     )
     
     def __repr__(self) -> str:
@@ -231,13 +237,18 @@ class PortfolioSnapshot(Base):
     daily_pnl: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 8), nullable=True)
     total_pnl: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False, default=0)
     open_positions_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    
+    trading_mode: Mapped[str] = mapped_column(String(10), nullable=False, default="paper", server_default="paper")
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now()
     )
-    
+
+    __table_args__ = (
+        Index("ix_portfolio_snapshots_trading_mode", "trading_mode"),
+    )
+
     def __repr__(self) -> str:
         return f"<PortfolioSnapshot(timestamp={self.timestamp}, equity={self.total_equity})>"
 

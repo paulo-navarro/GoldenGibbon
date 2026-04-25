@@ -65,6 +65,7 @@ def _seed_orders(
     symbol: str = "BTCUSDT",
     side: str | None = None,
     status: str | None = None,
+    trading_mode: str = "paper",
 ) -> list[OrderRecord]:
     """
     Insert *count* order records with rotating sides/statuses.
@@ -93,6 +94,7 @@ def _seed_orders(
             exchange_order_id=f"binance-{i}" if st == "filled" else None,
             created_at=base_time + timedelta(hours=i),
             filled_at=base_time + timedelta(hours=i, minutes=30) if st == "filled" else None,
+            trading_mode=trading_mode,
         )
         db.add(r)
         records.append(r)
@@ -166,6 +168,7 @@ def multi_run_client():
             _seed_orders(
                 db, run_id="run-old", count=5,
                 base_time=BASE_TIME - timedelta(days=7),
+                trading_mode="live",
             )
             _seed_backtest_result(db, "run-new")
             _seed_orders(
@@ -259,9 +262,10 @@ class TestGetOrders:
         resp = seeded_client.get("/api/orders/", params={"limit": 10001})
         assert resp.status_code == 422
 
-    def test_defaults_to_latest_run(self, multi_run_client):
-        """Without run_id, uses the most recently timestamped run."""
+    def test_defaults_to_paper_mode(self, multi_run_client):
+        """Without params, returns only paper trading_mode orders."""
         data = multi_run_client.get("/api/orders/").json()
+        # run-new (paper) has 10 orders; run-old (live) is excluded
         assert len(data) == 10
 
     def test_explicit_run_id(self, multi_run_client):

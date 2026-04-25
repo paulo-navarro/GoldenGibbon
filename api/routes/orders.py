@@ -24,10 +24,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from core.config import get_settings
 from core.models import Order
 from db import get_db
 from db.models import OrderRecord
 from db.utils import orm_to_order
+
+
+def _default_trading_mode() -> str:
+    settings = get_settings()
+    return "live" if settings.live_trading.enabled else "paper"
 
 router = APIRouter()
 
@@ -35,25 +41,13 @@ router = APIRouter()
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def _resolve_run_id(db: Session, run_id: Optional[str]) -> Optional[str]:
-    """Return *run_id* or the latest run_id from the order_records table."""
-    if run_id is not None:
-        return run_id
-    latest_stmt = (
-        select(OrderRecord.run_id)
-        .where(OrderRecord.run_id.is_not(None))
-        .order_by(OrderRecord.created_at.desc())
-        .limit(1)
-    )
-    return db.execute(latest_stmt).scalars().first()
-
-
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 
 @router.get("/", response_model=list[Order])
 def get_orders(
-    run_id: Optional[str] = Query(None, description="Backtest/live run ID (defaults to latest)"),
+    run_id: Optional[str] = Query(None, description="Backtest/live run ID (overrides trading_mode filter)"),
+    trading_mode: Optional[str] = Query(None, description="Filter by trading mode (paper/live). Defaults to live_trading.enabled setting."),
     symbol: Optional[str] = Query(None, description="Filter by symbol (e.g. BTCUSDT)"),
     side: Optional[str] = Query(None, description="Filter by side (buy/sell)"),
     status: Optional[str] = Query(None, description="Filter by status (pending/filled/partial/rejected/cancelled)"),
@@ -65,14 +59,15 @@ def get_orders(
     """
     Return historical orders.
 
-    Results are scoped to a single run_id (defaults to the latest run)
-    and sorted chronologically by created_at (oldest first).
+    Filtered by ``trading_mode`` (defaults to current config).
+    An explicit ``run_id`` overrides the trading_mode filter.
+    Sorted chronologically by created_at (oldest first).
     """
-    effective_run_id = _resolve_run_id(db, run_id)
-    if effective_run_id is None:
-        return []
-
-    stmt = select(OrderRecord).where(OrderRecord.run_id == effective_run_id)
+    if run_id is not None:
+        stmt = select(OrderRecord).where(OrderRecord.run_id == run_id)
+    else:
+        mode = trading_mode or _default_trading_mode()
+        stmt = select(OrderRecord).where(OrderRecord.trading_mode == mode)
 
     if symbol is not None:
         stmt = stmt.where(OrderRecord.symbol == symbol.upper())

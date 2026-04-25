@@ -28,10 +28,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from core.backtest.metrics import _avg_duration, _consecutive_streaks, _profit_factor
+from core.config import get_settings
 from core.models import Trade
 from db import get_db
 from db.models import TradeRecord
 from db.utils import orm_to_trade
+
+
+def _default_trading_mode() -> str:
+    settings = get_settings()
+    return "live" if settings.live_trading.enabled else "paper"
 
 router = APIRouter()
 
@@ -61,23 +67,11 @@ class TradeStatsResponse(BaseModel):
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def _resolve_run_id(db: Session, run_id: Optional[str]) -> Optional[str]:
-    """Return *run_id* or the latest run_id from the trade_records table."""
-    if run_id is not None:
-        return run_id
-    latest_stmt = (
-        select(TradeRecord.run_id)
-        .where(TradeRecord.run_id.is_not(None))
-        .order_by(TradeRecord.exit_time.desc())
-        .limit(1)
-    )
-    return db.execute(latest_stmt).scalars().first()
-
-
 def _base_query(
     db: Session,
     *,
     run_id: Optional[str],
+    trading_mode: Optional[str],
     symbol: Optional[str],
     strategy: Optional[str],
     exit_reason: Optional[str],
@@ -86,11 +80,11 @@ def _base_query(
     limit: int,
 ):
     """Build and execute filtered trade query, return list[TradeRecord]."""
-    effective_run_id = _resolve_run_id(db, run_id)
-    if effective_run_id is None:
-        return []
-
-    stmt = select(TradeRecord).where(TradeRecord.run_id == effective_run_id)
+    if run_id is not None:
+        stmt = select(TradeRecord).where(TradeRecord.run_id == run_id)
+    else:
+        mode = trading_mode or _default_trading_mode()
+        stmt = select(TradeRecord).where(TradeRecord.trading_mode == mode)
 
     if symbol is not None:
         stmt = stmt.where(TradeRecord.symbol == symbol.upper())
@@ -121,7 +115,8 @@ def _base_query(
 
 @router.get("/", response_model=list[Trade])
 def get_trades(
-    run_id: Optional[str] = Query(None, description="Backtest run ID (defaults to latest run)"),
+    run_id: Optional[str] = Query(None, description="Backtest run ID (overrides trading_mode filter)"),
+    trading_mode: Optional[str] = Query(None, description="Filter by trading mode (paper/live). Defaults to live_trading.enabled setting."),
     symbol: Optional[str] = Query(None, description="Filter by symbol (e.g. BTCUSDT)"),
     strategy: Optional[str] = Query(None, description="Filter by strategy name"),
     exit_reason: Optional[str] = Query(None, description="Filter by exit reason"),
@@ -131,14 +126,16 @@ def get_trades(
     db: Session = Depends(get_db),
 ) -> list[Trade]:
     """
-    Return historical trades for a backtest run.
+    Return historical trades.
 
     Results are sorted chronologically by exit time (oldest first).
-    When no ``run_id`` is given, the most recent run is used.
+    Filtered by ``trading_mode`` (defaults to current config).
+    An explicit ``run_id`` overrides the trading_mode filter.
     """
     records = _base_query(
         db,
         run_id=run_id,
+        trading_mode=trading_mode,
         symbol=symbol,
         strategy=strategy,
         exit_reason=exit_reason,
@@ -151,7 +148,8 @@ def get_trades(
 
 @router.get("/stats", response_model=TradeStatsResponse)
 def get_trade_stats(
-    run_id: Optional[str] = Query(None, description="Backtest run ID (defaults to latest run)"),
+    run_id: Optional[str] = Query(None, description="Backtest run ID (overrides trading_mode filter)"),
+    trading_mode: Optional[str] = Query(None, description="Filter by trading mode (paper/live). Defaults to live_trading.enabled setting."),
     symbol: Optional[str] = Query(None, description="Filter by symbol (e.g. BTCUSDT)"),
     strategy: Optional[str] = Query(None, description="Filter by strategy name"),
     exit_reason: Optional[str] = Query(None, description="Filter by exit reason"),
@@ -169,6 +167,7 @@ def get_trade_stats(
     records = _base_query(
         db,
         run_id=run_id,
+        trading_mode=trading_mode,
         symbol=symbol,
         strategy=strategy,
         exit_reason=exit_reason,
