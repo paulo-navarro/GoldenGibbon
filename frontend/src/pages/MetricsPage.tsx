@@ -199,7 +199,7 @@ function DrawdownChart() {
     <Card sx={{ p: 2 }}>
       <Typography variant="body2" color="text.secondary" gutterBottom>Drawdown (%)</Typography>
       <ResponsiveContainer width="100%" height={200}>
-        <AreaChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} isAnimationActive={false}>
+        <AreaChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <defs>
             <linearGradient id="drawdownGrad" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="#f44336" stopOpacity={0} />
@@ -217,7 +217,7 @@ function DrawdownChart() {
             labelStyle={{ color: '#9e9e9e' }}
             formatter={(v) => [`${Number(v).toFixed(2)}%`, 'Drawdown']}
           />
-          <Area type="monotone" dataKey="drawdown" stroke="#f44336" strokeWidth={2} fill="url(#drawdownGrad)" />
+          <Area type="monotone" dataKey="drawdown" stroke="#f44336" strokeWidth={2} fill="url(#drawdownGrad)" isAnimationActive={false} />
         </AreaChart>
       </ResponsiveContainer>
     </Card>
@@ -426,7 +426,7 @@ function ComparisonEquityChart({ curves }: { curves: Record<string, Array<{ time
     <Box sx={{ mt: 3 }}>
       <Typography variant="body2" color="text.secondary" gutterBottom>Equity Curves Comparison</Typography>
       <ResponsiveContainer width="100%" height={320}>
-        <LineChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} isAnimationActive={false}>
+        <LineChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <XAxis dataKey="time" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
           <YAxis
             tick={{ fontSize: 11 }} axisLine={false} tickLine={false}
@@ -447,6 +447,7 @@ function ComparisonEquityChart({ curves }: { curves: Record<string, Array<{ time
               stroke={COMPARISON_COLORS[i % COMPARISON_COLORS.length]}
               strokeWidth={2}
               dot={false}
+              isAnimationActive={false}
             />
           ))}
         </LineChart>
@@ -587,7 +588,7 @@ function MultiStrategyBacktest() {
                   )}
                 </Box>
                 <ResponsiveContainer width="100%" height={320}>
-                  <AreaChart data={equityData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} isAnimationActive={false}>
+                  <AreaChart data={equityData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
                     <defs>
                       <linearGradient id="multiEquityGrad" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor="#7c4dff" stopOpacity={0.35} />
@@ -614,7 +615,7 @@ function MultiStrategyBacktest() {
                       labelStyle={{ color: '#9e9e9e' }}
                       formatter={(v) => [`$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, 'Equity']}
                     />
-                    <Area type="monotone" dataKey="equity" stroke="#7c4dff" strokeWidth={2} fill="url(#multiEquityGrad)" />
+                    <Area type="monotone" dataKey="equity" stroke="#7c4dff" strokeWidth={2} fill="url(#multiEquityGrad)" isAnimationActive={false} />
                   </AreaChart>
                 </ResponsiveContainer>
               </Box>

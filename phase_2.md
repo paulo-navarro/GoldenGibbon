@@ -17,6 +17,19 @@
   - 2ª linha: **Equity Curve**
   - 3ª linha: **Open Positions**
 
+## Separação Paper / Live
+
+- [ ] Adicionar coluna `trading_mode` (`VARCHAR(10)`, valores `'paper'` ou `'live'`) com índice nas tabelas:
+  - `order_records`
+  - `trade_records`
+  - `portfolio_snapshots`
+- [ ] Migração dos dados existentes: `UPDATE` baseado no prefixo do `run_id` (`paper_` → `'paper'`, `live_` → `'live'`). Default `'paper'` para `run_id` NULL
+- [ ] Worker: em `_persist_tick_results`, gravar `comp.trading_mode` na coluna ao inserir order, trade e snapshot
+- [ ] API: todos os endpoints que retornam orders, trades, portfolio e equity-curve devem aceitar (e filtrar por) `trading_mode`. Default determinado pela config `live_trading.enabled`:
+  - Se live trading ligado → default `'live'`
+  - Se desligado → default `'paper'`
+- [ ] Frontend: **não** expor seletor de modo ao usuário. O front lê o estado de `live_trading.enabled` (já disponível via `GET /api/config/settings`) e passa `trading_mode` automaticamente em todas as chamadas de API. Se live → mostra só dados live. Se paper → mostra só dados paper. Transparente para o usuário.
+
 ## Bugs
 
 ### ~~BUG 6 — Kill-switch path chama método inexistente, matando o tick silenciosamente~~ DONE

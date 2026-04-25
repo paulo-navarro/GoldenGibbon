@@ -85,7 +85,7 @@ export default function EquityCurveChart({
     ? (v: number) => `${v.toFixed(1)}%`
     : (v: number) => `$${v.toLocaleString()}`;
 
-  const fmtTooltip = (value: unknown, name: string) => {
+  const fmtTooltip = (value: unknown, name?: string) => {
     const n = Number(value);
     const label = name === 'equity' ? 'Equity' : 'PnL';
     if (percent) return [`${n.toFixed(2)}%`, label];
