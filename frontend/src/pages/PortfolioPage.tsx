@@ -16,16 +16,9 @@ import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import Typography from '@mui/material/Typography';
-import {
-  Area,
-  AreaChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
 
-import { usePortfolio, useEquityCurve } from '../api';
+import { usePortfolio } from '../api';
+import EquityCurveChart from '../components/EquityCurveChart';
 import { usePortfolioStore } from '../stores/portfolioStore';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -68,10 +61,10 @@ function BalanceCards() {
   if (!portfolio) return null;
 
   const cards: { label: string; value: string; color?: string }[] = [
-    { label: 'USDT Balance', value: `$${fmt(portfolio.usdt_balance)}` },
-    { label: 'Total Equity', value: `$${fmt(portfolio.equity)}` },
-    { label: 'Positions Value', value: `$${fmt(portfolio.positions_value)}` },
     { label: 'Total PnL', value: `$${fmt(portfolio.total_pnl)}`, color: pnlColor(portfolio.total_pnl) },
+    { label: 'Equity', value: `$${fmt(portfolio.equity)}` },
+    { label: 'USDT Balance', value: `$${fmt(portfolio.usdt_balance)}` },
+    { label: 'Positions Value', value: `$${fmt(portfolio.positions_value)}` },
   ];
 
   return (
@@ -187,77 +180,6 @@ function OpenPositionsTable() {
   );
 }
 
-function EquityCurveChart() {
-  const { isLoading, error } = useEquityCurve({ limit: 500 });
-  const equityCurve = usePortfolioStore((s) => s.equityCurve);
-
-  if (isLoading) return <Skeleton variant="rounded" height={400} />;
-  if (error) return <Alert severity="error" variant="outlined">Failed to load equity curve</Alert>;
-  if (equityCurve.length === 0) {
-    return (
-      <Card sx={{ height: 400, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <Typography color="text.secondary">No equity data yet</Typography>
-      </Card>
-    );
-  }
-
-  const chartData = equityCurve.map((s) => ({
-    time: new Date(s.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-    equity: parseFloat(s.total_equity),
-    pnl: parseFloat(s.total_pnl),
-  }));
-
-  return (
-    <Card sx={{ p: 2 }}>
-      <Typography variant="body2" color="text.secondary" gutterBottom>
-        Equity Curve
-      </Typography>
-      <ResponsiveContainer width="100%" height={350}>
-        <AreaChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-          <defs>
-            <linearGradient id="equityGradFull" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#00bcd4" stopOpacity={0.3} />
-              <stop offset="100%" stopColor="#00bcd4" stopOpacity={0} />
-            </linearGradient>
-          </defs>
-          <XAxis
-            dataKey="time"
-            tick={{ fontSize: 11 }}
-            axisLine={false}
-            tickLine={false}
-          />
-          <YAxis
-            tick={{ fontSize: 11 }}
-            axisLine={false}
-            tickLine={false}
-            domain={['auto', 'auto']}
-            tickFormatter={(v: number) => `$${v.toLocaleString()}`}
-          />
-          <Tooltip
-            contentStyle={{
-              background: '#111720',
-              border: '1px solid rgba(255,255,255,0.08)',
-              borderRadius: 8,
-              fontSize: 12,
-            }}
-            labelStyle={{ color: '#9e9e9e' }}
-            formatter={(value, name) => [
-              `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
-              name === 'equity' ? 'Equity' : 'PnL',
-            ]}
-          />
-          <Area
-            type="monotone"
-            dataKey="equity"
-            stroke="#00bcd4"
-            strokeWidth={2}
-            fill="url(#equityGradFull)"
-          />
-        </AreaChart>
-      </ResponsiveContainer>
-    </Card>
-  );
-}
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 
@@ -272,14 +194,14 @@ export default function PortfolioPage() {
         {/* ── Balance Cards ───────────────────────────────────────── */}
         <BalanceCards />
 
-        {/* ── Open Positions Table ────────────────────────────────── */}
-        <Grid size={{ xs: 12 }}>
-          <OpenPositionsTable />
-        </Grid>
-
         {/* ── Equity Curve Chart ──────────────────────────────────── */}
         <Grid size={{ xs: 12 }}>
           <EquityCurveChart />
+        </Grid>
+
+        {/* ── Open Positions Table ────────────────────────────────── */}
+        <Grid size={{ xs: 12 }}>
+          <OpenPositionsTable />
         </Grid>
       </Grid>
     </Box>

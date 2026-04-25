@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import ConnectionStatus from '../components/ConnectionStatus';
-import PriceTicker from '../components/PriceTicker';
 import { useWebSocket } from '../hooks';
 import type { Event } from '../types/events';
 import { useMarketStore } from '../stores/marketStore';
@@ -23,7 +22,6 @@ import Typography from '@mui/material/Typography';
 import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import BarChartIcon from '@mui/icons-material/BarChart';
 import DashboardIcon from '@mui/icons-material/Dashboard';
-import ReceiptIcon from '@mui/icons-material/Receipt';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import CurrencyExchangeIcon from '@mui/icons-material/CurrencyExchange';
@@ -39,8 +37,7 @@ const NAV_ITEMS = [
   { label: 'Dashboard', path: '/', icon: <DashboardIcon /> },
   { label: 'Strategy', path: '/strategy', icon: <ShowChartIcon /> },
   { label: 'Portfolio', path: '/portfolio', icon: <AccountBalanceWalletIcon /> },
-  { label: 'Trades', path: '/trades', icon: <SwapHorizIcon /> },
-  { label: 'Orders', path: '/orders', icon: <ReceiptIcon /> },
+  { label: 'Activity', path: '/activity', icon: <SwapHorizIcon /> },
   { label: 'Metrics', path: '/metrics', icon: <BarChartIcon /> },
   { label: 'Symbols', path: '/symbols', icon: <CurrencyExchangeIcon /> },
   { label: 'Settings', path: '/settings', icon: <SettingsIcon /> },
@@ -49,17 +46,15 @@ const NAV_ITEMS = [
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Format current UTC time as HH:MM:SS. */
-function utcClock(): string {
-  const now = new Date();
-  return now.toISOString().slice(11, 19);
+function localClock(): string {
+  return new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 // ── Layout ──────────────────────────────────────────────────────────────────
 
 export default function AppLayout() {
   const { pathname } = useLocation();
-  const [clock, setClock] = useState(utcClock);
+  const [clock, setClock] = useState(localClock);
 
   const marketHandleEvent = useMarketStore((s) => s.handleEvent);
   const strategyHandleEvent = useStrategyStore((s) => s.handleEvent);
@@ -83,7 +78,7 @@ export default function AppLayout() {
   const { status: wsStatus, isHealthy: wsHealthy } = useWebSocket({ onEvent });
 
   useEffect(() => {
-    const id = setInterval(() => setClock(utcClock()), 1_000);
+    const id = setInterval(() => setClock(localClock()), 1_000);
     return () => clearInterval(id);
   }, []);
 
@@ -108,14 +103,12 @@ export default function AppLayout() {
           {/* Right – connection status + price tickers + clock */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
             <ConnectionStatus wsStatus={wsStatus} wsHealthy={wsHealthy} />
-            <PriceTicker symbol="BTCUSDT" />
-            <PriceTicker symbol="ETHUSDT" />
             <Typography
               variant="body2"
               color="text.secondary"
               sx={{ fontFamily: 'monospace', letterSpacing: 1 }}
             >
-              {clock} UTC
+              {clock}
             </Typography>
           </Box>
         </Toolbar>

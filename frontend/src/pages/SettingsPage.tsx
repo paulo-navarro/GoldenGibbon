@@ -82,16 +82,7 @@ function NamespaceEditor({ namespace }: { namespace: string }) {
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-        <Typography variant="h6">{labelFromKey(namespace)}</Typography>
-        <Chip
-          label={data.source}
-          size="small"
-          color={data.source === 'db' ? 'info' : 'default'}
-          variant="outlined"
-          sx={{ fontSize: 11 }}
-        />
-      </Box>
+      <Typography variant="h6" sx={{ mb: 2 }}>{labelFromKey(namespace)}</Typography>
 
       <Grid container spacing={2}>
         {data.fields.map((field: NamespaceFieldMeta) => {

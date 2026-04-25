@@ -3,8 +3,7 @@ import AppLayout from './layouts/AppLayout';
 import DashboardPage from './pages/DashboardPage';
 import StrategyPage from './pages/StrategyPage';
 import PortfolioPage from './pages/PortfolioPage';
-import TradesPage from './pages/TradesPage';
-import OrdersPage from './pages/OrdersPage';
+import ActivityPage from './pages/ActivityPage';
 import MetricsPage from './pages/MetricsPage';
 import LogsPage from './pages/LogsPage';
 import SymbolsPage from './pages/SymbolsPage';
@@ -18,8 +17,7 @@ const router = createBrowserRouter([
       { index: true, element: <DashboardPage /> },
       { path: 'strategy', element: <StrategyPage /> },
       { path: 'portfolio', element: <PortfolioPage /> },
-      { path: 'trades', element: <TradesPage /> },
-      { path: 'orders', element: <OrdersPage /> },
+      { path: 'activity', element: <ActivityPage /> },
       { path: 'metrics', element: <MetricsPage /> },
       { path: 'symbols', element: <SymbolsPage /> },
       { path: 'settings', element: <SettingsPage /> },

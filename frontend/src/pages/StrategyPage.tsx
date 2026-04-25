@@ -235,11 +235,6 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
 
 // ── Parameter Tuning (task 5.5b) ─────────────────────────────────────────────
 
-const SOURCE_COLORS: Record<string, 'info' | 'default'> = {
-  db: 'info',
-  default: 'default',
-};
-
 function ParameterTuning({ strategyName }: { strategyName: string }) {
   const { data, isLoading, error } = useStrategyConfig(strategyName);
   const { update, isPending, isError, isSuccess } = useUpdateStrategyConfig(strategyName);
@@ -319,12 +314,7 @@ function ParameterTuning({ strategyName }: { strategyName: string }) {
                   return (
                     <Grid size={{ xs: 12, sm: 6, md: 4 }} key={field.name}>
                       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                          <Typography variant="body2">{labelFromKey(field.name)}</Typography>
-                          {field.source !== 'default' && (
-                            <Chip label={field.source} size="small" color={SOURCE_COLORS[field.source]} sx={{ fontSize: 9, height: 16 }} />
-                          )}
-                        </Box>
+                        <Typography variant="body2">{labelFromKey(field.name)}</Typography>
                         <Switch
                           size="small"
                           checked={!!currentValue}
@@ -342,7 +332,7 @@ function ParameterTuning({ strategyName }: { strategyName: string }) {
                     <TextField
                       fullWidth
                       size="small"
-                      label={`${labelFromKey(field.name)}${field.source !== 'default' ? ` [${field.source}]` : ''}`}
+                      label={labelFromKey(field.name)}
                       type={field.type === 'int' || field.type === 'float' ? 'number' : 'text'}
                       value={currentValue ?? ''}
                       onChange={(e) => {

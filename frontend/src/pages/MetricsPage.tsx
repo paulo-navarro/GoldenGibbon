@@ -41,7 +41,8 @@ import {
   YAxis,
 } from 'recharts';
 
-import { useTradeStats, useEquityCurve, useCompare, useMultiStrategy, useStrategyList, useOptimize, useWalkForward } from '../api';
+import { useTradeStats, useCompare, useMultiStrategy, useStrategyList, useOptimize, useWalkForward } from '../api';
+import EquityCurveChart from '../components/EquityCurveChart';
 import type { ComparisonMetricsRow, GridSearchRow, WalkForwardFold } from '../api';
 import { useTradesStore } from '../stores/tradesStore';
 import { usePortfolioStore } from '../stores/portfolioStore';
@@ -186,54 +187,6 @@ function MetricCards() {
   );
 }
 
-function EquityCurveChart() {
-  const { isLoading, error } = useEquityCurve({ limit: 1000 });
-  const equityCurve = usePortfolioStore((s) => s.equityCurve);
-
-  if (isLoading) return <Skeleton variant="rounded" height={420} />;
-  if (error) return <Alert severity="error" variant="outlined">Failed to load equity curve</Alert>;
-  if (equityCurve.length === 0) {
-    return (
-      <Card sx={{ height: 420, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <Typography color="text.secondary">No equity data yet</Typography>
-      </Card>
-    );
-  }
-
-  const chartData = equityCurve.map((s) => ({
-    time: new Date(s.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-    equity: parseFloat(s.total_equity),
-    pnl: parseFloat(s.total_pnl),
-  }));
-
-  return (
-    <Card sx={{ p: 2 }}>
-      <Typography variant="body2" color="text.secondary" gutterBottom>Equity Curve</Typography>
-      <ResponsiveContainer width="100%" height={360}>
-        <AreaChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-          <defs>
-            <linearGradient id="metricsEquityGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#00bcd4" stopOpacity={0.35} />
-              <stop offset="100%" stopColor="#00bcd4" stopOpacity={0} />
-            </linearGradient>
-          </defs>
-          <XAxis dataKey="time" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
-          <YAxis
-            tick={{ fontSize: 11 }} axisLine={false} tickLine={false}
-            domain={['auto', 'auto']}
-            tickFormatter={(v: number) => `$${v.toLocaleString()}`}
-          />
-          <Tooltip
-            contentStyle={CHART_TOOLTIP_STYLE}
-            labelStyle={{ color: '#9e9e9e' }}
-            formatter={(v) => [`$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, 'Equity']}
-          />
-          <Area type="monotone" dataKey="equity" stroke="#00bcd4" strokeWidth={2} fill="url(#metricsEquityGrad)" />
-        </AreaChart>
-      </ResponsiveContainer>
-    </Card>
-  );
-}
 
 function DrawdownChart() {
   const equityCurve = usePortfolioStore((s) => s.equityCurve);
@@ -1133,7 +1086,7 @@ export default function MetricsPage() {
 
         {/* ── Equity Curve ────────────────────────────────────────── */}
         <Grid size={{ xs: 12 }}>
-          <EquityCurveChart />
+          <EquityCurveChart limit={1000} height={420} />
         </Grid>
 
         {/* ── Drawdown Chart ──────────────────────────────────────── */}

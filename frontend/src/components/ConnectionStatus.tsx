@@ -91,6 +91,8 @@ export default function ConnectionStatus({ wsStatus, wsHealthy }: ConnectionStat
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'default' }}>
         <StatusItem color={dotWs} label={wsLabel(wsStatus, wsHealthy)} />
         <StatusItem color={dotApi} label="API" />
+        <StatusItem color={dotDb} label="DB" />
+        <StatusItem color={dotRedis} label="Redis" />
       </Box>
     </Tooltip>
   );

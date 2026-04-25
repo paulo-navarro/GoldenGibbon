@@ -23,12 +23,12 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from core.models import Position, PortfolioSnapshot
 from db import get_db
-from db.models import PositionRecord
+from db.models import PositionRecord, TradeRecord
 from db.models import PortfolioSnapshot as PortfolioSnapshotRecord
 from db.utils import orm_to_position, orm_to_portfolio_snapshot
 
@@ -77,25 +77,36 @@ def get_portfolio(
     )
     snapshot = db.execute(snap_stmt).scalars().first()
 
-    if snapshot is not None:
+    if snapshot is None:
         return PortfolioResponse(
-            usdt_balance=str(snapshot.usdt_balance),
-            equity=str(snapshot.total_equity),
-            positions_value=str(snapshot.positions_value),
-            total_pnl=str(snapshot.total_pnl),
+            usdt_balance="0",
+            equity="0",
+            positions_value="0",
+            total_pnl="0",
             open_positions_count=len(positions),
             positions=positions,
-            last_updated=snapshot.timestamp,
+            last_updated=None,
+        )
+
+    total_pnl = Decimal("0")
+    if snapshot.run_id:
+        total_pnl = (
+            db.execute(
+                select(func.sum(TradeRecord.pnl_usdt)).where(
+                    TradeRecord.run_id == snapshot.run_id
+                )
+            ).scalar()
+            or Decimal("0")
         )
 
     return PortfolioResponse(
-        usdt_balance="0",
-        equity="0",
-        positions_value="0",
-        total_pnl="0",
+        usdt_balance=str(snapshot.usdt_balance),
+        equity=str(snapshot.total_equity),
+        positions_value=str(snapshot.positions_value),
+        total_pnl=str(total_pnl),
         open_positions_count=len(positions),
         positions=positions,
-        last_updated=None,
+        last_updated=snapshot.timestamp,
     )
 
 

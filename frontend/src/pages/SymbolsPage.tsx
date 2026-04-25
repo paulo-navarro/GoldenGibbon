@@ -36,11 +36,6 @@ import type { SymbolItem } from '../api';
 const VALID_TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w'];
 const DEFAULT_TIMEFRAMES = ['15m', '1h'];
 
-const SOURCE_COLORS: Record<string, 'default' | 'primary' | 'secondary'> = {
-  default: 'default',
-  db: 'primary',
-};
-
 // ── Add Symbol Dialog ─────────────────────────────────────────────────────────
 
 function AddSymbolDialog({
@@ -248,7 +243,6 @@ export default function SymbolsPage() {
               <TableCell>Exchange</TableCell>
               <TableCell>Timeframes</TableCell>
               <TableCell>Enabled</TableCell>
-              <TableCell>Source</TableCell>
               <TableCell>Description</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
@@ -274,13 +268,6 @@ export default function SymbolsPage() {
                     checked={s.enabled}
                     onChange={() => handleToggleEnabled(s)}
                     size="small"
-                  />
-                </TableCell>
-                <TableCell>
-                  <Chip
-                    label={s.source}
-                    size="small"
-                    color={SOURCE_COLORS[s.source] ?? 'default'}
                   />
                 </TableCell>
                 <TableCell>

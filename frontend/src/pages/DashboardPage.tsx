@@ -19,22 +19,15 @@ import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
-import {
-  Area,
-  AreaChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
 
 import {
   usePrice,
   usePortfolio,
-  useEquityCurve,
   useStrategySignals,
-  useHealth,
+  useSymbols,
 } from '../api';
+import CycleStatus from '../components/CycleStatus';
+import EquityCurveChart from '../components/EquityCurveChart';
 import { useMarketStore } from '../stores/marketStore';
 import { useStrategyStore } from '../stores/strategyStore';
 import type { PriceResponse } from '../types/market';
@@ -42,7 +35,6 @@ import type { Signal, StrategyState } from '../types/enums';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-const FALLBACK_SYMBOLS = ['BTCUSDT', 'ETHUSDT'];
 
 function fmt(value: string | null | undefined, decimals = 2): string {
   if (value == null) return '—';
@@ -168,56 +160,6 @@ function PortfolioCards() {
   );
 }
 
-function MiniEquityCurve() {
-  const { data, isLoading, error } = useEquityCurve({ limit: 100 });
-
-  if (isLoading) return <Skeleton variant="rounded" height={200} />;
-  if (error) return <Alert severity="error" variant="outlined">Failed to load equity curve</Alert>;
-  if (!data || data.length === 0) {
-    return (
-      <Card sx={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <Typography color="text.secondary">No equity data yet</Typography>
-      </Card>
-    );
-  }
-
-  const chartData = data.map((s) => ({
-    time: new Date(s.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-    equity: parseFloat(s.total_equity),
-  }));
-
-  return (
-    <Card sx={{ p: 2 }}>
-      <Typography variant="body2" color="text.secondary" gutterBottom>
-        Equity Curve
-      </Typography>
-      <ResponsiveContainer width="100%" height={160}>
-        <AreaChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-          <defs>
-            <linearGradient id="equityGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#00bcd4" stopOpacity={0.3} />
-              <stop offset="100%" stopColor="#00bcd4" stopOpacity={0} />
-            </linearGradient>
-          </defs>
-          <XAxis dataKey="time" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
-          <YAxis hide domain={['auto', 'auto']} />
-          <Tooltip
-            contentStyle={{ background: '#111720', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, fontSize: 12 }}
-            labelStyle={{ color: '#9e9e9e' }}
-            formatter={(value) => [`$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, 'Equity']}
-          />
-          <Area
-            type="monotone"
-            dataKey="equity"
-            stroke="#00bcd4"
-            strokeWidth={2}
-            fill="url(#equityGrad)"
-          />
-        </AreaChart>
-      </ResponsiveContainer>
-    </Card>
-  );
-}
 
 function OpenPositionsTable() {
   const { data } = usePortfolio();
@@ -277,7 +219,15 @@ function OpenPositionsTable() {
   );
 }
 
-function RecentSignals({ activeStrategy }: { activeStrategy: string }) {
+function RecentSignals({
+  strategies,
+  activeStrategy,
+  setActiveStrategy,
+}: {
+  strategies: string[];
+  activeStrategy: string;
+  setActiveStrategy: (v: string) => void;
+}) {
   const { data, isLoading, error } = useStrategySignals();
 
   const filtered = useMemo(() => {
@@ -291,7 +241,22 @@ function RecentSignals({ activeStrategy }: { activeStrategy: string }) {
   if (filtered.length === 0) {
     return (
       <Card sx={{ p: 2, height: '100%' }}>
-        <Typography variant="body2" color="text.secondary" gutterBottom>Recent Signals</Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+          <Typography variant="body2" color="text.secondary">Recent Signals</Typography>
+          <TextField
+            select
+            size="small"
+            label="Strategy"
+            value={activeStrategy}
+            onChange={(e) => setActiveStrategy(e.target.value)}
+            sx={{ width: 160 }}
+          >
+            <MenuItem value="all">All</MenuItem>
+            {strategies.map((s) => (
+              <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>
+            ))}
+          </TextField>
+        </Box>
         <Typography color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>No signals yet</Typography>
       </Card>
     );
@@ -300,9 +265,22 @@ function RecentSignals({ activeStrategy }: { activeStrategy: string }) {
   return (
     <Card>
       <CardContent sx={{ pb: '16px !important' }}>
-        <Typography variant="body2" color="text.secondary" gutterBottom>
-          Recent Signals
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+          <Typography variant="body2" color="text.secondary">Recent Signals</Typography>
+          <TextField
+            select
+            size="small"
+            label="Strategy"
+            value={activeStrategy}
+            onChange={(e) => setActiveStrategy(e.target.value)}
+            sx={{ width: 160 }}
+          >
+            <MenuItem value="all">All</MenuItem>
+            {strategies.map((s) => (
+              <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>
+            ))}
+          </TextField>
+        </Box>
         <TableContainer>
           <Table size="small">
             <TableHead>
@@ -334,64 +312,22 @@ function RecentSignals({ activeStrategy }: { activeStrategy: string }) {
   );
 }
 
-function SystemStatus() {
-  const { data, isLoading, error } = useHealth();
-
-  if (isLoading) return <Skeleton variant="rounded" height={180} />;
-  if (error) return <Alert severity="error" variant="outlined">Failed to load health</Alert>;
-  if (!data) return null;
-
-  const items: { label: string; ok: boolean }[] = [
-    { label: 'API', ok: data.status === 'ok' },
-    { label: 'Database', ok: data.db },
-    { label: 'Redis', ok: data.redis },
-  ];
-
-  return (
-    <Card sx={{ height: '100%' }}>
-      <CardContent>
-        <Typography variant="body2" color="text.secondary" gutterBottom>
-          System Status
-        </Typography>
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mt: 1 }}>
-          {items.map((item) => (
-            <Box key={item.label} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Box
-                sx={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: '50%',
-                  bgcolor: item.ok ? 'success.main' : 'error.main',
-                  flexShrink: 0,
-                }}
-              />
-              <Typography variant="body2">{item.label}</Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ ml: 'auto' }}>
-                {item.ok ? 'Healthy' : 'Down'}
-              </Typography>
-            </Box>
-          ))}
-        </Box>
-        {data.timestamp && (
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 2, fontSize: '0.75rem' }}>
-            Last check: {new Date(data.timestamp).toLocaleTimeString()}
-          </Typography>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
   const [activeStrategy, setActiveStrategy] = useState('all');
 
   const storeSignals = useStrategyStore((s) => s.signals);
+  const { data: symbolsConfig } = useSymbols();
 
   const strategies = useMemo(
     () => [...new Set(Object.values(storeSignals).map((s) => s.strategy))].sort(),
     [storeSignals],
+  );
+
+  const configSymbols = useMemo(
+    () => (symbolsConfig?.symbols ?? []).filter((s) => s.enabled).map((s) => s.symbol),
+    [symbolsConfig],
   );
 
   const symbols = useMemo(() => {
@@ -399,27 +335,12 @@ export default function DashboardPage() {
       .filter((s) => activeStrategy === 'all' || s.strategy === activeStrategy)
       .map((s) => s.symbol);
     const unique = [...new Set(fromStore)].sort();
-    return unique.length > 0 ? unique : FALLBACK_SYMBOLS;
-  }, [storeSignals, activeStrategy]);
+    return unique.length > 0 ? unique : configSymbols;
+  }, [storeSignals, activeStrategy, configSymbols]);
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
-        <Typography variant="h5">Dashboard</Typography>
-        <TextField
-          select
-          size="small"
-          label="Strategy"
-          value={activeStrategy}
-          onChange={(e) => setActiveStrategy(e.target.value)}
-          sx={{ width: 180 }}
-        >
-          <MenuItem value="all">All Strategies</MenuItem>
-          {strategies.map((s) => (
-            <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>
-          ))}
-        </TextField>
-      </Box>
+      <Typography variant="h5" sx={{ mb: 3 }}>Dashboard</Typography>
 
       <Grid container spacing={2}>
         {/* ── Price Tickers ──────────────────────────────────────── */}
@@ -432,9 +353,14 @@ export default function DashboardPage() {
         {/* ── Portfolio Summary ───────────────────────────────────── */}
         <PortfolioCards />
 
+        {/* ── Cycle Status ────────────────────────────────────────── */}
+        <Grid size={{ xs: 12 }}>
+          <CycleStatus />
+        </Grid>
+
         {/* ── Mini Equity Curve ───────────────────────────────────── */}
         <Grid size={{ xs: 12 }}>
-          <MiniEquityCurve />
+          <EquityCurveChart limit={100} height={160} mini />
         </Grid>
 
         {/* ── Open Positions ─────────────────────────────────────── */}
@@ -442,12 +368,9 @@ export default function DashboardPage() {
           <OpenPositionsTable />
         </Grid>
 
-        {/* ── Recent Signals + System Status ──────────────────────── */}
-        <Grid size={{ xs: 12, md: 6 }}>
-          <RecentSignals activeStrategy={activeStrategy} />
-        </Grid>
-        <Grid size={{ xs: 12, md: 6 }}>
-          <SystemStatus />
+        {/* ── Recent Signals ──────────────────────────────────────── */}
+        <Grid size={{ xs: 12 }}>
+          <RecentSignals strategies={strategies} activeStrategy={activeStrategy} setActiveStrategy={setActiveStrategy} />
         </Grid>
       </Grid>
     </Box>

@@ -1,20 +1,17 @@
 // ── LogsPage ──────────────────────────────────────────────────────────────────
 // Task 2.44 – Real-time log stream with level filtering and severity chips.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
 import Chip from '@mui/material/Chip';
 import Grid from '@mui/material/Grid';
-import IconButton from '@mui/material/IconButton';
 import MenuItem from '@mui/material/MenuItem';
 import Skeleton from '@mui/material/Skeleton';
 import TextField from '@mui/material/TextField';
-import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
-import VerticalAlignBottomIcon from '@mui/icons-material/VerticalAlignBottom';
 
 import { useLogs } from '../api';
 import { useSystemStore } from '../stores/systemStore';
@@ -121,14 +118,8 @@ function LogStats({ lines }: { lines: ParsedLog[] }) {
   );
 }
 
-function LogStream({ lines, autoScroll }: { lines: ParsedLog[]; autoScroll: boolean }) {
+function LogStream({ lines }: { lines: ParsedLog[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (autoScroll && containerRef.current) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
-    }
-  }, [lines, autoScroll]);
 
   if (lines.length === 0) {
     return (
@@ -192,8 +183,6 @@ function LogStream({ lines, autoScroll }: { lines: ParsedLog[]; autoScroll: bool
 
 export default function LogsPage() {
   const [filters, setFilters] = useState<Filters>({ level: '', search: '' });
-  const [autoScroll, setAutoScroll] = useState(true);
-
   // REST fetch — re-fetches when level filter changes
   const { isLoading, error } = useLogs({
     lines: 500,
@@ -239,17 +228,8 @@ export default function LogsPage() {
               <CardContent sx={{ pb: '16px !important' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
                   <LogStats lines={visibleLines} />
-                  <Tooltip title={autoScroll ? 'Auto-scroll on' : 'Auto-scroll off'}>
-                    <IconButton
-                      size="small"
-                      onClick={() => setAutoScroll((v) => !v)}
-                      color={autoScroll ? 'primary' : 'default'}
-                    >
-                      <VerticalAlignBottomIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
                 </Box>
-                <LogStream lines={visibleLines} autoScroll={autoScroll} />
+                <LogStream lines={visibleLines} />
               </CardContent>
             </Card>
           )}

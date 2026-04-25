@@ -207,6 +207,9 @@ def _recover_state(
                     saved_balance = data.get("usdt_balance")
                     if saved_balance is not None:
                         pm._portfolio.usdt_balance = Decimal(str(saved_balance))
+                    saved_total_pnl = data.get("total_pnl")
+                    if saved_total_pnl is not None:
+                        pm._portfolio.total_pnl = Decimal(str(saved_total_pnl))
 
                 # Inject position directly into PM without deducting cost
                 # (cost was already deducted when originally opened).
@@ -1006,7 +1009,21 @@ def run_single_strategy_tick(
                 "single_tick: kill-switch active",
                 reason=comp.kill_switch.trigger_reason,
             )
-            comp.pm.update_equity(candle_time, {symbol: close})
+            snapshot = comp.pm.take_snapshot(candle_time, {symbol: close})
+            try:
+                with get_session() as session:
+                    _persist_tick_results(
+                        session=session,
+                        comp=comp,
+                        strategy_name=strategy_name,
+                        symbol=symbol,
+                        execution_result=None,
+                        snapshot=snapshot,
+                        signal_value="hold",
+                        candle_time=candle_time,
+                    )
+            except Exception as persist_exc:
+                log.error("single_tick: kill-switch persist failed", error=str(persist_exc))
             return {"strategy": strategy_name, "symbol": symbol, "signal": None, "kill_switch": True}
 
         # ── 2. Check stops ───────────────────────────────────
