@@ -334,6 +334,16 @@ class BinanceExecutor:
         timestamp: datetime,
     ) -> Optional[ExecutionResult]:
         """CLOSE -> sell entire position."""
+        real_balance = self._get_available_balance(decision.symbol)
+        if real_balance is not None and real_balance < decision.size:
+            logger.warning(
+                "binance.close_clamped_to_real_balance",
+                symbol=decision.symbol,
+                requested=str(decision.size),
+                available=str(real_balance),
+            )
+            decision = decision.model_copy(update={"size": real_balance})
+
         order = self._place_and_fill(decision, OrderSide.SELL)
         if order is None or order.status != OrderStatus.FILLED:
             logger.error(
@@ -371,6 +381,16 @@ class BinanceExecutor:
         timestamp: datetime,
     ) -> Optional[ExecutionResult]:
         """REDUCE -> sell fraction of position."""
+        real_balance = self._get_available_balance(decision.symbol)
+        if real_balance is not None and real_balance < decision.size:
+            logger.warning(
+                "binance.reduce_clamped_to_real_balance",
+                symbol=decision.symbol,
+                requested=str(decision.size),
+                available=str(real_balance),
+            )
+            decision = decision.model_copy(update={"size": real_balance})
+
         order = self._place_and_fill(decision, OrderSide.SELL)
         if order is None or order.status != OrderStatus.FILLED:
             logger.error(
@@ -402,6 +422,19 @@ class BinanceExecutor:
         )
 
         return ExecutionResult(order=order, trade=trade)
+
+    # ── Private: balance helper ───────────────────────────────────────────
+
+    def _get_available_balance(self, symbol: str) -> Optional[Decimal]:
+        """Query Binance for the free balance of the base asset in *symbol* (e.g. 'HBAR' from 'HBARUSDT')."""
+        base_asset = symbol.replace("USDT", "")
+        try:
+            info = self.get_account_info()
+            bal = info["balances"].get(base_asset, {})
+            return bal.get("free", Decimal("0"))
+        except Exception as exc:
+            logger.warning("binance.balance_query_failed", symbol=symbol, error=str(exc))
+            return None
 
     # ── Private: order placement + fill ──────────────────────────────────
 
