@@ -607,8 +607,12 @@ class RiskEngine:
             return ExitReason.EMA_CROSS
 
         # EMA cross: fast below slow
-        ema_fast = indicators.get("ema_fast") or indicators.get("ema_50")
-        ema_slow = indicators.get("ema_slow") or indicators.get("ema_200")
+        ema_fast = indicators.get("ema_fast")
+        if ema_fast is None:
+            ema_fast = indicators.get("ema_50")
+        ema_slow = indicators.get("ema_slow")
+        if ema_slow is None:
+            ema_slow = indicators.get("ema_200")
         if ema_fast is not None and ema_slow is not None:
             if len(ema_fast) > 0 and len(ema_slow) > 0:
                 if ema_fast.iloc[-1] < ema_slow.iloc[-1]:

@@ -199,7 +199,7 @@ function DrawdownChart() {
     <Card sx={{ p: 2 }}>
       <Typography variant="body2" color="text.secondary" gutterBottom>Drawdown (%)</Typography>
       <ResponsiveContainer width="100%" height={200}>
-        <AreaChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+        <AreaChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} isAnimationActive={false}>
           <defs>
             <linearGradient id="drawdownGrad" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="#f44336" stopOpacity={0} />
@@ -426,7 +426,7 @@ function ComparisonEquityChart({ curves }: { curves: Record<string, Array<{ time
     <Box sx={{ mt: 3 }}>
       <Typography variant="body2" color="text.secondary" gutterBottom>Equity Curves Comparison</Typography>
       <ResponsiveContainer width="100%" height={320}>
-        <LineChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+        <LineChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} isAnimationActive={false}>
           <XAxis dataKey="time" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
           <YAxis
             tick={{ fontSize: 11 }} axisLine={false} tickLine={false}
@@ -587,7 +587,7 @@ function MultiStrategyBacktest() {
                   )}
                 </Box>
                 <ResponsiveContainer width="100%" height={320}>
-                  <AreaChart data={equityData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+                  <AreaChart data={equityData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} isAnimationActive={false}>
                     <defs>
                       <linearGradient id="multiEquityGrad" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor="#7c4dff" stopOpacity={0.35} />
@@ -1086,7 +1086,7 @@ export default function MetricsPage() {
 
         {/* ── Equity Curve ────────────────────────────────────────── */}
         <Grid size={{ xs: 12 }}>
-          <EquityCurveChart limit={1000} height={420} />
+          <EquityCurveChart limit={1000} height={200} percent />
         </Grid>
 
         {/* ── Drawdown Chart ──────────────────────────────────────── */}
