@@ -18,6 +18,7 @@ GET /signals
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -28,6 +29,8 @@ from core.models import StrategySignalSnapshot, StrategyStateResponse
 from db import get_db
 from db.models import StrategyStateRecord
 from db.utils import orm_to_signal_snapshot, orm_to_strategy_state
+
+_STALE_THRESHOLD = timedelta(hours=2)
 
 router = APIRouter()
 
@@ -42,7 +45,8 @@ def _filtered_query(
     strategy: Optional[str],
 ):
     """Build and execute a filtered query on strategy_state, return records."""
-    stmt = select(StrategyStateRecord)
+    cutoff = datetime.now(timezone.utc) - _STALE_THRESHOLD
+    stmt = select(StrategyStateRecord).where(StrategyStateRecord.updated_at >= cutoff)
 
     if symbol is not None:
         stmt = stmt.where(StrategyStateRecord.symbol == symbol.upper())
@@ -82,7 +86,8 @@ def get_strategy_signals(
 
     Results are ordered by most recently updated first.
     """
-    stmt = select(StrategyStateRecord)
+    cutoff = datetime.now(timezone.utc) - _STALE_THRESHOLD
+    stmt = select(StrategyStateRecord).where(StrategyStateRecord.updated_at >= cutoff)
     if symbol is not None:
         stmt = stmt.where(StrategyStateRecord.symbol == symbol.upper())
     if strategy is not None:

@@ -8,13 +8,13 @@ Usar o `RegimeDetector` (já implementado em `core/regime.py`) para impedir que 
 
 ### Tarefas
 
-- [ ] **1.1 — Adicionar `RegimeDetector` ao `_TickComponents`**
+- [x] **1.1 — Adicionar `RegimeDetector` ao `_TickComponents`**
   - Arquivo: `core/tasks/__init__.py`
   - No `__slots__` da `_TickComponents` (linha 112), adicionar `regime_detector`
   - No `__init__` (linha 114), aceitar e guardar o novo campo
   - Na função `_build_components()` (linha ~289), instanciar `RegimeDetector` a partir de `settings.regime` (`adx_trending_threshold`, `adx_ranging_threshold`, `smoothing_window`) e passar ao `_TickComponents`
 
-- [ ] **1.2 — Gate no tick loop: bloquear entrada em regime incompatível**
+- [x] **1.2 — Gate no tick loop: bloquear entrada em regime incompatível**
   - Arquivo: `core/tasks/__init__.py`, bloco "3. Strategy decision" (linha ~1065)
   - Após `signal = comp.strategy.evaluate(...)`, se `signal == Signal.BUY` e `comp.strategy.state` acabou de transicionar para `POSITION` (era `FLAT`):
     1. Chamar `comp.regime_detector.detect(market_data.indicators)`
@@ -23,24 +23,24 @@ Usar o `RegimeDetector` (já implementado em `core/regime.py`) para impedir que 
     4. Se regime for `UNCERTAIN`, permitir a entrada (não bloquear)
   - Logar `regime.gate_blocked` com `strategy`, `symbol`, `detected_regime`, `expected_regime`
 
-- [ ] **1.3 — Adicionar campo `regime_gating_enabled` ao `RegimeConfig`**
+- [x] **1.3 — Adicionar campo `regime_gating_enabled` ao `RegimeConfig`**
   - Arquivo: `core/config.py`, classe `RegimeConfig` (linha ~381)
   - Novo campo `regime_gating_enabled: bool = Field(default=True)`
   - O gate no tick loop (1.2) só ativa se esse campo for `True`
   - Aparece automaticamente na UI de Settings (namespace `regime`)
 
-- [ ] **1.4 — Publicar evento de regime no WebSocket**
+- [x] **1.4 — Publicar evento de regime no WebSocket**
   - Arquivo: `core/tasks/__init__.py`, após o regime detect (1.2)
   - Publicar evento `REGIME_DETECTED` no canal `STRATEGY` com `symbol`, `strategy`, `regime`, `confidence`, `adx_value`
   - Adicionar `REGIME_DETECTED = "regime_detected"` ao `EventType` em `core/events.py`
 
-- [ ] **1.5 — Exibir regime atual no card da Strategy Page**
+- [x] **1.5 — Exibir regime atual no card da Strategy Page**
   - Arquivo: `frontend/src/pages/StrategyPage.tsx`
   - No header do `StrategyCard` (linha ~117), adicionar um `Chip` com o regime (`trending` / `ranging` / `uncertain`)
   - Cores: trending=success, ranging=warning, uncertain=default
   - Consumir do Zustand store (novo campo `regimes` no `strategyStore`)
 
-- [ ] **1.6 — Testes unitários do regime gate**
+- [x] **1.6 — Testes unitários do regime gate**
   - Arquivo: `tests/test_regime_gate.py`
   - Test: Smart Hodler BUY bloqueado quando regime=RANGING
   - Test: Mean Reversion BUY bloqueado quando regime=TRENDING
@@ -140,13 +140,7 @@ O hard stop atual é fixo em `entry_price × (1 - hard_stop_pct)`. Uma posição
   - Quando o hard stop é movido, logar `risk.ratchet_breakeven` ou `risk.ratchet_lockin` com:
     `symbol`, `old_stop`, `new_stop`, `profit_pct`, `entry_price`, `close`
 
-- [ ] **3.6 — Alertar ratchet via Telegram (opcional)**
-  - Arquivo: `core/tasks/__init__.py`, `_send_tick_alerts()`
-  - Se o hard stop foi ratchetado neste tick (comparar old vs new), enviar alerta informativo
-  - Usar `alerter.send()` com mensagem tipo `🔒 BTCUSDT: stop moved to break-even @ 65000`
-  - Controlado por novo campo `alert_on_ratchet: bool = Field(default=False)` no `AlertingConfig`
-
-- [ ] **3.7 — Testes unitários**
+- [ ] **3.6 — Testes unitários**
   - Arquivo: `tests/test_breakeven_ratchet.py`
   - Test: Posição com +1% profit → hard stop inalterado (abaixo do trigger)
   - Test: Posição com +2% profit → hard stop movido para entry_price (break-even)

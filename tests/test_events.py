@@ -193,7 +193,7 @@ class TestEventType:
 
     def test_total_event_types(self):
         """Ensure no event type was accidentally removed."""
-        assert len(EventType) == 27
+        assert len(EventType) == 28
 
 
 # ── Event Envelope ───────────────────────────────────────────────────────────

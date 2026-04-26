@@ -33,6 +33,7 @@ import TuneIcon from '@mui/icons-material/Tune';
 import { useStrategyState, useStrategySignals, usePortfolio, useStrategyConfig, useUpdateStrategyConfig, useResetStrategyConfig } from '../api';
 import type { FieldMeta } from '../api';
 import { useStrategyStore } from '../stores/strategyStore';
+import type { RegimeInfo } from '../stores/strategyStore';
 import type { Signal, StrategyState } from '../types/enums';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -47,6 +48,12 @@ function stateColor(state: StrategyState): 'primary' | 'success' | 'warning' | '
   if (state === 'position') return 'success';
   if (state === 'reduced') return 'warning';
   if (state === 'cooldown') return 'primary';
+  return 'default';
+}
+
+function regimeColor(regime: RegimeInfo['regime']): 'success' | 'warning' | 'default' {
+  if (regime === 'trending') return 'success';
+  if (regime === 'ranging') return 'warning';
   return 'default';
 }
 
@@ -77,6 +84,7 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
   const st = useStrategyStore((s) => s.states[stratKey]);
   const sig = useStrategyStore((s) => s.signals[stratKey]);
   const condStore = useStrategyStore((s) => s.conditions[stratKey]);
+  const regime = useStrategyStore((s) => s.regimes[stratKey]);
   const { data: portfolio } = usePortfolio();
 
   const cond: Record<string, unknown> | null =
@@ -124,6 +132,14 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
             color={signalColor(sig?.signal ?? 'hold')}
             variant="filled"
           />
+          {regime && (
+            <Chip
+              label={regime.regime}
+              size="small"
+              color={regimeColor(regime.regime)}
+              variant="outlined"
+            />
+          )}
           {st.updated_at && (
             <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto' }}>
               Updated {new Date(st.updated_at).toLocaleString()}

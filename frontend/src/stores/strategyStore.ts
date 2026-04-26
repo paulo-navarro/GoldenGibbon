@@ -20,6 +20,13 @@ function storeKey(symbol: string, strategy: string): string {
   return `${symbol}:${strategy}`;
 }
 
+export interface RegimeInfo {
+  regime: 'trending' | 'ranging' | 'uncertain';
+  confidence: number;
+  adx_value: number;
+  gate_blocked: boolean;
+}
+
 interface StrategyStoreState {
   /** State-machine records keyed by "symbol:strategy". */
   states: Record<string, StrategyStateResponse>;
@@ -29,6 +36,9 @@ interface StrategyStoreState {
 
   /** Conditions checklists keyed by "symbol:strategy". */
   conditions: Record<string, StrategyConditions | MeanReversionConditions>;
+
+  /** Latest detected regime keyed by "symbol:strategy". */
+  regimes: Record<string, RegimeInfo>;
 }
 
 interface StrategyStoreActions {
@@ -53,6 +63,7 @@ export const useStrategyStore = create<StrategyStore>()((set) => ({
   states: {},
   signals: {},
   conditions: {},
+  regimes: {},
 
   // ── REST seed actions ───────────────────────────────────────────
 
@@ -171,6 +182,21 @@ export const useStrategyStore = create<StrategyStore>()((set) => ({
             },
           };
         });
+        break;
+      }
+
+      case 'regime_detected': {
+        set((s) => ({
+          regimes: {
+            ...s.regimes,
+            [key]: {
+              regime: data.regime as RegimeInfo['regime'],
+              confidence: data.confidence as number,
+              adx_value: data.adx_value as number,
+              gate_blocked: data.gate_blocked as boolean,
+            },
+          },
+        }));
         break;
       }
 

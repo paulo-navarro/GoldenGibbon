@@ -52,6 +52,7 @@ export type EventType =
   | 'signal_generated'
   | 'state_changed'
   | 'conditions_evaluated'
+  | 'regime_detected'
   // Risk
   | 'risk_evaluated'
   | 'stop_triggered'

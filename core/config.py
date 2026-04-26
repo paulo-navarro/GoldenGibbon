@@ -384,6 +384,7 @@ class RegimeConfig(BaseModel):
     adx_trending_threshold: float = Field(default=25.0, gt=0, le=100)
     adx_ranging_threshold: float = Field(default=20.0, ge=0, le=100)
     smoothing_window: int = Field(default=3, ge=1, le=50)
+    regime_gating_enabled: bool = Field(default=True, description="Block new entries in incompatible regime")
     rebalance_enabled: bool = Field(default=False, description="Enable regime-based allocation rebalancing")
     regime_shift_pct: float = Field(default=0.2, ge=0, le=0.5, description="Max weight shift on regime change")
     strategy_regime_map: Dict[str, str] = Field(

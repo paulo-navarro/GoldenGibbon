@@ -109,9 +109,9 @@ _WorkerStateKey = Tuple[str, str]  # (strategy_name, symbol)
 class _TickComponents:
     """Holds the live objects for one (strategy, symbol) pair."""
 
-    __slots__ = ("strategy", "pm", "risk_engine", "executor", "run_id", "kill_switch", "trading_mode")
+    __slots__ = ("strategy", "pm", "risk_engine", "executor", "run_id", "kill_switch", "trading_mode", "regime_detector")
 
-    def __init__(self, strategy, pm, risk_engine, executor, run_id: str, kill_switch=None, trading_mode: str = "paper"):  # noqa: ANN001
+    def __init__(self, strategy, pm, risk_engine, executor, run_id: str, kill_switch=None, trading_mode: str = "paper", regime_detector=None):  # noqa: ANN001
         self.strategy = strategy
         self.pm = pm
         self.risk_engine = risk_engine
@@ -119,6 +119,7 @@ class _TickComponents:
         self.run_id = run_id
         self.kill_switch = kill_switch
         self.trading_mode = trading_mode
+        self.regime_detector = regime_detector
 
 
 _worker_state: Dict[_WorkerStateKey, _TickComponents] = {}
@@ -369,11 +370,19 @@ def _get_or_create_components(
                 simulate_slippage=paper_config.get("simulate_slippage", True),
             )
 
-        # Kill-switch (task 4.5)
-        from core.risk.kill_switch import KillSwitch
+        # Regime detector (phase 3, task 1.1)
+        from core.regime import RegimeDetector
         from core.config import get_settings as _get_settings
 
         _settings = _get_settings()
+        regime_detector = RegimeDetector(
+            trending_threshold=_settings.regime.adx_trending_threshold,
+            ranging_threshold=_settings.regime.adx_ranging_threshold,
+            smoothing_window=_settings.regime.smoothing_window,
+        )
+
+        # Kill-switch (task 4.5)
+        from core.risk.kill_switch import KillSwitch
         kill_switch = KillSwitch(
             max_drawdown_pct=_settings.live_trading.kill_switch_max_drawdown,
             max_daily_loss_pct=_settings.risk.max_daily_loss_pct,
@@ -393,6 +402,7 @@ def _get_or_create_components(
         _worker_state[key] = _TickComponents(
             strategy, pm, risk_engine, executor, run_id, kill_switch,
             trading_mode=trading_mode,
+            regime_detector=regime_detector,
         )
 
         logger.info(
@@ -538,6 +548,7 @@ def _persist_tick_results(
         existing_state.consecutive_buy_candles = buy_candles
         existing_state.state_data = state_data
         existing_state.last_exit_time = last_exit
+        existing_state.updated_at = datetime.now(timezone.utc)
     else:
         new_state = StrategyStateRecord(
             symbol=symbol,
@@ -1083,6 +1094,46 @@ def run_single_strategy_tick(
         signal = Signal.HOLD
         if not stop_result.stop_hit:
             signal = comp.strategy.evaluate(market_data, comp.pm.portfolio)
+
+            # ── 3b. Regime detection + gate ─────────────────
+            if comp.regime_detector is not None:
+                from core.regime import MarketRegime
+
+                classification = comp.regime_detector.detect(market_data.indicators)
+                detected = classification.regime
+                gate_blocked = False
+
+                if signal == Signal.BUY and settings.regime.regime_gating_enabled:
+                    expected = settings.regime.strategy_regime_map.get(strategy_name)
+                    if (
+                        expected is not None
+                        and detected != MarketRegime.UNCERTAIN
+                        and detected.value != expected
+                    ):
+                        log.info(
+                            "regime.gate_blocked",
+                            strategy=strategy_name,
+                            symbol=symbol,
+                            expected_regime=expected,
+                            detected_regime=detected.value,
+                            adx=classification.adx_value,
+                        )
+                        signal = Signal.HOLD
+                        comp.strategy._state = StrategyState.FLAT
+                        gate_blocked = True
+
+                publisher.publish(
+                    EventChannel.STRATEGY,
+                    EventType.REGIME_DETECTED,
+                    {
+                        "symbol": symbol,
+                        "strategy": strategy_name,
+                        "regime": detected.value,
+                        "confidence": classification.confidence,
+                        "adx_value": classification.adx_value,
+                        "gate_blocked": gate_blocked,
+                    },
+                )
 
             # ── 4. Risk evaluation ───────────────────────────
             decision = comp.risk_engine.evaluate(

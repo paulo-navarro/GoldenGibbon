@@ -82,6 +82,8 @@ class EventType(str, Enum):
     STATE_CHANGED = "state_changed"
     CONDITIONS_EVALUATED = "conditions_evaluated"
 
+    REGIME_DETECTED = "regime_detected"
+
     # ── Risk ─────────────────────────────────────────────────────────
     RISK_EVALUATED = "risk_evaluated"
     STOP_TRIGGERED = "stop_triggered"

@@ -24,7 +24,7 @@ from db.models import StrategyStateRecord
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-BASE_TIME = datetime(2026, 2, 1, 0, 0, 0, tzinfo=timezone.utc)
+BASE_TIME = datetime.now(timezone.utc)
 
 
 def _seed_strategy_states(db: Session) -> list[StrategyStateRecord]:
