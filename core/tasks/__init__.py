@@ -501,6 +501,7 @@ def _persist_tick_results(
             existing_pos.highest_close = position.highest_close
             existing_pos.trailing_stop_price = position.trailing_stop_price
             existing_pos.hard_stop_price = position.hard_stop_price
+            existing_pos.exchange_stop_order_id = position.exchange_stop_order_id
             existing_pos.scale_in_count = position.scale_in_count
             existing_pos.buy_signal_candles = position.buy_signal_candles
         else:
@@ -1047,6 +1048,58 @@ def run_single_strategy_tick(
             )
             return {"strategy": strategy_name, "symbol": symbol, "signal": None, "kill_switch": True}
 
+        # ── 1b. Sync exchange stop orders ─────────────────────
+        if comp.pm.has_position(symbol) and hasattr(comp.executor, "check_exchange_stop"):
+            stop_fill = comp.executor.check_exchange_stop(symbol)
+            if stop_fill and stop_fill.get("status") == "FILLED":
+                from core.models import ExitReason, RiskAction, RiskDecision
+                fill_price = stop_fill["fill_price"]
+                position = comp.pm.get_position(symbol)
+                trade = comp.pm.close_position(
+                    symbol=symbol,
+                    exit_price=fill_price,
+                    exit_time=candle_time,
+                    exit_reason=ExitReason.HARD_STOP,
+                    strategy=strategy_name,
+                )
+                log.info(
+                    "single_tick: exchange stop filled between ticks",
+                    symbol=symbol,
+                    fill_price=str(fill_price),
+                    pnl_usdt=str(trade.pnl_usdt),
+                )
+                comp.strategy._cooldown_remaining = getattr(comp.strategy, "_cooldown_candles", 16)
+                comp.strategy._state = StrategyState.COOLDOWN
+                from core.models import ExecutionResult, Order, OrderSide, OrderStatus, OrderType
+                synth_order = Order(
+                    symbol=symbol,
+                    side=OrderSide.SELL,
+                    order_type=OrderType.STOP_LOSS_LIMIT,
+                    amount=trade.size,
+                    price=fill_price,
+                    status=OrderStatus.FILLED,
+                    avg_fill_price=fill_price,
+                    filled_amount=trade.size,
+                )
+                execution_result = ExecutionResult(order=synth_order, trade=trade)
+                snapshot = comp.pm.take_snapshot(candle_time, {symbol: close})
+                try:
+                    with get_session() as session:
+                        _persist_tick_results(
+                            session=session, comp=comp,
+                            strategy_name=strategy_name, symbol=symbol,
+                            execution_result=execution_result, snapshot=snapshot,
+                            signal_value="hold", candle_time=candle_time,
+                        )
+                        session.commit()
+                except Exception as exc:
+                    log.error("single_tick: exchange stop persist failed", error=str(exc))
+                return {
+                    "strategy": strategy_name, "symbol": symbol,
+                    "signal": "hold", "stop_hit": True,
+                    "exit_reason": "hard_stop", "exchange_stop_sync": True,
+                }
+
         # ── 2. Check stops ───────────────────────────────────
         stop_result = comp.risk_engine.check_stops(
             market_data, comp.pm.portfolio,
@@ -1084,12 +1137,33 @@ def run_single_strategy_tick(
                 comp.strategy._cooldown_remaining = stop_result.cooldown_candles
                 comp.strategy._state = StrategyState.COOLDOWN
         elif comp.pm.has_position(symbol):
+            old_pos = comp.pm.get_position(symbol)
+            old_effective_stop = max(
+                old_pos.hard_stop_price,
+                old_pos.trailing_stop_price,
+            ) if old_pos else Decimal("0")
+
             comp.pm.update_stops(
                 symbol,
                 highest_close=stop_result.highest_close,
                 trailing_stop_price=stop_result.trailing_stop_price,
                 hard_stop_price=stop_result.hard_stop_price,
             )
+
+            if hasattr(comp.executor, "_exchange_stops_enabled") and comp.executor._exchange_stops_enabled:
+                updated_pos = comp.pm.get_position(symbol)
+                if updated_pos:
+                    new_effective_stop = max(
+                        updated_pos.hard_stop_price,
+                        updated_pos.trailing_stop_price,
+                    )
+                    if new_effective_stop > old_effective_stop and updated_pos.exchange_stop_order_id:
+                        if comp.executor._cancel_stop_order(symbol, updated_pos.exchange_stop_order_id):
+                            new_stop_id = comp.executor._place_stop_order(
+                                symbol, updated_pos.size,
+                                new_effective_stop, comp.executor._stop_slippage,
+                            )
+                            comp.pm.update_stop_order_id(symbol, new_stop_id)
 
         # ── 3. Strategy decision ─────────────────────────────
         signal = Signal.HOLD

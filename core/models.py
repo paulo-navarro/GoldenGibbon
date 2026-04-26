@@ -43,6 +43,7 @@ class OrderType(str, Enum):
     """Order types."""
     MARKET = "market"
     LIMIT = "limit"
+    STOP_LOSS_LIMIT = "stop_loss_limit"
 
 
 class OrderStatus(str, Enum):
@@ -293,6 +294,7 @@ class Position(BaseModel):
     hard_stop_price: Decimal  # -3% from entry
     scale_in_count: int = 0  # 0, 1, 2 for 50%, 75%, 100%
     buy_signal_candles: int = 0  # Consecutive candles with BUY signal
+    exchange_stop_order_id: Optional[str] = None
     unrealized_pnl: Optional[Decimal] = None
     unrealized_pnl_percent: Optional[Decimal] = None
     

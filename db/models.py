@@ -89,6 +89,7 @@ class PositionRecord(Base):
     highest_close: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
     trailing_stop_price: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
     hard_stop_price: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
+    exchange_stop_order_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     strategy: Mapped[str] = mapped_column(String(50), nullable=False, default="smart_hodler")
     scale_in_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     buy_signal_candles: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

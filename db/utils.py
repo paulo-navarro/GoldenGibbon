@@ -152,6 +152,7 @@ def position_to_orm(position: pydantic_models.Position) -> orm_models.PositionRe
         highest_close=position.highest_close,
         trailing_stop_price=position.trailing_stop_price,
         hard_stop_price=position.hard_stop_price,
+        exchange_stop_order_id=position.exchange_stop_order_id,
         scale_in_count=position.scale_in_count,
         buy_signal_candles=position.buy_signal_candles,
     )
@@ -176,6 +177,7 @@ def orm_to_position(record: orm_models.PositionRecord) -> pydantic_models.Positi
         highest_close=record.highest_close,
         trailing_stop_price=record.trailing_stop_price,
         hard_stop_price=record.hard_stop_price,
+        exchange_stop_order_id=record.exchange_stop_order_id,
         scale_in_count=record.scale_in_count,
         buy_signal_candles=record.buy_signal_candles,
     )

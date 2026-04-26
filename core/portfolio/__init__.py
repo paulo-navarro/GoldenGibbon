@@ -443,6 +443,17 @@ class PortfolioManager:
 
         return updated
 
+    def update_stop_order_id(
+        self, symbol: str, order_id: Optional[str],
+    ) -> Position:
+        position = self.get_position(symbol)
+        if position is None:
+            raise ValueError(f"No position to update for {symbol}")
+
+        updated = position.model_copy(update={"exchange_stop_order_id": order_id})
+        self._portfolio.positions[symbol] = updated
+        return updated
+
     # ── Snapshots (equity curve) ─────────────────────────────────────────
 
     def take_snapshot(

@@ -113,6 +113,8 @@ class BinanceExecutor:
         max_order_size_usdt: float = 1000.0,
         order_timeout: int = 30,
         retry_config: Optional[RetryConfig] = None,
+        exchange_stop_orders_enabled: bool = False,
+        stop_limit_slippage_pct: float = 0.005,
     ) -> None:
         self._strategy = strategy_name
         self._pm = portfolio_manager
@@ -121,6 +123,8 @@ class BinanceExecutor:
         self._base_url = self._TESTNET_BASE if use_testnet else self._PROD_BASE
         self._max_order_size_usdt = Decimal(str(max_order_size_usdt))
         self._order_timeout = order_timeout
+        self._exchange_stops_enabled = exchange_stop_orders_enabled
+        self._stop_slippage = Decimal(str(stop_limit_slippage_pct))
         self._retry_config = retry_config or RetryConfig(
             max_attempts=3,
             base_delay=1.0,
@@ -248,6 +252,59 @@ class BinanceExecutor:
 
         return result
 
+    # ── Public: exchange stop sync ──────────────────────────────────────
+
+    def check_exchange_stop(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Check if the exchange-side stop order for *symbol* has been filled.
+
+        Returns a dict with ``status`` and ``fill_price`` if filled,
+        ``None`` if no stop order exists, feature is off, or status is NEW.
+        """
+        if not self._exchange_stops_enabled:
+            return None
+
+        pos = self._pm.get_position(symbol)
+        if pos is None or not pos.exchange_stop_order_id:
+            return None
+
+        info = self._check_stop_order_status(symbol, pos.exchange_stop_order_id)
+        if info is None:
+            return None
+
+        status = info.get("status", "")
+
+        if status == "FILLED":
+            fill_price = Decimal(info.get("price", "0"))
+            if "fills" in info and info["fills"]:
+                total_qty = sum(Decimal(f["qty"]) for f in info["fills"])
+                total_cost = sum(Decimal(f["qty"]) * Decimal(f["price"]) for f in info["fills"])
+                if total_qty > 0:
+                    fill_price = total_cost / total_qty
+            elif info.get("cummulativeQuoteQty") and info.get("executedQty"):
+                exec_qty = Decimal(info["executedQty"])
+                if exec_qty > 0:
+                    fill_price = Decimal(info["cummulativeQuoteQty"]) / exec_qty
+
+            logger.info(
+                "binance.exchange_stop_filled",
+                symbol=symbol,
+                order_id=pos.exchange_stop_order_id,
+                fill_price=str(fill_price),
+            )
+            return {"status": "FILLED", "fill_price": fill_price}
+
+        if status in ("CANCELED", "EXPIRED", "UNKNOWN"):
+            logger.warning(
+                "binance.exchange_stop_gone",
+                symbol=symbol,
+                order_id=pos.exchange_stop_order_id,
+                status=status,
+            )
+            self._pm.update_stop_order_id(symbol, None)
+
+        return None
+
     # ── Private: buy-side ────────────────────────────────────────────────
 
     def _execute_open(
@@ -288,6 +345,14 @@ class BinanceExecutor:
             exchange_order_id=order.exchange_order_id,
         )
 
+        if self._exchange_stops_enabled and decision.hard_stop_price:
+            stop_order_id = self._place_stop_order(
+                decision.symbol, filled_size,
+                decision.hard_stop_price, self._stop_slippage,
+            )
+            if stop_order_id:
+                self._pm.update_stop_order_id(decision.symbol, stop_order_id)
+
         return ExecutionResult(order=order, position=position)
 
     def _execute_scale_in(
@@ -324,6 +389,19 @@ class BinanceExecutor:
             fill_price=str(fill_price),
         )
 
+        if self._exchange_stops_enabled:
+            old_stop_id = self._pm.get_position(decision.symbol)
+            if old_stop_id and old_stop_id.exchange_stop_order_id:
+                self._cancel_stop_order(decision.symbol, old_stop_id.exchange_stop_order_id)
+            stop_price = position.hard_stop_price
+            if stop_price and stop_price > 0:
+                new_stop_id = self._place_stop_order(
+                    decision.symbol, position.size,
+                    stop_price, self._stop_slippage,
+                )
+                if new_stop_id:
+                    self._pm.update_stop_order_id(decision.symbol, new_stop_id)
+
         return ExecutionResult(order=order, position=position)
 
     # ── Private: sell-side ───────────────────────────────────────────────
@@ -334,6 +412,12 @@ class BinanceExecutor:
         timestamp: datetime,
     ) -> Optional[ExecutionResult]:
         """CLOSE -> sell entire position."""
+        if self._exchange_stops_enabled:
+            pos = self._pm.get_position(decision.symbol)
+            if pos and pos.exchange_stop_order_id:
+                self._cancel_stop_order(decision.symbol, pos.exchange_stop_order_id)
+                self._pm.update_stop_order_id(decision.symbol, None)
+
         real_balance = self._get_available_balance(decision.symbol)
         if real_balance is not None and real_balance < decision.size:
             logger.warning(
@@ -381,6 +465,12 @@ class BinanceExecutor:
         timestamp: datetime,
     ) -> Optional[ExecutionResult]:
         """REDUCE -> sell fraction of position."""
+        if self._exchange_stops_enabled:
+            pos = self._pm.get_position(decision.symbol)
+            if pos and pos.exchange_stop_order_id:
+                self._cancel_stop_order(decision.symbol, pos.exchange_stop_order_id)
+                self._pm.update_stop_order_id(decision.symbol, None)
+
         real_balance = self._get_available_balance(decision.symbol)
         if real_balance is not None and real_balance < decision.size:
             logger.warning(
@@ -421,7 +511,139 @@ class BinanceExecutor:
             sell_fraction=str(decision.sell_fraction),
         )
 
+        if self._exchange_stops_enabled:
+            remaining = self._pm.get_position(decision.symbol)
+            if remaining and remaining.hard_stop_price > 0:
+                new_stop_id = self._place_stop_order(
+                    decision.symbol, remaining.size,
+                    remaining.hard_stop_price, self._stop_slippage,
+                )
+                if new_stop_id:
+                    self._pm.update_stop_order_id(decision.symbol, new_stop_id)
+
         return ExecutionResult(order=order, trade=trade)
+
+    # ── Private: exchange stop orders ──────────────────────────────────────
+
+    def _place_stop_order(
+        self,
+        symbol: str,
+        quantity: Decimal,
+        stop_price: Decimal,
+        slippage_pct: Decimal = Decimal("0.005"),
+    ) -> Optional[str]:
+        qty = self._format_quantity(symbol, quantity)
+        if qty <= 0:
+            logger.error("binance.stop_order_zero_qty", symbol=symbol)
+            return None
+
+        formatted_stop = self._format_price(symbol, stop_price)
+        limit_price = self._format_price(
+            symbol, stop_price * (1 - slippage_pct),
+        )
+
+        params: Dict[str, Any] = {
+            "symbol": symbol,
+            "side": "SELL",
+            "type": "STOP_LOSS_LIMIT",
+            "quantity": str(qty),
+            "stopPrice": str(formatted_stop),
+            "price": str(limit_price),
+            "timeInForce": "GTC",
+        }
+
+        try:
+            response = with_retry(
+                fn=lambda: self._signed_request("POST", "/api/v3/order", params),
+                config=self._retry_config,
+                retryable=(requests.ConnectionError, requests.Timeout),
+                label=f"binance.place_stop_order({symbol})",
+            )
+        except (BinanceAPIError, RetryExhausted) as exc:
+            logger.error(
+                "binance.stop_order_failed",
+                symbol=symbol,
+                stop_price=str(formatted_stop),
+                error=str(exc),
+            )
+            return None
+        except Exception as exc:
+            logger.exception("binance.stop_order_unexpected", symbol=symbol)
+            return None
+
+        order_id = str(response["orderId"])
+        logger.info(
+            "binance.stop_order_placed",
+            symbol=symbol,
+            stop_price=str(formatted_stop),
+            limit_price=str(limit_price),
+            quantity=str(qty),
+            order_id=order_id,
+        )
+        return order_id
+
+    def _cancel_stop_order(self, symbol: str, order_id: str) -> bool:
+        try:
+            self._signed_request(
+                "DELETE", "/api/v3/order",
+                {"symbol": symbol, "orderId": order_id},
+            )
+            logger.info(
+                "binance.stop_order_cancelled",
+                symbol=symbol,
+                order_id=order_id,
+            )
+            return True
+        except BinanceAPIError as exc:
+            if exc.code == -2011:
+                logger.info(
+                    "binance.stop_order_already_gone",
+                    symbol=symbol,
+                    order_id=order_id,
+                )
+                return True
+            logger.error(
+                "binance.stop_order_cancel_failed",
+                symbol=symbol,
+                order_id=order_id,
+                code=exc.code,
+                msg=exc.msg,
+            )
+            return False
+        except Exception:
+            logger.exception(
+                "binance.stop_order_cancel_unexpected",
+                symbol=symbol,
+                order_id=order_id,
+            )
+            return False
+
+    def _check_stop_order_status(
+        self, symbol: str, order_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        try:
+            return self._signed_request(
+                "GET", "/api/v3/order",
+                {"symbol": symbol, "orderId": order_id},
+            )
+        except BinanceAPIError as exc:
+            if exc.code == -2011:
+                return {"status": "UNKNOWN", "orderId": order_id}
+            logger.error(
+                "binance.stop_order_status_failed",
+                symbol=symbol,
+                order_id=order_id,
+                code=exc.code,
+                msg=exc.msg,
+            )
+            return None
+        except Exception:
+            logger.exception(
+                "binance.stop_order_status_unexpected",
+                symbol=symbol,
+                order_id=order_id,
+            )
+            return None
 
     # ── Private: balance helper ───────────────────────────────────────────
 
@@ -952,6 +1174,8 @@ class BinanceExecutor:
             max_order_size_usdt=live.max_order_size_usdt,
             order_timeout=execution.order_timeout,
             retry_config=retry_cfg,
+            exchange_stop_orders_enabled=execution.exchange_stop_orders_enabled,
+            stop_limit_slippage_pct=execution.stop_limit_slippage_pct,
         )
 
         return executor

@@ -241,6 +241,8 @@ class ExecutionConfig(BaseModel):
     order_timeout: int = Field(default=30, ge=1)
     max_retries: int = Field(default=3, ge=0)
     retry_delay: int = Field(default=1, ge=0)
+    exchange_stop_orders_enabled: bool = Field(default=False)
+    stop_limit_slippage_pct: float = Field(default=0.005, ge=0, le=0.05)
 
     @field_validator("default_order_type")
     @classmethod

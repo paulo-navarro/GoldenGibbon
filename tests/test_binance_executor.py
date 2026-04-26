@@ -486,6 +486,8 @@ class TestFactory:
             mock_exec.max_retries = 3
             mock_exec.retry_delay = 1
             mock_exec.order_timeout = 30
+            mock_exec.exchange_stop_orders_enabled = False
+            mock_exec.stop_limit_slippage_pct = 0.005
 
             mock_settings.return_value.live_trading = mock_live
             mock_settings.return_value.execution = mock_exec
