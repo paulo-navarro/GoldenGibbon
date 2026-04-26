@@ -145,6 +145,20 @@ class RiskEngine:
             strategy_config.get("time_stop_cooldown_candles", 4)
         )
 
+        # Break-even ratchet
+        self._ratchet_enabled = bool(
+            strategy_config.get("breakeven_ratchet_enabled", True)
+        )
+        self._breakeven_trigger = Decimal(
+            str(strategy_config.get("breakeven_trigger_pct", 0.02))
+        )
+        self._lockin_trigger = Decimal(
+            str(strategy_config.get("lockin_trigger_pct", 0.04))
+        )
+        self._lockin_stop_pct = Decimal(
+            str(strategy_config.get("lockin_stop_pct", 0.01))
+        )
+
         # Primary timeframe in minutes (for candle counting)
         tf_str = strategy_config.get("timeframe_primary", "15m")
         self._timeframe_minutes = self._parse_timeframe_minutes(tf_str)
@@ -312,13 +326,51 @@ class RiskEngine:
 
         close = Decimal(str(market_data.candles["close"].iloc[-1]))
 
+        # ── Break-even ratchet (all strategies) ─────────────────────
+        ratcheted_hard_stop = position.hard_stop_price
+        if (
+            self._ratchet_enabled
+            and position.hard_stop_price > 0
+            and position.entry_price > 0
+        ):
+            profit_pct = (close - position.entry_price) / position.entry_price
+            new_stop = position.hard_stop_price
+
+            if profit_pct >= self._lockin_trigger:
+                new_stop = position.entry_price * (1 + self._lockin_stop_pct)
+            elif profit_pct >= self._breakeven_trigger:
+                new_stop = position.entry_price
+
+            if new_stop > position.hard_stop_price:
+                if new_stop > position.entry_price:
+                    logger.info(
+                        "risk.ratchet_lockin",
+                        symbol=symbol,
+                        old_stop=str(position.hard_stop_price),
+                        new_stop=str(new_stop),
+                        profit_pct=str(profit_pct),
+                        entry_price=str(position.entry_price),
+                        close=str(close),
+                    )
+                else:
+                    logger.info(
+                        "risk.ratchet_breakeven",
+                        symbol=symbol,
+                        old_stop=str(position.hard_stop_price),
+                        new_stop=str(new_stop),
+                        profit_pct=str(profit_pct),
+                        entry_price=str(position.entry_price),
+                        close=str(close),
+                    )
+                ratcheted_hard_stop = new_stop
+
         # ── Hard stop (all strategies) ───────────────────────────────
-        if position.hard_stop_price > 0 and close < position.hard_stop_price:
+        if ratcheted_hard_stop > 0 and close < ratcheted_hard_stop:
             logger.info(
                 "risk.hard_stop",
                 symbol=symbol,
                 close=str(close),
-                hard_stop=str(position.hard_stop_price),
+                hard_stop=str(ratcheted_hard_stop),
                 cooldown=self._cooldown_candles,
             )
             decision = RiskDecision(
@@ -332,6 +384,7 @@ class RiskEngine:
                 decision=decision,
                 highest_close=max(position.highest_close, close),
                 trailing_stop_price=position.trailing_stop_price,
+                hard_stop_price=ratcheted_hard_stop,
                 cooldown_candles=self._cooldown_candles,
             )
 
@@ -357,10 +410,12 @@ class RiskEngine:
                     decision=decision,
                     highest_close=max(position.highest_close, close),
                     trailing_stop_price=position.trailing_stop_price,
+                    hard_stop_price=ratcheted_hard_stop,
                     cooldown_candles=self._time_stop_cooldown,
                 )
-            # MR has no trailing stop
-            return StopCheckResult()
+            return StopCheckResult(
+                hard_stop_price=ratcheted_hard_stop,
+            )
 
         # ── Trailing stop (Smart Hodler) ─────────────────────────────
         # 1. Ratchet highest_close
@@ -392,12 +447,14 @@ class RiskEngine:
                 decision=decision,
                 highest_close=highest,
                 trailing_stop_price=new_trailing,
+                hard_stop_price=ratcheted_hard_stop,
             )
 
         # No stop hit – return updated levels for the caller to persist
         return StopCheckResult(
             highest_close=highest,
             trailing_stop_price=new_trailing,
+            hard_stop_price=ratcheted_hard_stop,
         )
 
     # ── Private: open position sizing ────────────────────────────────

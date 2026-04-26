@@ -119,6 +119,7 @@ class StopCheckResult(BaseModel):
     decision: Optional[RiskDecision] = None
     highest_close: Optional[Decimal] = None
     trailing_stop_price: Optional[Decimal] = None
+    hard_stop_price: Optional[Decimal] = None
     cooldown_candles: Optional[int] = None
 
     @property

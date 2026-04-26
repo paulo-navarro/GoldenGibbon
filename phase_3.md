@@ -105,7 +105,7 @@ O hard stop atual é fixo em `entry_price × (1 - hard_stop_pct)`. Uma posição
 
 ### Tarefas
 
-- [ ] **3.1 — Implementar ratchet no `check_stops()`**
+- [x] **3.1 — Implementar ratchet no `check_stops()`**
   - Arquivo: `core/risk/__init__.py`, método `check_stops()`, antes da verificação de hard stop (linha ~315)
   - Calcular profit percent: `profit_pct = (close - position.entry_price) / position.entry_price`
   - Aplicar ratchet em 2 níveis:
@@ -114,18 +114,18 @@ O hard stop atual é fixo em `entry_price × (1 - hard_stop_pct)`. Uma posição
   - O novo hard stop nunca desce — usar `max(position.hard_stop_price, new_stop)`
   - Retornar o hard stop atualizado no `StopCheckResult` para que o caller persista via `pm.update_stops()`
 
-- [ ] **3.2 — Propagar hard stop atualizado no tick loop**
+- [x] **3.2 — Propagar hard stop atualizado no tick loop**
   - Arquivo: `core/tasks/__init__.py`, bloco onde `update_stops` é chamado (linha ~1058-1063)
   - Atualmente chama `comp.pm.update_stops(symbol, highest_close=..., trailing_stop_price=...)`
   - Adicionar `hard_stop_price=stop_result.hard_stop_price` ao call
   - Adicionar campo `hard_stop_price: Optional[Decimal] = None` ao `StopCheckResult` em `core/models.py`
 
-- [ ] **3.3 — Adicionar campos de ratchet ao `StopCheckResult`**
+- [x] **3.3 — Adicionar campos de ratchet ao `StopCheckResult`**
   - Arquivo: `core/models.py`, classe `StopCheckResult`
   - Adicionar: `hard_stop_price: Optional[Decimal] = None`
   - O `check_stops()` preenche esse campo quando o ratchet move o hard stop
 
-- [ ] **3.4 — Configuração de ratchet por estratégia**
+- [x] **3.4 — Configuração de ratchet por estratégia**
   - Arquivo: `core/config.py`, classes `SmartHodlerConfig` e `MeanReversionStrategyConfig`
   - Novos campos em ambas:
     ```
@@ -136,11 +136,11 @@ O hard stop atual é fixo em `entry_price × (1 - hard_stop_pct)`. Uma posição
     ```
   - Ler no `RiskEngine.__init__` e guardar como atributos privados
 
-- [ ] **3.5 — Logar ratchet events**
+- [x] **3.5 — Logar ratchet events**
   - Quando o hard stop é movido, logar `risk.ratchet_breakeven` ou `risk.ratchet_lockin` com:
     `symbol`, `old_stop`, `new_stop`, `profit_pct`, `entry_price`, `close`
 
-- [ ] **3.6 — Testes unitários**
+- [x] **3.6 — Testes unitários**
   - Arquivo: `tests/test_breakeven_ratchet.py`
   - Test: Posição com +1% profit → hard stop inalterado (abaixo do trigger)
   - Test: Posição com +2% profit → hard stop movido para entry_price (break-even)

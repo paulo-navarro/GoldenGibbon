@@ -1088,6 +1088,7 @@ def run_single_strategy_tick(
                 symbol,
                 highest_close=stop_result.highest_close,
                 trailing_stop_price=stop_result.trailing_stop_price,
+                hard_stop_price=stop_result.hard_stop_price,
             )
 
         # ── 3. Strategy decision ─────────────────────────────

@@ -109,6 +109,12 @@ class SmartHodlerConfig(BaseModel):
     trailing_stop_atr_multiplier: float = Field(default=2.0, gt=0)
     hard_stop_pct: float = Field(default=0.03, gt=0, le=1)
 
+    # Break-even ratchet
+    breakeven_ratchet_enabled: bool = Field(default=True, description="Move hard stop to break-even / lock-in as profit grows")
+    breakeven_trigger_pct: float = Field(default=0.02, ge=0, le=0.5, description="Move stop to break-even at this profit %")
+    lockin_trigger_pct: float = Field(default=0.04, ge=0, le=0.5, description="Lock in profit at this profit %")
+    lockin_stop_pct: float = Field(default=0.01, ge=0, le=0.5, description="Hard stop moves to entry + this %")
+
     # Re-Entry / Cooldown
     cooldown_candles: int = Field(default=16, ge=0)
 
@@ -169,6 +175,12 @@ class MeanReversionStrategyConfig(BaseModel):
     # Stop-Loss
     hard_stop_pct: float = Field(default=0.02, gt=0, le=1)
     atr_period: int = Field(default=14, ge=1)
+
+    # Break-even ratchet
+    breakeven_ratchet_enabled: bool = Field(default=True, description="Move hard stop to break-even / lock-in as profit grows")
+    breakeven_trigger_pct: float = Field(default=0.02, ge=0, le=0.5, description="Move stop to break-even at this profit %")
+    lockin_trigger_pct: float = Field(default=0.04, ge=0, le=0.5, description="Lock in profit at this profit %")
+    lockin_stop_pct: float = Field(default=0.01, ge=0, le=0.5, description="Hard stop moves to entry + this %")
 
     # Time Stop
     time_stop_candles: int = Field(default=16, ge=1)
