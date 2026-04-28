@@ -28,6 +28,24 @@ export interface PortfolioResponse {
   last_updated: string | null; // ISO 8601
 }
 
+/** Status of a single exit condition. */
+export interface ExitConditionStatus {
+  name: string;
+  met: boolean;
+  current_value: string | null;
+  threshold: string | null;
+}
+
+/** Exit proximity for an open position (GET /api/portfolio/exit-proximity). */
+export interface ExitProximityResponse {
+  symbol: string;
+  strategy: string;
+  hard_stop_pct: number;
+  trailing_stop_pct: number;
+  time_stop_pct: number | null;
+  exit_conditions: ExitConditionStatus[];
+}
+
 /** Point-in-time snapshot for equity curve (GET /api/portfolio/equity-curve). */
 export interface PortfolioSnapshot {
   timestamp: string; // ISO 8601

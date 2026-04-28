@@ -90,13 +90,13 @@ Mostrar, para cada posição aberta, o quão perto cada trigger de venda está d
   - Campos: `symbol: str`, `strategy: str`, `hard_stop_pct: float`, `trailing_stop_pct: float`, `time_stop_pct: Optional[float]`, `exit_conditions: list[ExitConditionStatus]`
   - Sub-model `ExitConditionStatus`: `name: str`, `met: bool`, `current_value: Optional[str]`, `threshold: Optional[str]`
 
-- [ ] **4.3 — Implementar lógica de cálculo no backend**
+- [x] **4.3 — Implementar lógica de cálculo no backend**
   - Arquivo: `core/risk/__init__.py` ou novo `core/risk/proximity.py`
   - Função `compute_exit_proximity(position, strategy_name, close, strategy_config, market_data) -> ExitProximityResponse`
   - Reutilizar os mesmos cálculos de `check_stops()` mas sem acionar — apenas reportar distância
   - Para exit conditions da strategy, consultar os indicadores atuais vs thresholds de config
 
-- [ ] **4.4 — Componente `ExitProximityCard` no frontend**
+- [x] **4.4 — Componente `ExitProximityCard` no frontend**
   - Arquivo: `frontend/src/components/ExitProximityCard.tsx`
   - Para cada posição, mostrar barras de progresso (MUI `LinearProgress`) coloridas:
     - Verde (>15% de distância) → Amarelo (5-15%) → Vermelho (<5%)
@@ -104,7 +104,7 @@ Mostrar, para cada posição aberta, o quão perto cada trigger de venda está d
   - Checklist de exit conditions: ícones check/x para cada condição
   - Consumir do endpoint via React Query
 
-- [ ] **4.5 — Integrar `ExitProximityCard` na UI**
+- [x] **4.5 — Integrar `ExitProximityCard` na UI**
   - Arquivo: `frontend/src/pages/DashboardPage.tsx` ou `StrategyPage.tsx`
   - Exibir abaixo da tabela de posições abertas, um card por posição
   - Atualizar via WebSocket event `PRICE_UPDATE` ou polling curto (30s)

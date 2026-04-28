@@ -27,6 +27,7 @@ import {
 } from '../api';
 import CycleStatus from '../components/CycleStatus';
 import EquityCurveChart from '../components/EquityCurveChart';
+import ExitProximitySection from '../components/ExitProximityCard';
 import { useStrategyStore } from '../stores/strategyStore';
 import type { Signal, StrategyState } from '../types/enums';
 
@@ -349,6 +350,11 @@ export default function DashboardPage() {
         {/* ── Open Positions ─────────────────────────────────────── */}
         <Grid size={{ xs: 12 }}>
           <OpenPositionsTable />
+        </Grid>
+
+        {/* ── Exit Proximity ─────────────────────────────────────── */}
+        <Grid size={{ xs: 12 }}>
+          <ExitProximitySection />
         </Grid>
 
         {/* ── Recent Signals ──────────────────────────────────────── */}

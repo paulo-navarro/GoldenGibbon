@@ -27,11 +27,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from core.config import get_settings
-from core.models import ExitConditionStatus, ExitProximityResponse, Position, PortfolioSnapshot
+from core.models import ExitProximityResponse, Position, PortfolioSnapshot
+from core.risk.proximity import compute_exit_proximity
 from db import get_db
 from db.models import CandleRecord, PositionRecord, TradeRecord
 from db.models import PortfolioSnapshot as PortfolioSnapshotRecord
-from db.utils import orm_to_position, orm_to_portfolio_snapshot
+from db.utils import candles_to_dataframe, orm_to_position, orm_to_portfolio_snapshot
 
 
 def _default_trading_mode() -> str:
@@ -188,38 +189,32 @@ def get_exit_proximity(
     results: list[ExitProximityResponse] = []
 
     for pos in positions:
-        # Latest close price for this symbol
-        candle = db.execute(
-            select(CandleRecord)
-            .where(CandleRecord.symbol == pos.symbol, CandleRecord.timeframe == "15m")
-            .order_by(CandleRecord.open_time.desc())
-            .limit(1)
-        ).scalars().first()
-
-        if candle is None:
+        # Load last 250 candles for indicator calculation
+        candle_records = list(
+            db.execute(
+                select(CandleRecord)
+                .where(CandleRecord.symbol == pos.symbol, CandleRecord.timeframe == "15m")
+                .order_by(CandleRecord.open_time.desc())
+                .limit(250)
+            ).scalars().all()
+        )
+        if not candle_records:
             continue
+        candle_records.reverse()
 
-        close = Decimal(str(candle.close))
+        close = Decimal(str(candle_records[-1].close))
+        df = candles_to_dataframe(candle_records)
 
-        # Hard stop distance
-        hard_stop_pct = 0.0
-        if pos.hard_stop_price and pos.hard_stop_price > 0 and close > 0:
-            hard_stop_pct = float((close - pos.hard_stop_price) / close)
+        # Strategy config as dict for indicator engine
+        strat_cfg = settings.strategies.get_strategy_config(pos.strategy)
+        cfg_dict = strat_cfg.model_dump() if strat_cfg is not None else {}
 
-        # Trailing stop distance
-        trailing_stop_pct = 0.0
-        if pos.trailing_stop_price and pos.trailing_stop_price > 0 and close > 0:
-            trailing_stop_pct = float((close - pos.trailing_stop_price) / close)
-
-        # Time stop progress (mean_reversion only)
-        time_stop_pct: Optional[float] = None
+        # Time stop info (MR only)
+        candles_held: Optional[int] = None
+        time_stop_candles: Optional[int] = None
         if pos.strategy == "mean_reversion":
-            strat_cfg = settings.strategies.get_strategy_config("mean_reversion")
-            time_stop_candles = 16
-            if strat_cfg is not None:
-                time_stop_candles = getattr(strat_cfg, "time_stop_candles", 16)
-
-            candle_count = db.execute(
+            time_stop_candles = cfg_dict.get("time_stop_candles", 16)
+            candles_held = db.execute(
                 select(func.count(CandleRecord.id))
                 .where(
                     CandleRecord.symbol == pos.symbol,
@@ -227,15 +222,18 @@ def get_exit_proximity(
                     CandleRecord.open_time >= pos.entry_time,
                 )
             ).scalar() or 0
-            time_stop_pct = candle_count / time_stop_candles if time_stop_candles > 0 else 0.0
 
-        results.append(ExitProximityResponse(
+        results.append(compute_exit_proximity(
             symbol=pos.symbol,
             strategy=pos.strategy,
-            hard_stop_pct=round(hard_stop_pct, 6),
-            trailing_stop_pct=round(trailing_stop_pct, 6),
-            time_stop_pct=round(time_stop_pct, 6) if time_stop_pct is not None else None,
-            exit_conditions=[],
+            close=close,
+            position_hard_stop=pos.hard_stop_price,
+            position_trailing_stop=pos.trailing_stop_price,
+            entry_price=pos.entry_price,
+            candles_held=candles_held,
+            time_stop_candles=time_stop_candles,
+            df=df,
+            strategy_config=cfg_dict,
         ))
 
     return results

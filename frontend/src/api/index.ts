@@ -6,6 +6,7 @@ export {
   usePrice,
   // Portfolio
   usePortfolio,
+  useExitProximity,
   useEquityCurve,
   // Trades
   useTrades,

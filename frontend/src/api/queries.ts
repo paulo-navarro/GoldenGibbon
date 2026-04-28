@@ -11,7 +11,7 @@ import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { fetchApi, postApi, patchApi, deleteApi } from './client';
 
 import type { Candle, PriceResponse } from '../types/market';
-import type { PortfolioResponse, PortfolioSnapshot } from '../types/portfolio';
+import type { ExitProximityResponse, PortfolioResponse, PortfolioSnapshot } from '../types/portfolio';
 import type { Trade, TradeStatsResponse } from '../types/trades';
 import type { Order } from '../types/orders';
 import type {
@@ -118,6 +118,14 @@ export function usePortfolio() {
   }, [query.data]);
 
   return query;
+}
+
+export function useExitProximity() {
+  return useQuery({
+    queryKey: ['exit-proximity'],
+    queryFn: () => fetchApi<ExitProximityResponse[]>('/api/portfolio/exit-proximity'),
+    refetchInterval: 30_000,
+  });
 }
 
 export interface UseEquityCurveParams extends RunFilterParams {
