@@ -74,7 +74,7 @@ Mostrar, para cada posição aberta, o quão perto cada trigger de venda está d
 
 ### Tarefas
 
-- [ ] **4.1 — Criar endpoint `GET /api/portfolio/exit-proximity`**
+- [x] **4.1 — Criar endpoint `GET /api/portfolio/exit-proximity`**
   - Arquivo: `api/routes/portfolio.py`
   - Para cada posição aberta, retornar:
     - `symbol`, `strategy`
@@ -85,7 +85,7 @@ Mostrar, para cada posição aberta, o quão perto cada trigger de venda está d
   - Precisa do preço atual — ler do `marketStore`/cache Redis ou receber como query param
   - Response model: `list[ExitProximityResponse]`
 
-- [ ] **4.2 — Criar model `ExitProximityResponse`**
+- [x] **4.2 — Criar model `ExitProximityResponse`**
   - Arquivo: `core/models.py`
   - Campos: `symbol: str`, `strategy: str`, `hard_stop_pct: float`, `trailing_stop_pct: float`, `time_stop_pct: Optional[float]`, `exit_conditions: list[ExitConditionStatus]`
   - Sub-model `ExitConditionStatus`: `name: str`, `met: bool`, `current_value: Optional[str]`, `threshold: Optional[str]`

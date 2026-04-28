@@ -621,6 +621,24 @@ class PortfolioSnapshot(BaseModel):
     )
 
 
+class ExitConditionStatus(BaseModel):
+    """Status of a single exit condition (met or not)."""
+    name: str
+    met: bool
+    current_value: Optional[str] = None
+    threshold: Optional[str] = None
+
+
+class ExitProximityResponse(BaseModel):
+    """How close each exit trigger is to firing for an open position."""
+    symbol: str
+    strategy: str
+    hard_stop_pct: float
+    trailing_stop_pct: float
+    time_stop_pct: Optional[float] = None
+    exit_conditions: List[ExitConditionStatus] = Field(default_factory=list)
+
+
 class BacktestResult(BaseModel):
     """
     Raw output of a single backtest run.

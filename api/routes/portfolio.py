@@ -27,9 +27,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from core.config import get_settings
-from core.models import Position, PortfolioSnapshot
+from core.models import ExitConditionStatus, ExitProximityResponse, Position, PortfolioSnapshot
 from db import get_db
-from db.models import PositionRecord, TradeRecord
+from db.models import CandleRecord, PositionRecord, TradeRecord
 from db.models import PortfolioSnapshot as PortfolioSnapshotRecord
 from db.utils import orm_to_position, orm_to_portfolio_snapshot
 
@@ -164,3 +164,78 @@ def get_equity_curve(
         records = list(db.execute(stmt).scalars().all())
 
     return [orm_to_portfolio_snapshot(r) for r in records]
+
+
+@router.get("/exit-proximity", response_model=list[ExitProximityResponse])
+def get_exit_proximity(
+    db: Session = Depends(get_db),
+) -> list[ExitProximityResponse]:
+    """
+    Return exit proximity data for every open position.
+
+    For each position, calculates how close the current price is to each
+    exit trigger (hard stop, trailing stop, time stop).
+    """
+    settings = get_settings()
+
+    position_records = list(
+        db.execute(select(PositionRecord).order_by(PositionRecord.entry_time)).scalars().all()
+    )
+    if not position_records:
+        return []
+
+    positions = [orm_to_position(r) for r in position_records]
+    results: list[ExitProximityResponse] = []
+
+    for pos in positions:
+        # Latest close price for this symbol
+        candle = db.execute(
+            select(CandleRecord)
+            .where(CandleRecord.symbol == pos.symbol, CandleRecord.timeframe == "15m")
+            .order_by(CandleRecord.open_time.desc())
+            .limit(1)
+        ).scalars().first()
+
+        if candle is None:
+            continue
+
+        close = Decimal(str(candle.close))
+
+        # Hard stop distance
+        hard_stop_pct = 0.0
+        if pos.hard_stop_price and pos.hard_stop_price > 0 and close > 0:
+            hard_stop_pct = float((close - pos.hard_stop_price) / close)
+
+        # Trailing stop distance
+        trailing_stop_pct = 0.0
+        if pos.trailing_stop_price and pos.trailing_stop_price > 0 and close > 0:
+            trailing_stop_pct = float((close - pos.trailing_stop_price) / close)
+
+        # Time stop progress (mean_reversion only)
+        time_stop_pct: Optional[float] = None
+        if pos.strategy == "mean_reversion":
+            strat_cfg = settings.strategies.get_strategy_config("mean_reversion")
+            time_stop_candles = 16
+            if strat_cfg is not None:
+                time_stop_candles = getattr(strat_cfg, "time_stop_candles", 16)
+
+            candle_count = db.execute(
+                select(func.count(CandleRecord.id))
+                .where(
+                    CandleRecord.symbol == pos.symbol,
+                    CandleRecord.timeframe == "15m",
+                    CandleRecord.open_time >= pos.entry_time,
+                )
+            ).scalar() or 0
+            time_stop_pct = candle_count / time_stop_candles if time_stop_candles > 0 else 0.0
+
+        results.append(ExitProximityResponse(
+            symbol=pos.symbol,
+            strategy=pos.strategy,
+            hard_stop_pct=round(hard_stop_pct, 6),
+            trailing_stop_pct=round(trailing_stop_pct, 6),
+            time_stop_pct=round(time_stop_pct, 6) if time_stop_pct is not None else None,
+            exit_conditions=[],
+        ))
+
+    return results
