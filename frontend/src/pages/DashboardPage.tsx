@@ -16,6 +16,7 @@ import TableBody from '@mui/material/TableBody';
 import TableCell from '@mui/material/TableCell';
 import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
+import TablePagination from '@mui/material/TablePagination';
 import TableRow from '@mui/material/TableRow';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
@@ -188,6 +189,8 @@ function OpenPositionsTable() {
   );
 }
 
+const SIGNAL_TYPES: Array<Signal | 'all'> = ['all', 'buy', 'sell_full', 'sell_half', 'hold'];
+
 function RecentSignals({
   strategies,
   activeStrategy,
@@ -198,34 +201,66 @@ function RecentSignals({
   setActiveStrategy: (v: string) => void;
 }) {
   const { data, isLoading, error } = useStrategySignals();
+  const [activeSignalType, setActiveSignalType] = useState<Signal | 'all'>('all');
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
 
   const filtered = useMemo(() => {
     if (!data) return [];
-    if (activeStrategy === 'all') return data;
-    return data.filter((s) => s.strategy === activeStrategy);
-  }, [data, activeStrategy]);
+    let result = data;
+    if (activeStrategy !== 'all') result = result.filter((s) => s.strategy === activeStrategy);
+    if (activeSignalType !== 'all') result = result.filter((s) => s.signal === activeSignalType);
+    return result;
+  }, [data, activeStrategy, activeSignalType]);
+
+  const paged = useMemo(
+    () => filtered.slice(page * rowsPerPage, (page + 1) * rowsPerPage),
+    [filtered, page, rowsPerPage],
+  );
+
+  const handleStrategyChange = (v: string) => { setActiveStrategy(v); setPage(0); };
+  const handleSignalTypeChange = (v: Signal | 'all') => { setActiveSignalType(v); setPage(0); };
 
   if (isLoading) return <Skeleton variant="rounded" height={180} />;
   if (error) return <Alert severity="error" variant="outlined">Failed to load signals</Alert>;
+
+  const filters = (
+    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+      <Typography variant="body2" color="text.secondary">Recent Signals</Typography>
+      <Box sx={{ display: 'flex', gap: 1 }}>
+        <TextField
+          select
+          size="small"
+          label="Strategy"
+          value={activeStrategy}
+          onChange={(e) => handleStrategyChange(e.target.value)}
+          sx={{ width: 160 }}
+        >
+          <MenuItem value="all">All</MenuItem>
+          {strategies.map((s) => (
+            <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>
+          ))}
+        </TextField>
+        <TextField
+          select
+          size="small"
+          label="Signal"
+          value={activeSignalType}
+          onChange={(e) => handleSignalTypeChange(e.target.value as Signal | 'all')}
+          sx={{ width: 140 }}
+        >
+          {SIGNAL_TYPES.map((t) => (
+            <MenuItem key={t} value={t}>{t === 'all' ? 'All' : t.replace(/_/g, ' ')}</MenuItem>
+          ))}
+        </TextField>
+      </Box>
+    </Box>
+  );
+
   if (filtered.length === 0) {
     return (
       <Card sx={{ p: 2, height: '100%' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-          <Typography variant="body2" color="text.secondary">Recent Signals</Typography>
-          <TextField
-            select
-            size="small"
-            label="Strategy"
-            value={activeStrategy}
-            onChange={(e) => setActiveStrategy(e.target.value)}
-            sx={{ width: 160 }}
-          >
-            <MenuItem value="all">All</MenuItem>
-            {strategies.map((s) => (
-              <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>
-            ))}
-          </TextField>
-        </Box>
+        {filters}
         <Typography color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>No signals yet</Typography>
       </Card>
     );
@@ -233,23 +268,8 @@ function RecentSignals({
 
   return (
     <Card>
-      <CardContent sx={{ pb: '16px !important' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-          <Typography variant="body2" color="text.secondary">Recent Signals</Typography>
-          <TextField
-            select
-            size="small"
-            label="Strategy"
-            value={activeStrategy}
-            onChange={(e) => setActiveStrategy(e.target.value)}
-            sx={{ width: 160 }}
-          >
-            <MenuItem value="all">All</MenuItem>
-            {strategies.map((s) => (
-              <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>
-            ))}
-          </TextField>
-        </Box>
+      <CardContent sx={{ pb: '0 !important' }}>
+        {filters}
         <TableContainer>
           <Table size="small">
             <TableHead>
@@ -262,7 +282,7 @@ function RecentSignals({
               </TableRow>
             </TableHead>
             <TableBody>
-              {filtered.map((s) => (
+              {paged.map((s) => (
                 <TableRow key={`${s.symbol}:${s.strategy}`} hover>
                   <TableCell>{s.symbol}</TableCell>
                   <TableCell>{s.strategy}</TableCell>
@@ -282,6 +302,15 @@ function RecentSignals({
             </TableBody>
           </Table>
         </TableContainer>
+        <TablePagination
+          component="div"
+          count={filtered.length}
+          page={page}
+          onPageChange={(_, p) => setPage(p)}
+          rowsPerPage={rowsPerPage}
+          onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
+          rowsPerPageOptions={[10, 25, 50]}
+        />
       </CardContent>
     </Card>
   );

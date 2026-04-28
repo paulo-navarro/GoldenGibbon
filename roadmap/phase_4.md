@@ -35,14 +35,14 @@ O widget `RecentSignals` no Dashboard (`DashboardPage.tsx`, linhas 222-319) é u
 
 ### Tarefas
 
-- [ ] **2.1 — Adicionar filtro por tipo de signal**
+- [x] **2.1 — Adicionar filtro por tipo de signal**
   - Arquivo: `frontend/src/pages/DashboardPage.tsx`, componente `RecentSignals`
   - Adicionar um segundo `TextField select` (ou `ToggleButtonGroup`) ao lado do filtro de Strategy existente (linha 270)
   - Opções: `All`, `buy`, `sell_full`, `sell_half`, `hold`
   - Novo state `activeSignalType` com default `'all'`
   - Aplicar filtro no `useMemo` de `filtered` (linha 233): combinar filtro de strategy + filtro de signal type
 
-- [ ] **2.2 — Adicionar paginação ao grid de signals**
+- [x] **2.2 — Adicionar paginação ao grid de signals**
   - Arquivo: `frontend/src/pages/DashboardPage.tsx`, componente `RecentSignals`
   - Usar `TablePagination` do MUI abaixo da tabela
   - Default: 10 rows por página, opções [10, 25, 50]
