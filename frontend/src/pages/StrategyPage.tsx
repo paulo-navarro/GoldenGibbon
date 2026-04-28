@@ -418,13 +418,21 @@ export default function StrategyPage() {
   const isLoading = statesLoading || signalsLoading;
   const error = statesError || signalsError;
 
-  const stratKeys = Array.from(
-    new Set([
-      ...Object.keys(storeStates),
-      ...Object.keys(storeSignals),
-      ...Object.keys(storeConditions),
-    ]),
-  );
+  const stratKeys = useMemo(() => {
+    const keys = Array.from(
+      new Set([
+        ...Object.keys(storeStates),
+        ...Object.keys(storeSignals),
+        ...Object.keys(storeConditions),
+      ]),
+    );
+    return keys.sort((a, b) => {
+      const aActive = storeSignals[a]?.signal && storeSignals[a].signal !== 'hold' ? 1 : 0;
+      const bActive = storeSignals[b]?.signal && storeSignals[b].signal !== 'hold' ? 1 : 0;
+      if (bActive !== aActive) return bActive - aActive;
+      return a.localeCompare(b);
+    });
+  }, [storeStates, storeSignals, storeConditions]);
 
   if (isLoading) {
     return (

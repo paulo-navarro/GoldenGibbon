@@ -58,7 +58,7 @@ A `StrategyPage` (`StrategyPage.tsx`, linhas 421-427) lista os strategy cards na
 
 ### Tarefas
 
-- [ ] **3.1 — Ordenar `stratKeys` por contagem de sinais ativos**
+- [x] **3.1 — Ordenar `stratKeys` por contagem de sinais ativos**
   - Arquivo: `frontend/src/pages/StrategyPage.tsx`, bloco que monta `stratKeys` (linhas 421-427)
   - Para cada strategy key, contar sinais ativos: sinais cujo `signal !== 'hold'` no `storeSignals`
   - Ordenar `stratKeys`:
