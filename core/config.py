@@ -106,6 +106,7 @@ class SmartHodlerConfig(BaseModel):
 
     # Stop-Loss
     atr_period: int = Field(default=14, ge=1)
+    trailing_stop_enabled: bool = Field(default=True, description="Enable trailing stop for this strategy")
     trailing_stop_atr_multiplier: float = Field(default=2.0, gt=0)
     hard_stop_pct: float = Field(default=0.03, gt=0, le=1)
 
@@ -175,6 +176,8 @@ class MeanReversionStrategyConfig(BaseModel):
     # Stop-Loss
     hard_stop_pct: float = Field(default=0.02, gt=0, le=1)
     atr_period: int = Field(default=14, ge=1)
+    trailing_stop_enabled: bool = Field(default=True, description="Enable trailing stop for this strategy")
+    trailing_stop_atr_multiplier: float = Field(default=2.5, gt=0)
 
     # Break-even ratchet
     breakeven_ratchet_enabled: bool = Field(default=True, description="Move hard stop to break-even / lock-in as profit grows")
@@ -185,6 +188,7 @@ class MeanReversionStrategyConfig(BaseModel):
     # Time Stop
     time_stop_candles: int = Field(default=16, ge=1)
     time_stop_cooldown_candles: int = Field(default=4, ge=0)
+    time_stop_skip_profitable: bool = Field(default=True, description="Skip time stop when position is in profit (let trailing stop protect)")
 
     # Cooldown
     cooldown_candles: int = Field(default=8, ge=0)

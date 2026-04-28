@@ -56,39 +56,39 @@ Hoje o Mean Reversion não tem trailing stop — depende exclusivamente dos sina
 
 ### Tarefas
 
-- [ ] **2.1 — Habilitar trailing stop para Mean Reversion no `check_stops()`**
+- [x] **2.1 — Habilitar trailing stop para Mean Reversion no `check_stops()`**
   - Arquivo: `core/risk/__init__.py`, método `check_stops()` (linha ~338)
   - Atualmente, o bloco Mean Reversion (linha 339-363) retorna `StopCheckResult()` sem trailing stop
   - Mover o bloco de trailing stop (linhas 365-401) para **fora** do branch `if strategy == "mean_reversion"`, tornando-o comum a ambas as estratégias
   - Manter o time stop como check separado antes do trailing
   - O trailing stop ATR multiplier do MR já é lido do config (linha 100-107), basta usar
 
-- [ ] **2.2 — Adicionar config `trailing_stop_enabled` por estratégia**
+- [x] **2.2 — Adicionar config `trailing_stop_enabled` por estratégia**
   - Arquivo: `core/config.py`, classes `SmartHodlerConfig` e `MeanReversionStrategyConfig`
   - Novo campo: `trailing_stop_enabled: bool = Field(default=True)`
   - Default `True` para ambas (Smart Hodler já usa, Mean Reversion passa a usar)
   - Em `check_stops()`, verificar `self._trailing_enabled` antes de rodar trailing stop
   - Ler o campo no `__init__` do `RiskEngine` e guardar como `self._trailing_enabled`
 
-- [ ] **2.3 — Configurar ATR multiplier específico para Mean Reversion**
+- [x] **2.3 — Configurar ATR multiplier específico para Mean Reversion**
   - Arquivo: `core/config.py`, classe `MeanReversionStrategyConfig`
   - Adicionar `trailing_stop_atr_multiplier: float = Field(default=2.5)` (mais largo que SH default de 2.0, porque MR espera swings maiores de volta à média)
   - O `RiskEngine.__init__` já lê esse campo do strategy_config (linha 100-107)
 
-- [ ] **2.4 — Smart time stop: não fechar posições em lucro**
+- [x] **2.4 — Smart time stop: não fechar posições em lucro**
   - Arquivo: `core/risk/__init__.py`, bloco time stop (linha ~338-361)
   - Antes de fechar por time stop, calcular PnL: `unrealized = (close - position.entry_price) / position.entry_price`
   - Se `unrealized > 0` (posição em lucro), **não acionar** o time stop — deixar trailing stop proteger
   - Se `unrealized <= 0` (posição flat ou em prejuízo), acionar time stop normalmente (tese invalidada)
   - Logar `risk.time_stop_skipped_profitable` quando pular
 
-- [ ] **2.5 — Adicionar config `time_stop_skip_profitable` ao `MeanReversionStrategyConfig`**
+- [x] **2.5 — Adicionar config `time_stop_skip_profitable` ao `MeanReversionStrategyConfig`**
   - Arquivo: `core/config.py`, classe `MeanReversionStrategyConfig`
   - Novo campo: `time_stop_skip_profitable: bool = Field(default=True)`
   - Ler no `RiskEngine.__init__` e guardar como `self._time_stop_skip_profitable`
   - A lógica de 2.4 só ativa se esse campo for `True`
 
-- [ ] **2.6 — Testes unitários**
+- [x] **2.6 — Testes unitários**
   - Arquivo: `tests/test_mr_trailing_stop.py`
   - Test: MR posição com trailing stop ativo, close cai abaixo → CLOSE com ExitReason.TRAILING_STOP
   - Test: MR trailing stop ratchet: highest_close sobe, trailing acompanha, nunca desce
@@ -320,9 +320,4 @@ Hoje os stops (hard stop, trailing stop) são verificados apenas no tick de 15mi
   - Test: Cancel retorna -2011 (already filled) → tratado como fill, sync executado
   - Test: `limit_price` calculado corretamente com slippage configurado
 
-- [ ] **4.17 — Testes de integração (testnet)**
-  - Arquivo: `tests/integration/test_exchange_stops_testnet.py`
-  - Requer testnet credentials configuradas
-  - Test: Fluxo completo: buy → stop order aparece em `GET /api/v3/openOrders` → cancel → confirmado
-  - Test: Fluxo ratchet: buy → stop order → cancel → nova stop com preço mais alto
-  - Test: Verificar que `STOP_LOSS_LIMIT` com params corretos é aceita pela Binance testnet
+- [x] ~~**4.17 — Testes de integração (testnet)**~~ — removido (não será implementado)

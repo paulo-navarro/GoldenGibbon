@@ -443,12 +443,19 @@ class TestCheckStops_NoPosition:
 
 
 class TestCheckStops_MeanReversion:
-    """Mean reversion has no trailing stop – always returns empty."""
+    """Mean reversion trailing stop behaviour."""
 
-    def test_mr_skips_trailing_stop(self):
+    def test_mr_trailing_stop_fires(self):
         engine = _mr_engine()
         md = _market_data(close=40000.0, atr=500.0)
-        # Position entry at 50k, close at 40k – would be a massive stop on SH
+        port = _portfolio_with_position(entry_price=Decimal("50000"))
+        result = engine.check_stops(md, port)
+        assert result.decision is not None
+        assert result.decision.exit_reason == ExitReason.TRAILING_STOP
+
+    def test_mr_skips_trailing_stop_when_disabled(self):
+        engine = _mr_engine(trailing_stop_enabled=False)
+        md = _market_data(close=40000.0, atr=500.0)
         port = _portfolio_with_position(entry_price=Decimal("50000"))
         result = engine.check_stops(md, port)
         assert result.decision is None
@@ -916,14 +923,14 @@ class TestCheckStops_TimeStop:
         assert result.decision.exit_reason == ExitReason.HARD_STOP
 
     def test_time_stop_decision_has_correct_size_and_price(self):
-        """Decision carries position size and current close."""
+        """Decision carries position size and current close (losing position)."""
         entry = datetime(2024, 1, 1, 0, 0)
         engine = _mr_engine(time_stop_candles=16, time_stop_cooldown_candles=4)
-        md = _mr_md_at(entry, close=51000.0)
+        md = _mr_md_at(entry, close=49000.0)
         port = _mr_portfolio_with_position(entry_time=entry)
         result = engine.check_stops(md, port)
         assert result.decision.size == Decimal("0.1")
-        assert result.decision.price == Decimal("51000.0")
+        assert result.decision.price == Decimal("49000.0")
 
     def test_custom_time_stop_candles(self):
         """Custom time_stop_candles=5, position held 6 candles → fires."""

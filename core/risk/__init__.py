@@ -96,6 +96,11 @@ class RiskEngine:
             str(strategy_config.get("hard_stop_pct", 0.03))
         )
 
+        # Trailing stop toggle
+        self._trailing_enabled = bool(
+            strategy_config.get("trailing_stop_enabled", True)
+        )
+
         # Trailing-stop ATR multiplier
         self._trailing_atr_mult = Decimal(
             str(
@@ -143,6 +148,9 @@ class RiskEngine:
         )
         self._time_stop_cooldown = int(
             strategy_config.get("time_stop_cooldown_candles", 4)
+        )
+        self._time_stop_skip_profitable = bool(
+            strategy_config.get("time_stop_skip_profitable", True)
         )
 
         # Break-even ratchet
@@ -392,68 +400,79 @@ class RiskEngine:
         if self._strategy_name == "mean_reversion":
             candles_held = self._count_candles_held(position, market_data)
             if candles_held >= self._time_stop_candles:
+                unrealized = (close - position.entry_price) / position.entry_price
+                if self._time_stop_skip_profitable and unrealized > 0:
+                    logger.info(
+                        "risk.time_stop_skipped_profitable",
+                        symbol=symbol,
+                        candles_held=candles_held,
+                        unrealized_pct=str(unrealized),
+                    )
+                else:
+                    logger.info(
+                        "risk.time_stop",
+                        symbol=symbol,
+                        candles_held=candles_held,
+                        time_stop_candles=self._time_stop_candles,
+                        cooldown=self._time_stop_cooldown,
+                    )
+                    decision = RiskDecision(
+                        action=RiskAction.CLOSE,
+                        symbol=symbol,
+                        size=position.size,
+                        price=close,
+                        exit_reason=ExitReason.TIME_STOP,
+                    )
+                    return StopCheckResult(
+                        decision=decision,
+                        highest_close=max(position.highest_close, close),
+                        trailing_stop_price=position.trailing_stop_price,
+                        hard_stop_price=ratcheted_hard_stop,
+                        cooldown_candles=self._time_stop_cooldown,
+                    )
+        # ── Trailing stop (all strategies, when enabled) ────────────
+        if self._trailing_enabled:
+            # 1. Ratchet highest_close
+            highest = max(position.highest_close, close)
+
+            # 2. Recompute trailing stop from (possibly new) highest close
+            new_trailing = self._compute_trailing_stop(highest, market_data)
+
+            # Only ratchet the stop upward; never lower it
+            if position.trailing_stop_price > 0:
+                new_trailing = max(new_trailing, position.trailing_stop_price)
+
+            # 3. Check trailing-stop violation (strict less-than)
+            if new_trailing > 0 and close < new_trailing:
                 logger.info(
-                    "risk.time_stop",
+                    "risk.trailing_stop",
                     symbol=symbol,
-                    candles_held=candles_held,
-                    time_stop_candles=self._time_stop_candles,
-                    cooldown=self._time_stop_cooldown,
+                    close=str(close),
+                    trailing_stop=str(new_trailing),
                 )
                 decision = RiskDecision(
                     action=RiskAction.CLOSE,
                     symbol=symbol,
                     size=position.size,
                     price=close,
-                    exit_reason=ExitReason.TIME_STOP,
+                    exit_reason=ExitReason.TRAILING_STOP,
                 )
                 return StopCheckResult(
                     decision=decision,
-                    highest_close=max(position.highest_close, close),
-                    trailing_stop_price=position.trailing_stop_price,
+                    highest_close=highest,
+                    trailing_stop_price=new_trailing,
                     hard_stop_price=ratcheted_hard_stop,
-                    cooldown_candles=self._time_stop_cooldown,
                 )
+
+            # No stop hit – return updated levels for the caller to persist
             return StopCheckResult(
-                hard_stop_price=ratcheted_hard_stop,
-            )
-
-        # ── Trailing stop (Smart Hodler) ─────────────────────────────
-        # 1. Ratchet highest_close
-        highest = max(position.highest_close, close)
-
-        # 2. Recompute trailing stop from (possibly new) highest close
-        new_trailing = self._compute_trailing_stop(highest, market_data)
-
-        # Only ratchet the stop upward; never lower it
-        if position.trailing_stop_price > 0:
-            new_trailing = max(new_trailing, position.trailing_stop_price)
-
-        # 3. Check trailing-stop violation (strict less-than)
-        if new_trailing > 0 and close < new_trailing:
-            logger.info(
-                "risk.trailing_stop",
-                symbol=symbol,
-                close=str(close),
-                trailing_stop=str(new_trailing),
-            )
-            decision = RiskDecision(
-                action=RiskAction.CLOSE,
-                symbol=symbol,
-                size=position.size,
-                price=close,
-                exit_reason=ExitReason.TRAILING_STOP,
-            )
-            return StopCheckResult(
-                decision=decision,
                 highest_close=highest,
                 trailing_stop_price=new_trailing,
                 hard_stop_price=ratcheted_hard_stop,
             )
 
-        # No stop hit – return updated levels for the caller to persist
+        # Trailing disabled – return hard stop only
         return StopCheckResult(
-            highest_close=highest,
-            trailing_stop_price=new_trailing,
             hard_stop_price=ratcheted_hard_stop,
         )
 
