@@ -26,6 +26,7 @@ import ShowChartIcon from '@mui/icons-material/ShowChart';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import CurrencyExchangeIcon from '@mui/icons-material/CurrencyExchange';
 import SettingsIcon from '@mui/icons-material/Settings';
+import PaidIcon from '@mui/icons-material/Paid';
 import TerminalIcon from '@mui/icons-material/Terminal';
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -35,6 +36,7 @@ export const DRAWER_WIDTH = 240;
 
 const NAV_ITEMS = [
   { label: 'Dashboard', path: '/', icon: <DashboardIcon /> },
+  { label: 'Prices', path: '/prices', icon: <PaidIcon /> },
   { label: 'Strategy', path: '/strategy', icon: <ShowChartIcon /> },
   { label: 'Portfolio', path: '/portfolio', icon: <AccountBalanceWalletIcon /> },
   { label: 'Activity', path: '/activity', icon: <SwapHorizIcon /> },

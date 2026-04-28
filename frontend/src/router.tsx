@@ -7,6 +7,7 @@ import ActivityPage from './pages/ActivityPage';
 import MetricsPage from './pages/MetricsPage';
 import LogsPage from './pages/LogsPage';
 import SymbolsPage from './pages/SymbolsPage';
+import PricesPage from './pages/PricesPage';
 import SettingsPage from './pages/SettingsPage';
 
 const router = createBrowserRouter([
@@ -15,6 +16,7 @@ const router = createBrowserRouter([
     element: <AppLayout />,
     children: [
       { index: true, element: <DashboardPage /> },
+      { path: 'prices', element: <PricesPage /> },
       { path: 'strategy', element: <StrategyPage /> },
       { path: 'portfolio', element: <PortfolioPage /> },
       { path: 'activity', element: <ActivityPage /> },

@@ -21,16 +21,12 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
 import {
-  usePrice,
   usePortfolio,
   useStrategySignals,
-  useSymbols,
 } from '../api';
 import CycleStatus from '../components/CycleStatus';
 import EquityCurveChart from '../components/EquityCurveChart';
-import { useMarketStore } from '../stores/marketStore';
 import { useStrategyStore } from '../stores/strategyStore';
-import type { PriceResponse } from '../types/market';
 import type { Signal, StrategyState } from '../types/enums';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -61,33 +57,6 @@ function stateColor(state: StrategyState): 'primary' | 'success' | 'warning' | '
 }
 
 // ── Sub-components ───────────────────────────────────────────────────────────
-
-function PriceTickerCard({ symbol }: { symbol: string }) {
-  const { isLoading, error } = usePrice(symbol);
-  // Subscribe to store for real-time WS updates; falls back to REST data
-  const storePrice = useMarketStore((s) => s.latestPrice[symbol]) as PriceResponse | undefined;
-
-  if (isLoading) return <Skeleton variant="rounded" height={100} />;
-  if (error) return <Alert severity="error" variant="outlined">Failed to load {symbol}</Alert>;
-
-  const price = storePrice?.price;
-
-  return (
-    <Card>
-      <CardContent>
-        <Typography variant="body2" color="text.secondary" gutterBottom>
-          {symbol}
-        </Typography>
-        <Typography variant="h5" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-          ${fmt(price, symbol.startsWith('BTC') ? 2 : 2)}
-        </Typography>
-        {storePrice?.timeframe && (
-          <Chip label={storePrice.timeframe} size="small" sx={{ mt: 0.5 }} />
-        )}
-      </CardContent>
-    </Card>
-  );
-}
 
 function PortfolioCards() {
   const { data, isLoading, error } = usePortfolio();
@@ -324,38 +293,17 @@ export default function DashboardPage() {
   const [activeStrategy, setActiveStrategy] = useState('all');
 
   const storeSignals = useStrategyStore((s) => s.signals);
-  const { data: symbolsConfig } = useSymbols();
 
   const strategies = useMemo(
     () => [...new Set(Object.values(storeSignals).map((s) => s.strategy))].sort(),
     [storeSignals],
   );
 
-  const configSymbols = useMemo(
-    () => (symbolsConfig?.symbols ?? []).filter((s) => s.enabled).map((s) => s.symbol),
-    [symbolsConfig],
-  );
-
-  const symbols = useMemo(() => {
-    const fromStore = Object.values(storeSignals)
-      .filter((s) => activeStrategy === 'all' || s.strategy === activeStrategy)
-      .map((s) => s.symbol);
-    const unique = [...new Set(fromStore)].sort();
-    return unique.length > 0 ? unique : configSymbols;
-  }, [storeSignals, activeStrategy, configSymbols]);
-
   return (
     <Box>
       <Typography variant="h5" sx={{ mb: 3 }}>Dashboard</Typography>
 
       <Grid container spacing={2}>
-        {/* ── Price Tickers ──────────────────────────────────────── */}
-        {symbols.map((symbol) => (
-          <Grid size={{ xs: 12, sm: 6 }} key={symbol}>
-            <PriceTickerCard symbol={symbol} />
-          </Grid>
-        ))}
-
         {/* ── Portfolio Summary ───────────────────────────────────── */}
         <PortfolioCards />
 
