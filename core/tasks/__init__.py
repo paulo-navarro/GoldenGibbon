@@ -1094,6 +1094,16 @@ def run_single_strategy_tick(
                         session.commit()
                 except Exception as exc:
                     log.error("single_tick: exchange stop persist failed", error=str(exc))
+                _send_tick_alerts(
+                    strategy_name=strategy_name,
+                    symbol=symbol,
+                    execution_result=execution_result,
+                    stop_hit=True,
+                    stop_type="hard_stop",
+                    close=close,
+                    comp=comp,
+                    settings=settings,
+                )
                 return {
                     "strategy": strategy_name, "symbol": symbol,
                     "signal": "hold", "stop_hit": True,
