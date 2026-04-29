@@ -45,8 +45,8 @@ class CandleRecord(Base):
     high: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
     low: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
     close: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
-    volume: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
-    quote_volume: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 8), nullable=True)
+    volume: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    quote_volume: Mapped[Optional[Decimal]] = mapped_column(Numeric(30, 8), nullable=True)
     trades_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     
     # Store indicators as JSONB for flexibility
