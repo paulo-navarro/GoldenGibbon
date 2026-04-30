@@ -733,6 +733,80 @@ class TestReconcileWithExchange:
         assert "exchange_position_BTCUSDT" in check_names
         assert "exchange_position_ETHUSDT" in check_names
 
+    def test_stale_position_auto_repaired_when_exchange_zero(self, _seed_state):
+        """Local position exists but exchange has zero balance → auto-repair."""
+        _seed_state(
+            state="position",
+            position=True,
+            position_size=Decimal("436.2"),
+            entry_price=Decimal("0.0329"),
+        )
+
+        executor = self._make_executor({
+            "USDT": {"free": Decimal("10000"), "locked": Decimal("0")},
+        })
+
+        from core.tasks import _reconcile_with_exchange
+
+        with get_session() as session:
+            result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+
+        assert result["status"] == "mismatch"
+        pos_check = next(c for c in result["checks"] if c["check"] == "exchange_position_BTCUSDT")
+        assert pos_check["result"] == "repaired"
+        assert len(result["repairs"]) >= 1
+        assert "flat" in result["repairs"][0]
+
+        with get_session() as session:
+            pos = session.query(PositionRecord).filter_by(symbol="BTCUSDT").first()
+            assert pos is None
+            state = session.query(StrategyStateRecord).filter_by(
+                symbol="BTCUSDT", strategy="smart_hodler",
+            ).first()
+            assert state.state == "flat"
+
+    def test_stale_position_evicts_worker_state(self, _seed_state):
+        """Auto-repair evicts the in-memory worker state cache entry."""
+        _seed_state(
+            state="position",
+            position=True,
+            position_size=Decimal("1.0"),
+        )
+
+        from core.tasks import _reconcile_with_exchange, _worker_state
+
+        _worker_state[("smart_hodler", "BTCUSDT")] = MagicMock()
+
+        executor = self._make_executor({
+            "USDT": {"free": Decimal("10000"), "locked": Decimal("0")},
+        })
+
+        with get_session() as session:
+            _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+
+        assert ("smart_hodler", "BTCUSDT") not in _worker_state
+
+    def test_exchange_dust_treated_as_zero(self, _seed_state):
+        """Exchange balance within tolerance (dust) treated as zero → auto-repair."""
+        _seed_state(
+            state="position",
+            position=True,
+            position_size=Decimal("100.0"),
+        )
+
+        executor = self._make_executor({
+            "USDT": {"free": Decimal("10000"), "locked": Decimal("0")},
+            "BTC": {"free": Decimal("0.00000050"), "locked": Decimal("0")},
+        })
+
+        from core.tasks import _reconcile_with_exchange
+
+        with get_session() as session:
+            result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+
+        pos_check = next(c for c in result["checks"] if c["check"] == "exchange_position_BTCUSDT")
+        assert pos_check["result"] == "repaired"
+
     def test_tolerance_within_threshold(self, _seed_state):
         """Small differences within tolerance → ok."""
         _seed_state(

@@ -59,7 +59,7 @@ Two issues combined:
 
 ## BUG-003: Stale position after Binance sell — repeated SELL alerts and UI ghost trade
 
-**Status:** Open
+**Status:** Fixed (code) — needs manual cleanup for BIOUSDT
 **Reported:** 2026-04-29
 **Affected symbols:** BIOUSDT (smart_hodler)
 
@@ -101,7 +101,7 @@ The most likely reason the DB state was never cleaned up: the persist step (`_pe
 
 ### Fix
 
-- [ ] Investigate: confirm BIOUSDT `PositionRecord` still exists in DB while Binance has zero BIO balance
-- [ ] Immediate fix: manually delete the stale `PositionRecord` and set `StrategyStateRecord.state` to `flat` for BIOUSDT/smart_hodler
-- [ ] Code fix: make exchange reconciliation auto-repair when local position exists but Binance has zero balance for that asset (upgrade Check E from advisory to corrective)
-- [ ] Code fix: add guard in tick — if executor returns a fill but Binance balance for the asset is zero/dust, skip the alert and force state to FLAT
+- [ ] Immediate fix: redeploy and let reconciliation auto-repair BIOUSDT (or manually delete stale `PositionRecord` and set `StrategyStateRecord.state` to `flat`)
+- [x] Code fix: make exchange reconciliation auto-repair when local position exists but Binance has zero balance for that asset (upgrade Check E from advisory to corrective)
+- [x] Auto-repair evicts in-memory `_worker_state` cache so next tick rebuilds from corrected DB
+- [x] Exchange reconciliation now returns `repairs` list and publishes `RECONCILIATION_REPAIRED` events

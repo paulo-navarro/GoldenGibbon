@@ -1662,6 +1662,8 @@ def _reconcile_with_exchange(
         )
 
     # ── Check E: Position sizes ──────────────────────────────────────
+    repairs: list[str] = []
+
     for symbol in symbols:
         # Derive base asset: BTCUSDT → BTC, ETHUSDT → ETH
         base_asset = symbol.replace("USDT", "")
@@ -1688,6 +1690,55 @@ def _reconcile_with_exchange(
                 "check": f"exchange_position_{symbol}",
                 "result": "ok",
             })
+        elif pos_recs and exchange_size <= _EXCHANGE_POSITION_TOLERANCE:
+            # Exchange has zero/dust but local DB has open position(s).
+            # The sell was executed on Binance but the local state was
+            # never cleaned up.  Auto-repair: delete stale positions
+            # and reset strategy state to FLAT.
+            has_mismatch = True
+            for rec in pos_recs:
+                strategy = rec.strategy
+                session.delete(rec)
+
+                state_rec = (
+                    session.query(StrategyStateRecord)
+                    .filter_by(symbol=symbol, strategy=strategy)
+                    .first()
+                )
+                if state_rec is not None and state_rec.state in ("position", "reduced"):
+                    old_state = state_rec.state
+                    state_rec.state = "flat"
+                    if state_rec.state_data:
+                        state_rec.state_data = {
+                            **state_rec.state_data,
+                            "cooldown_remaining": 0,
+                        }
+                    repairs.append(
+                        f"reset {strategy}:{symbol} from {old_state} to flat "
+                        f"(exchange has zero balance)"
+                    )
+
+                # Evict in-memory cache so next tick rebuilds from corrected DB
+                _tick_key: _WorkerStateKey = (strategy, symbol)
+                if _tick_key in _worker_state:
+                    del _worker_state[_tick_key]
+
+                logger.warning(
+                    "reconcile_exchange: auto-repaired stale position",
+                    symbol=symbol,
+                    strategy=strategy,
+                    local_size=str(rec.size),
+                    exchange_size=str(exchange_size),
+                )
+
+            checks.append({
+                "check": f"exchange_position_{symbol}",
+                "result": "repaired",
+                "detail": (
+                    f"local_size={local_size} vs exchange_size={exchange_size} "
+                    f"— deleted {len(pos_recs)} stale position(s), reset state to flat"
+                ),
+            })
         else:
             has_mismatch = True
             checks.append({
@@ -1709,6 +1760,7 @@ def _reconcile_with_exchange(
     return {
         "status": "mismatch" if has_mismatch else "ok",
         "checks": checks,
+        "repairs": repairs,
         "exchange_balances": {
             asset: {k: str(v) for k, v in bals.items()}
             for asset, bals in exchange_balances.items()
@@ -1843,6 +1895,8 @@ def run_reconciliation(self) -> Dict[str, Any]:  # noqa: ANN001
 
             if exchange_result["status"] == "mismatch":
                 total_mismatches += 1
+                exchange_repairs = exchange_result.get("repairs", [])
+                total_repairs += len(exchange_repairs)
                 publisher.publish(
                     EventChannel.SYSTEM,
                     EventType.RECONCILIATION_MISMATCH,
@@ -1851,10 +1905,20 @@ def run_reconciliation(self) -> Dict[str, Any]:  # noqa: ANN001
                         "checks": exchange_result["checks"],
                     },
                 )
+                if exchange_repairs:
+                    publisher.publish(
+                        EventChannel.SYSTEM,
+                        EventType.RECONCILIATION_REPAIRED,
+                        {
+                            "source": "exchange",
+                            "repairs": exchange_repairs,
+                        },
+                    )
 
             logger.info(
                 "reconcile: exchange check done",
                 status=exchange_result["status"],
+                repairs=len(exchange_result.get("repairs", [])),
             )
         except Exception as exc:
             logger.error(
