@@ -66,6 +66,8 @@ services:
       target: prod
     container_name: trade-api
     env_file: .env
+    volumes:
+      - ./logs:/app/logs
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
@@ -112,6 +114,8 @@ services:
       target: prod
     container_name: trade-celery-worker
     env_file: .env
+    volumes:
+      - ./logs:/app/logs
     depends_on:
       postgres:
         condition: service_healthy
@@ -158,6 +162,8 @@ services:
       target: prod
     container_name: trade-celery-beat
     env_file: .env
+    volumes:
+      - ./logs:/app/logs
     depends_on:
       postgres:
         condition: service_healthy

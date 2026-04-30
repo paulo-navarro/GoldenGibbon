@@ -36,39 +36,24 @@ The `candles` table defines `volume` and `quote_volume` as `Numeric(20, 8)`, whi
 
 ## BUG-002: Tick errors not appearing in application logs
 
-**Status:** Open (needs investigation)
+**Status:** Fixed
 **Reported:** 2026-04-29
 
 ### Symptom
 
 Tick errors (e.g. BUG-001) are delivered to Telegram via the alerter but do not appear in the application logs, making debugging harder.
 
-### Relevant code path
+### Root cause
 
-The error is caught in `core/tasks/__init__.py:1292-1313`:
+Two issues combined:
 
-```python
-except Exception as exc:
-    log.error("single_tick: failed", error=str(exc), exc_info=True)  # line 1293
-    publisher.publish(...)                                            # line 1294
-    if settings.alerting.enabled and settings.alerting.alert_on_error:
-        get_alerter().alert_error(                                    # line 1308
-            task=f"tick:{strategy_name}:{symbol}",
-            error=str(exc),
-        )
-```
+1. **Celery hijacks the root logger** — `worker_hijack_root_logger` defaults to `True`, so Celery reconfigures the root logger during its own setup phase, potentially overriding our structlog handlers installed via `worker_process_init`.
+2. **Production containers had no logs volume** — `celery-worker-prod`, `celery-beat-prod`, and `api-prod` had no `./logs:/app/logs` volume mount, so `logs/trading.log` written inside the container was invisible from the host and lost on restart.
 
-The `log.error()` call at line 1293 _should_ emit the log. Possible reasons it doesn't show up:
+### Fix
 
-1. **Celery worker log routing** — worker stdout/stderr may not be captured to the same log sink being checked (e.g. Docker container logs vs. file logs in `logs/`)
-2. **structlog filtering** — a log level or processor filter could be dropping ERROR-level entries from this logger
-3. **Log file rotation / truncation** — the log may have been emitted but rotated out before inspection
-
-### Investigation steps
-
-- [ ] Check where Celery worker output goes: `docker logs <worker_container>`, `journalctl`, or `logs/` directory
-- [ ] Verify structlog configuration in `core/logging.py` — ensure ERROR level is not filtered
-- [ ] Try reproducing with `docker-compose logs -f worker` while a PEPEUSDT tick runs
+- [x] Set `worker_hijack_root_logger=False` in Celery config (`core/celery_app.py`) so structlog has full control
+- [x] Add `./logs:/app/logs` volume mount to `celery-worker-prod`, `celery-beat-prod`, and `api-prod` in `docker-compose.yml`
 
 ---
 

@@ -56,6 +56,9 @@ app.conf.update(
     worker_prefetch_multiplier=1,   # one task at a time per worker
     worker_max_tasks_per_child=100, # recycle to prevent memory leaks
 
+    # ── Logging ──────────────────────────────────────────────────────
+    worker_hijack_root_logger=False,
+
     # ── Beat schedule (Task 3.3) ─────────────────────────────────────
     beat_schedule={
         "fetch-candles-15m": {
