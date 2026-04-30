@@ -53,7 +53,7 @@ Two issues combined:
 ### Fix
 
 - [x] Set `worker_hijack_root_logger=False` in Celery config (`core/celery_app.py`) so structlog has full control
-- [x] Add `./logs:/app/logs` volume mount to `celery-worker-prod`, `celery-beat-prod`, and `api-prod` in `docker-compose.yml`
+- [x] Prod containers write to `/app/logs` inside the container (created by Dockerfile with correct permissions) and to stderr (accessible via `docker logs`). Volume mounts reverted — they caused permission failures since Docker creates host dirs as root but the container runs as `appuser`.
 
 ---
 
