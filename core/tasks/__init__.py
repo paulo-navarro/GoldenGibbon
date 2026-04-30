@@ -1956,7 +1956,7 @@ def run_reconciliation(self) -> Dict[str, Any]:  # noqa: ANN001
 
             executor = BinanceExecutor.from_settings(
                 strategy_name="reconciliation",
-                portfolio_manager=_PM(initial_capital=Decimal("0")),
+                portfolio_manager=_PM(initial_capital=Decimal("1")),
             )
             tracked_symbols = [s.symbol for s in settings.enabled_symbols]
 
