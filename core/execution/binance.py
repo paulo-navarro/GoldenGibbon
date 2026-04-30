@@ -428,6 +428,35 @@ class BinanceExecutor:
             )
             decision = decision.model_copy(update={"size": real_balance})
 
+        # Dust close: exchange balance is below minQty, can't place a sell
+        # order. Close the position locally so it doesn't stay stuck forever.
+        formatted_qty = self._format_quantity(decision.symbol, decision.size)
+        if formatted_qty <= 0:
+            logger.warning(
+                "binance.dust_close",
+                symbol=decision.symbol,
+                real_balance=str(real_balance),
+                size=str(decision.size),
+            )
+            trade = self._pm.close_position(
+                symbol=decision.symbol,
+                exit_price=decision.price,
+                exit_time=timestamp,
+                exit_reason=decision.exit_reason or ExitReason.MANUAL,
+                strategy=self._strategy,
+            )
+            dust_order = Order(
+                symbol=decision.symbol,
+                side=OrderSide.SELL,
+                order_type=OrderType.MARKET,
+                amount=decision.size,
+                price=decision.price,
+                status=OrderStatus.FILLED,
+                avg_fill_price=decision.price,
+                filled_amount=decision.size,
+            )
+            return ExecutionResult(order=dust_order, trade=trade)
+
         order = self._place_and_fill(decision, OrderSide.SELL)
         if order is None or order.status != OrderStatus.FILLED:
             logger.error(
