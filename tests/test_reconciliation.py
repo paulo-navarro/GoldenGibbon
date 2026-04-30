@@ -833,3 +833,36 @@ class TestReconcileWithExchange:
             result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
 
         assert result["status"] == "ok"
+
+    def test_exchange_has_asset_no_local_position_critical(self, _seed_state):
+        """Exchange has asset but NO local position → critical alert, no auto-repair."""
+        _seed_state(
+            state="flat",
+            state_data={
+                "run_id": "test",
+                "usdt_balance": "10000",
+                "equity": "10000",
+                "total_pnl": "0",
+                "cooldown_remaining": 0,
+            },
+        )
+
+        executor = self._make_executor({
+            "USDT": {"free": Decimal("10000"), "locked": Decimal("0")},
+            "BTC": {"free": Decimal("847.90"), "locked": Decimal("0")},
+        })
+
+        from core.tasks import _reconcile_with_exchange
+
+        with patch("core.events.get_publisher") as mock_get_pub:
+            mock_pub = MagicMock()
+            mock_get_pub.return_value = mock_pub
+
+            with get_session() as session:
+                result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+
+        assert result["status"] == "mismatch"
+        pos_check = next(c for c in result["checks"] if c["check"] == "exchange_position_BTCUSDT")
+        assert pos_check["result"] == "critical"
+        assert "NO local position" in pos_check["detail"]
+        assert len(result.get("repairs", [])) == 0

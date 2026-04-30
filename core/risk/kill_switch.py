@@ -186,11 +186,34 @@ class KillSwitch:
             peak_equity=str(self._peak_equity),
         )
 
+    def hard_reset(self) -> None:
+        """Full reset including peak equity.
+
+        Use when trading mode changes (paper -> live) or for manual
+        recovery.  The next ``check()`` call will re-initialise peak
+        from the current equity value.
+        """
+        prev_reason = self._trigger_reason
+        prev_peak = self._peak_equity
+
+        self._triggered = False
+        self._trigger_reason = None
+        self._trigger_time = None
+        self._peak_equity = Decimal("0")
+        self._day_start_equity = Decimal("0")
+        self._current_day = None
+
+        logger.info(
+            "kill_switch.hard_reset",
+            previous_reason=prev_reason,
+            previous_peak_equity=str(prev_peak),
+        )
+
     # ── State serialisation (for persistence / recovery) ─────────────────
 
-    def to_dict(self) -> dict:
+    def to_dict(self, trading_mode: Optional[str] = None) -> dict:
         """Serialise state for persistence in StrategyStateRecord.state_data."""
-        return {
+        d: dict = {
             "kill_switch_triggered": self._triggered,
             "kill_switch_reason": self._trigger_reason,
             "kill_switch_trigger_time": (
@@ -202,9 +225,28 @@ class KillSwitch:
                 self._current_day.isoformat() if self._current_day else None
             ),
         }
+        if trading_mode is not None:
+            d["kill_switch_trading_mode"] = trading_mode
+        return d
 
-    def restore_from_dict(self, data: dict) -> None:
+    def restore_from_dict(
+        self, data: dict, current_trading_mode: Optional[str] = None,
+    ) -> None:
         """Restore state from persisted state_data dict."""
+        saved_mode = data.get("kill_switch_trading_mode")
+        if (
+            current_trading_mode
+            and saved_mode
+            and current_trading_mode != saved_mode
+        ):
+            logger.warning(
+                "kill_switch.mode_changed_skip_restore",
+                saved_mode=saved_mode,
+                current_mode=current_trading_mode,
+                saved_peak=data.get("kill_switch_peak_equity"),
+            )
+            return
+
         self._triggered = data.get("kill_switch_triggered", False)
         self._trigger_reason = data.get("kill_switch_reason")
 

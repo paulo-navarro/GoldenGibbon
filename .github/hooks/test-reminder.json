@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "type": "command",
+        "linux": "python3 -c \"\nimport json, sys\ndata = json.load(sys.stdin)\ntool = data.get('tool', '')\nif tool not in ('replace_string_in_file', 'multi_replace_string_in_file', 'create_file'):\n    sys.exit(0)\ninput_ = data.get('toolInput', {})\nfile_path = input_.get('filePath', '') or ''\nif (file_path.startswith('core/') or file_path.startswith('api/')) and file_path.endswith('.py'):\n    print(json.dumps({'systemMessage': '✅ Backend file edited. Remember to run tests before finishing:\\ndocker compose run --rm app python -m pytest tests/ -v\\nOr locally: .venv-test/bin/python -m pytest tests/ -x -q'}))\n\""
+      }
+    ]
+  }
+}

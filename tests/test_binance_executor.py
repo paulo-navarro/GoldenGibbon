@@ -510,3 +510,91 @@ class TestFactory:
             pm = _pm()
             with pytest.raises(RuntimeError, match="credentials not configured"):
                 BinanceExecutor.from_settings("smart_hodler", pm)
+
+
+# ── Dust close tests ───────────────────────────────────────────────────────
+
+
+@patch("core.execution.binance.get_publisher")
+class TestDustClose:
+    """Dust close logic: when formatted_qty <= 0 during a CLOSE."""
+
+    def _open_position(self, pm: PortfolioManager) -> None:
+        """Open a position in the portfolio manager so close_position succeeds."""
+        pm.open_position(
+            symbol="BTCUSDT",
+            size=Decimal("0.00001"),
+            entry_price=Decimal("50000"),
+            entry_time=T0,
+            hard_stop_price=Decimal("48000"),
+            trailing_stop_price=Decimal("49000"),
+            strategy="smart_hodler",
+        )
+
+    def test_dust_close_sells_real_balance_when_exchange_sellable(self, mock_pub):
+        """Exchange has a sellable qty above minQty — should sell on exchange, not dust-close."""
+        mock_pub.return_value = MagicMock()
+        pm = _pm()
+        ex = _executor(pm=pm)
+        self._open_position(pm)
+
+        decision = _close_decision(symbol="BTCUSDT", size=Decimal("0.000001"), price=Decimal("51000"))
+
+        sell_response = _binance_market_fill_response(
+            price="51000.00", qty="0.00001", symbol="BTCUSDT",
+        )
+        sell_response["side"] = "SELL"
+
+        with patch.object(ex, "_get_available_balance", return_value=Decimal("0.00001")), \
+             patch.object(ex, "_signed_request", return_value=sell_response):
+            result = ex.execute(decision, T0)
+
+        assert result is not None
+        assert result.order.status == OrderStatus.FILLED
+        assert result.trade is not None
+
+    def test_dust_close_fires_when_exchange_truly_dust(self, mock_pub):
+        """Exchange balance is below minQty (true dust) — should local-close only."""
+        mock_pub.return_value = MagicMock()
+        pm = _pm()
+        ex = _executor(pm=pm)
+        self._open_position(pm)
+
+        decision = _close_decision(symbol="BTCUSDT", size=Decimal("0.000001"), price=Decimal("51000"))
+
+        with patch.object(ex, "_get_available_balance", return_value=Decimal("0.000001")):
+            result = ex.execute(decision, T0)
+
+        assert result is not None
+        assert result.order.status == OrderStatus.FILLED
+        assert result.trade is not None
+        assert result.order.side == OrderSide.SELL
+
+    def test_dust_close_fires_when_exchange_zero(self, mock_pub):
+        """Exchange has 0 balance — should local-close only (reconciliation case)."""
+        mock_pub.return_value = MagicMock()
+        pm = _pm()
+        ex = _executor(pm=pm)
+        self._open_position(pm)
+
+        decision = _close_decision(symbol="BTCUSDT", size=Decimal("0.000001"), price=Decimal("51000"))
+
+        with patch.object(ex, "_get_available_balance", return_value=Decimal("0")):
+            result = ex.execute(decision, T0)
+
+        assert result is not None
+        assert result.trade is not None
+
+    def test_close_aborts_when_balance_query_fails(self, mock_pub):
+        """Cannot query exchange balance — should refuse to close (fail-safe)."""
+        mock_pub.return_value = MagicMock()
+        pm = _pm()
+        ex = _executor(pm=pm)
+        self._open_position(pm)
+
+        decision = _close_decision(symbol="BTCUSDT", size=Decimal("0.000001"), price=Decimal("51000"))
+
+        with patch.object(ex, "_get_available_balance", return_value=None):
+            result = ex.execute(decision, T0)
+
+        assert result is None

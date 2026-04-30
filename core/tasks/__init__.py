@@ -140,6 +140,7 @@ def _recover_state(
     pm,  # noqa: ANN001 – PortfolioManager
     risk_engine,  # noqa: ANN001 – RiskEngine
     kill_switch=None,  # noqa: ANN001 – KillSwitch instance
+    trading_mode: str = "paper",
 ) -> str | None:
     """
     Attempt to restore strategy / portfolio / risk state from the DB.
@@ -183,7 +184,18 @@ def _recover_state(
 
                 # Kill-switch state (task 4.5)
                 if kill_switch is not None:
-                    kill_switch.restore_from_dict(data)
+                    saved_run_id = data.get("run_id", "")
+                    saved_mode = data.get("kill_switch_trading_mode")
+                    if (
+                        not saved_mode
+                        and saved_run_id.startswith("paper_")
+                        and trading_mode == "live"
+                    ):
+                        kill_switch.hard_reset()
+                    else:
+                        kill_switch.restore_from_dict(
+                            data, current_trading_mode=trading_mode,
+                        )
 
                 logger.info(
                     "state_recovery: strategy state restored",
@@ -392,6 +404,7 @@ def _get_or_create_components(
         recovered_run_id = _recover_state(
             strategy_name, symbol, strategy, pm, risk_engine,
             kill_switch=kill_switch,
+            trading_mode=trading_mode,
         )
 
         # Generate or reuse run_id
@@ -530,7 +543,7 @@ def _persist_tick_results(
 
     # Kill-switch state (task 4.5)
     if comp.kill_switch is not None:
-        state_data.update(comp.kill_switch.to_dict())
+        state_data.update(comp.kill_switch.to_dict(trading_mode=comp.trading_mode))
 
     buy_candles = comp.risk_engine.get_buy_signal_candles(symbol)
 
@@ -1811,6 +1824,34 @@ def _reconcile_with_exchange(
                     f"— deleted {len(pos_recs)} stale position(s), reset state to flat"
                 ),
             })
+        elif not pos_recs and exchange_size > _EXCHANGE_POSITION_TOLERANCE:
+            # Exchange has asset but NO local position — real money untracked
+            has_mismatch = True
+            checks.append({
+                "check": f"exchange_position_{symbol}",
+                "result": "critical",
+                "detail": (
+                    f"Exchange has {exchange_size} {base_asset} "
+                    f"but NO local position record. Manual intervention required."
+                ),
+            })
+            logger.critical(
+                "reconcile_exchange: UNTRACKED ASSET on exchange",
+                symbol=symbol,
+                exchange_size=str(exchange_size),
+            )
+            from core.events import EventChannel, EventType, get_publisher
+            publisher = get_publisher()
+            publisher.publish(
+                EventChannel.SYSTEM,
+                EventType.RECONCILIATION_MISMATCH,
+                {
+                    "severity": "critical",
+                    "source": "exchange_untracked_asset",
+                    "symbol": symbol,
+                    "exchange_size": str(exchange_size),
+                },
+            )
         else:
             has_mismatch = True
             checks.append({

@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "type": "command",
+        "command": "echo '{\"systemMessage\": \"⚠️  db/models.py was modified. Every schema change requires an Alembic migration.\\nRun: docker compose run --rm app alembic revision --autogenerate -m \\\"<description>\\\"\\nThen: docker compose run --rm app alembic upgrade head\"}' ",
+        "linux": "python3 -c \"\nimport json, sys\ndata = json.load(sys.stdin)\ntool = data.get('tool', '')\ninput_ = data.get('toolInput', {})\nfile_path = input_.get('filePath', '') or input_.get('path', '')\nif 'db/models.py' in file_path:\n    print(json.dumps({'systemMessage': '⚠️  db/models.py was modified. Every schema change requires an Alembic migration.\\nNext steps:\\n1. docker compose run --rm app alembic revision --autogenerate -m \\\"<description>\\\"\\n2. Review the generated file in alembic/versions/\\n3. docker compose run --rm app alembic upgrade head'}))\n\""
+      }
+    ]
+  }
+}

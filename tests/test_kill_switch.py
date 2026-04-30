@@ -331,3 +331,93 @@ class TestEventPublishing:
         ks.check(Decimal("8000"), T2)  # still triggered, no new event
 
         assert mock_publisher.publish.call_count == 1
+
+
+# ── Hard reset & mode-change tests ───────────────────────────────────────────
+
+
+@patch("core.risk.kill_switch.get_publisher")
+class TestHardReset:
+
+    def test_hard_reset_clears_peak_equity(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ks = _ks(max_drawdown=0.15)
+        ks.check(Decimal("10000"), T0)
+        ks.check(Decimal("8000"), T1)  # trigger
+        assert ks.is_triggered
+        assert ks.peak_equity == Decimal("10000")
+
+        ks.hard_reset()
+        assert not ks.is_triggered
+        assert ks.peak_equity == Decimal("0")
+
+    def test_hard_reset_reinitialises_on_next_check(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ks = _ks(max_drawdown=0.15)
+        ks.check(Decimal("10000"), T0)
+        ks.check(Decimal("8000"), T1)
+
+        ks.hard_reset()
+        # Next check should initialise peak to 100 (the new current equity)
+        result = ks.check(Decimal("100"), T2)
+        assert result is False
+        assert ks.peak_equity == Decimal("100")
+
+
+@patch("core.risk.kill_switch.get_publisher")
+class TestModeSwitchRestore:
+
+    def test_restore_skips_when_mode_changes(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ks = _ks()
+        ks.check(Decimal("5000"), T0)
+        ks.check(Decimal("4000"), T1)  # trigger
+
+        data = ks.to_dict(trading_mode="paper")
+        assert data["kill_switch_trading_mode"] == "paper"
+
+        ks2 = _ks()
+        ks2.restore_from_dict(data, current_trading_mode="live")
+        # Should NOT have restored the triggered state or peak
+        assert not ks2.is_triggered
+        assert ks2.peak_equity == Decimal("0")
+
+    def test_restore_works_when_mode_same(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ks = _ks()
+        ks.check(Decimal("5000"), T0)
+        ks.check(Decimal("4000"), T1)
+
+        data = ks.to_dict(trading_mode="live")
+
+        ks2 = _ks()
+        ks2.restore_from_dict(data, current_trading_mode="live")
+        assert ks2.is_triggered
+        assert ks2.peak_equity == Decimal("5000")
+
+    def test_restore_backward_compat_missing_mode(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ks = _ks()
+        ks.check(Decimal("5000"), T0)
+        ks.check(Decimal("4000"), T1)
+
+        data = ks.to_dict()  # no trading_mode
+        assert "kill_switch_trading_mode" not in data
+
+        ks2 = _ks()
+        ks2.restore_from_dict(data, current_trading_mode="live")
+        # Without saved mode, falls through to normal restore
+        assert ks2.is_triggered
+        assert ks2.peak_equity == Decimal("5000")
+
+    def test_to_dict_includes_trading_mode(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ks = _ks()
+        d = ks.to_dict(trading_mode="live")
+        assert d["kill_switch_trading_mode"] == "live"
+
+    def test_to_dict_omits_trading_mode_when_none(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ks = _ks()
+        d = ks.to_dict()
+        assert "kill_switch_trading_mode" not in d

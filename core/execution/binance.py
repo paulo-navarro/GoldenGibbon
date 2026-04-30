@@ -428,34 +428,43 @@ class BinanceExecutor:
             )
             decision = decision.model_copy(update={"size": real_balance})
 
-        # Dust close: exchange balance is below minQty, can't place a sell
-        # order. Close the position locally so it doesn't stay stuck forever.
         formatted_qty = self._format_quantity(decision.symbol, decision.size)
         if formatted_qty <= 0:
-            logger.warning(
-                "binance.dust_close",
-                symbol=decision.symbol,
-                real_balance=str(real_balance),
-                size=str(decision.size),
-            )
-            trade = self._pm.close_position(
-                symbol=decision.symbol,
-                exit_price=decision.price,
-                exit_time=timestamp,
-                exit_reason=decision.exit_reason or ExitReason.MANUAL,
-                strategy=self._strategy,
-            )
-            dust_order = Order(
-                symbol=decision.symbol,
-                side=OrderSide.SELL,
-                order_type=OrderType.MARKET,
-                amount=decision.size,
-                price=decision.price,
-                status=OrderStatus.FILLED,
-                avg_fill_price=decision.price,
-                filled_amount=decision.size,
-            )
-            return ExecutionResult(order=dust_order, trade=trade)
+            if real_balance is not None and real_balance > Decimal("0"):
+                formatted_real = self._format_quantity(decision.symbol, real_balance)
+                if formatted_real > Decimal("0"):
+                    # Exchange has a sellable qty — sell the real balance
+                    logger.warning(
+                        "binance.dust_close_avoided",
+                        symbol=decision.symbol,
+                        pm_size=str(decision.size),
+                        real_balance=str(real_balance),
+                    )
+                    decision = decision.model_copy(update={"size": real_balance})
+                else:
+                    # Exchange balance is truly dust (below minQty)
+                    logger.info(
+                        "binance.dust_close",
+                        symbol=decision.symbol,
+                        real_balance=str(real_balance),
+                    )
+                    return self._local_dust_close(decision, timestamp)
+            elif real_balance is None:
+                # Cannot query exchange — refuse to close to avoid phantom
+                logger.error(
+                    "binance.close_aborted_balance_unknown",
+                    symbol=decision.symbol,
+                    pm_size=str(decision.size),
+                )
+                return None
+            else:
+                # Exchange has 0 — local cleanup only
+                logger.warning(
+                    "binance.dust_close_exchange_zero",
+                    symbol=decision.symbol,
+                    pm_size=str(decision.size),
+                )
+                return self._local_dust_close(decision, timestamp)
 
         order = self._place_and_fill(decision, OrderSide.SELL)
         if order is None or order.status != OrderStatus.FILLED:
@@ -487,6 +496,29 @@ class BinanceExecutor:
         )
 
         return ExecutionResult(order=order, trade=trade)
+
+    def _local_dust_close(
+        self, decision: RiskDecision, timestamp: datetime,
+    ) -> ExecutionResult:
+        """Close position locally without exchange order (true dust only)."""
+        trade = self._pm.close_position(
+            symbol=decision.symbol,
+            exit_price=decision.price,
+            exit_time=timestamp,
+            exit_reason=decision.exit_reason or ExitReason.MANUAL,
+            strategy=self._strategy,
+        )
+        dust_order = Order(
+            symbol=decision.symbol,
+            side=OrderSide.SELL,
+            order_type=OrderType.MARKET,
+            amount=decision.size,
+            price=decision.price,
+            status=OrderStatus.FILLED,
+            avg_fill_price=decision.price,
+            filled_amount=decision.size,
+        )
+        return ExecutionResult(order=dust_order, trade=trade)
 
     def _execute_reduce(
         self,

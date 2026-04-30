@@ -1,8 +1,3 @@
-// ── StrategyPage ─────────────────────────────────────────────────────────────
-// Task 2.39 – Strategy overview: state badge, signal chip, conditions
-// checklist, scaled-entry progress, and cooldown timer.
-// Refactored: all per-strategy information grouped into one card each.
-
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Accordion from '@mui/material/Accordion';
 import AccordionDetails from '@mui/material/AccordionDetails';
@@ -10,8 +5,6 @@ import AccordionSummary from '@mui/material/AccordionSummary';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import Card from '@mui/material/Card';
-import CardContent from '@mui/material/CardContent';
 import Chip from '@mui/material/Chip';
 import Divider from '@mui/material/Divider';
 import Grid from '@mui/material/Grid';
@@ -23,6 +16,7 @@ import ListItemText from '@mui/material/ListItemText';
 import Skeleton from '@mui/material/Skeleton';
 import Switch from '@mui/material/Switch';
 import TextField from '@mui/material/TextField';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
@@ -57,7 +51,6 @@ function regimeColor(regime: RegimeInfo['regime']): 'success' | 'warning' | 'def
   return 'default';
 }
 
-/** Convert snake_case key to Title Case label. */
 function labelFromKey(key: string): string {
   return key
     .replace(/_/g, ' ')
@@ -68,7 +61,6 @@ function labelFromKey(key: string): string {
     .replace(/\bBb\b/g, 'BB');
 }
 
-/** Format a remaining-seconds value as MM:SS. */
 function formatCountdown(totalSeconds: number): string {
   if (totalSeconds <= 0) return '00:00';
   const m = Math.floor(totalSeconds / 60);
@@ -76,7 +68,48 @@ function formatCountdown(totalSeconds: number): string {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
-// ── Unified per-strategy card ─────────────────────────────────────────────────
+type CondEntry = [string, unknown];
+
+function getCondEntries(
+  condStore: unknown,
+  sig: { conditions?: unknown } | undefined,
+): CondEntry[] {
+  const cond: Record<string, unknown> | null =
+    (condStore as Record<string, unknown> | undefined) ??
+    ((sig?.conditions as Record<string, unknown> | undefined) ?? null);
+  if (!cond) return [];
+  return Object.entries(cond).filter(([k]) => k !== 'symbol' && k !== 'strategy');
+}
+
+// ── Conditions progress bar ─────────────────────────────────────────────────
+
+function ConditionsBar({ entries }: { entries: CondEntry[] }) {
+  if (entries.length === 0) return null;
+
+  return (
+    <Tooltip
+      title={entries.map(([name, v]) => `${v === true ? '✓' : '✗'} ${labelFromKey(name)}`).join('\n')}
+      slotProps={{ tooltip: { sx: { whiteSpace: 'pre-line', fontSize: '0.75rem' } } }}
+    >
+      <Box sx={{ display: 'flex', gap: '2px', alignItems: 'center', minWidth: 80 }}>
+        {entries.map(([name, value]) => (
+          <Box
+            key={name}
+            sx={{
+              flex: 1,
+              height: 6,
+              borderRadius: 0.5,
+              bgcolor: value === true ? 'success.main' : 'action.disabled',
+              transition: 'background-color 0.3s',
+            }}
+          />
+        ))}
+      </Box>
+    </Tooltip>
+  );
+}
+
+// ── Strategy card (collapsible) ──────────────────────────────────────────────
 
 const SCALE_STEPS = ['50%', '75%', '100%'];
 
@@ -87,11 +120,9 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
   const regime = useStrategyStore((s) => s.regimes[stratKey]);
   const { data: portfolio } = usePortfolio();
 
-  const cond: Record<string, unknown> | null =
-    (condStore as unknown as Record<string, unknown> | undefined) ??
-    ((sig?.conditions as unknown as Record<string, unknown> | undefined) ?? null);
+  const condEntries = useMemo(() => getCondEntries(condStore, sig), [condStore, sig]);
+  const metCount = condEntries.filter(([, v]) => v === true).length;
 
-  // Live countdown ticker (only while in cooldown)
   const [now, setNow] = useState(Date.now());
   const inCooldown = st?.state === 'cooldown' && !!st?.cooldown_until;
   useEffect(() => {
@@ -102,68 +133,60 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
 
   if (!st) return null;
 
-  // Scaled entry
   const pos = portfolio?.positions?.find((p) => p.symbol === st.symbol);
   const scaleInCount = pos?.scale_in_count ?? 0;
   const consecutiveBuys = st.consecutive_buy_candles ?? 0;
   const progressPercent = Math.min(((scaleInCount + 1) / 3) * 100, 100);
 
-  // Conditions
-  const condEntries = cond
-    ? Object.entries(cond).filter(([k]) => k !== 'symbol' && k !== 'strategy')
-    : [];
-  const metCount = condEntries.filter(([, v]) => v === true).length;
-
-  // Cooldown
   const cooldownMs = st.cooldown_until ? new Date(st.cooldown_until).getTime() : 0;
   const remainingSec = Math.max(0, Math.floor((cooldownMs - now) / 1000));
 
   return (
-    <Card>
-      <CardContent>
-        {/* ── Header ──────────────────────────────────────────────── */}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
-          <Typography variant="h6">{st.symbol}</Typography>
-          <Chip label={st.strategy.replace(/_/g, ' ')} size="small" variant="outlined" />
-          <Chip label={st.state} size="small" color={stateColor(st.state)} variant="outlined" />
-          <Chip
-            label={sig?.signal ?? 'hold'}
-            size="small"
-            color={signalColor(sig?.signal ?? 'hold')}
-            variant="filled"
-          />
-          {regime && (
-            <Chip
-              label={regime.regime}
-              size="small"
-              color={regimeColor(regime.regime)}
-              variant="outlined"
-            />
-          )}
-          {st.updated_at && (
-            <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto' }}>
-              Updated {new Date(st.updated_at).toLocaleString()}
+    <Accordion
+      defaultExpanded={false}
+      disableGutters
+      sx={{ '&:before': { display: 'none' } }}
+    >
+      <AccordionSummary
+        expandIcon={<ExpandMoreIcon />}
+        sx={{ px: 2, '& .MuiAccordionSummary-content': { alignItems: 'center', gap: 1, flexWrap: 'wrap', my: 1 } }}
+      >
+        <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>{st.symbol}</Typography>
+        <Chip label={st.strategy.replace(/_/g, ' ')} size="small" variant="outlined" />
+        <Chip label={st.state} size="small" color={stateColor(st.state)} variant="outlined" />
+        <Chip
+          label={sig?.signal ?? 'hold'}
+          size="small"
+          color={signalColor(sig?.signal ?? 'hold')}
+          variant="filled"
+        />
+        {regime && (
+          <Chip label={regime.regime} size="small" color={regimeColor(regime.regime)} variant="outlined" />
+        )}
+
+        {condEntries.length > 0 && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 1 }}>
+            <ConditionsBar entries={condEntries} />
+            <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+              {metCount}/{condEntries.length}
             </Typography>
-          )}
-        </Box>
+          </Box>
+        )}
 
-        <Divider sx={{ my: 1.5 }} />
+        {st.updated_at && (
+          <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto' }}>
+            {new Date(st.updated_at).toLocaleString()}
+          </Typography>
+        )}
+      </AccordionSummary>
 
-        {/* ── Conditions + Scaled Entry ────────────────────────────── */}
+      <AccordionDetails sx={{ px: 2, pt: 0 }}>
+        <Divider sx={{ mb: 1.5 }} />
+
         <Grid container spacing={2}>
           {/* Conditions */}
           <Grid size={{ xs: 12, md: 6 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-              <Typography variant="body2" color="text.secondary">Conditions</Typography>
-              {condEntries.length > 0 && (
-                <Chip
-                  label={`${metCount}/${condEntries.length}`}
-                  size="small"
-                  color={metCount === condEntries.length ? 'success' : 'default'}
-                  variant="outlined"
-                />
-              )}
-            </Box>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>Conditions</Typography>
             {condEntries.length === 0 ? (
               <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 1 }}>
                 No conditions data yet
@@ -179,10 +202,7 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
                         <CancelIcon fontSize="small" color="error" />
                       )}
                     </ListItemIcon>
-                    <ListItemText
-                      primary={labelFromKey(name)}
-                      primaryTypographyProps={{ variant: 'body2' }}
-                    />
+                    <ListItemText primary={labelFromKey(name)} primaryTypographyProps={{ variant: 'body2' }} />
                   </ListItem>
                 ))}
               </List>
@@ -207,7 +227,7 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
               </Box>
               <LinearProgress
                 variant="determinate"
-                value={st.state === 'flat' ? 0 : progressPercent}
+                value={st.state === 'position' ? progressPercent : 0}
                 sx={{ height: 8, borderRadius: 1 }}
               />
             </Box>
@@ -222,7 +242,7 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
           </Grid>
         </Grid>
 
-        {/* ── Cooldown ─────────────────────────────────────────────── */}
+        {/* Cooldown */}
         {inCooldown && (
           <>
             <Divider sx={{ my: 1.5 }} />
@@ -242,14 +262,14 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
             </Box>
           </>
         )}
-        {/* ── Parameter Tuning (task 5.5b) ───────────────────────── */}
+
         <ParameterTuning strategyName={st.strategy} />
-      </CardContent>
-    </Card>
+      </AccordionDetails>
+    </Accordion>
   );
 }
 
-// ── Parameter Tuning (task 5.5b) ─────────────────────────────────────────────
+// ── Parameter Tuning ─────────────────────────────────────────────────────────
 
 function ParameterTuning({ strategyName }: { strategyName: string }) {
   const { data, isLoading, error } = useStrategyConfig(strategyName);
@@ -426,17 +446,20 @@ export default function StrategyPage() {
         ...Object.keys(storeConditions),
       ]),
     );
+
     return keys.sort((a, b) => {
-      const aActive = storeSignals[a]?.signal && storeSignals[a].signal !== 'hold' ? 1 : 0;
-      const bActive = storeSignals[b]?.signal && storeSignals[b].signal !== 'hold' ? 1 : 0;
-      if (bActive !== aActive) return bActive - aActive;
+      const aEntries = getCondEntries(storeConditions[a], storeSignals[a]);
+      const bEntries = getCondEntries(storeConditions[b], storeSignals[b]);
+      const aMet = aEntries.filter(([, v]) => v === true).length;
+      const bMet = bEntries.filter(([, v]) => v === true).length;
+      if (bMet !== aMet) return bMet - aMet;
       return a.localeCompare(b);
     });
   }, [storeStates, storeSignals, storeConditions]);
 
   if (isLoading) {
     return (
-      <Box>
+      <Box sx={{ p: 2 }}>
         <Typography variant="h5" sx={{ mb: 3 }}>Strategy</Typography>
         <Skeleton variant="rounded" height={300} />
       </Box>
@@ -445,7 +468,7 @@ export default function StrategyPage() {
 
   if (error) {
     return (
-      <Box>
+      <Box sx={{ p: 2 }}>
         <Typography variant="h5" sx={{ mb: 3 }}>Strategy</Typography>
         <Alert severity="error" variant="outlined">Failed to load strategy state</Alert>
       </Box>
@@ -454,27 +477,23 @@ export default function StrategyPage() {
 
   if (stratKeys.length === 0) {
     return (
-      <Box>
+      <Box sx={{ p: 2 }}>
         <Typography variant="h5" sx={{ mb: 3 }}>Strategy</Typography>
-        <Card sx={{ p: 2 }}>
-          <Typography color="text.secondary" sx={{ textAlign: 'center', py: 2 }}>
-            No active strategies — start a backtest or paper-trade session to see data here.
-          </Typography>
-        </Card>
+        <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
+          No active strategies — start a backtest or paper-trade session to see data here.
+        </Typography>
       </Box>
     );
   }
 
   return (
-    <Box>
-      <Typography variant="h5" sx={{ mb: 3 }}>Strategy</Typography>
-      <Grid container spacing={2}>
+    <Box sx={{ p: 2 }}>
+      <Typography variant="h5" sx={{ mb: 2 }}>Strategy</Typography>
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
         {stratKeys.map((k) => (
-          <Grid key={k} size={{ xs: 12 }}>
-            <StrategyCard stratKey={k} />
-          </Grid>
+          <StrategyCard key={k} stratKey={k} />
         ))}
-      </Grid>
+      </Box>
     </Box>
   );
 }
