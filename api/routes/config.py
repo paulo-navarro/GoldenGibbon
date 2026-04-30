@@ -89,6 +89,8 @@ def _group_for_field(name: str) -> str:
         return "Position Sizing"
     if any(k in name for k in ("exit", "momentum")):
         return "Exit Strategy"
+    if any(k in name for k in ("breakeven", "ratchet", "lockin")):
+        return "Break-even Ratchet"
     if any(k in name for k in ("stop", "atr_period", "hard_stop")):
         return "Stop-Loss"
     if "cooldown" in name or "time_stop" in name:

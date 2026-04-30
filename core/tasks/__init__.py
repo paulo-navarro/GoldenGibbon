@@ -1033,6 +1033,11 @@ def run_single_strategy_tick(
             trading_mode=trading_mode,
         )
 
+        # ── 0b. Sync exchange stop config from live settings ──
+        if hasattr(comp.executor, "_exchange_stops_enabled"):
+            comp.executor._exchange_stops_enabled = settings.execution.exchange_stop_orders_enabled
+            comp.executor._stop_slippage = settings.execution.stop_limit_slippage_pct
+
         # ── 1. Load data + indicators from DB cache ──────────
         with get_session() as session:
             client = BinanceClient()
@@ -1208,7 +1213,19 @@ def run_single_strategy_tick(
                         updated_pos.hard_stop_price,
                         updated_pos.trailing_stop_price,
                     )
-                    if new_effective_stop > old_effective_stop and updated_pos.exchange_stop_order_id:
+                    if not updated_pos.exchange_stop_order_id and new_effective_stop > 0:
+                        # Position opened before exchange stops were enabled — place now
+                        log.info(
+                            "single_tick: placing missing exchange stop order",
+                            symbol=symbol, stop_price=str(new_effective_stop),
+                        )
+                        new_stop_id = comp.executor._place_stop_order(
+                            symbol, updated_pos.size,
+                            new_effective_stop, comp.executor._stop_slippage,
+                        )
+                        if new_stop_id:
+                            comp.pm.update_stop_order_id(symbol, new_stop_id)
+                    elif new_effective_stop > old_effective_stop and updated_pos.exchange_stop_order_id:
                         if comp.executor._cancel_stop_order(symbol, updated_pos.exchange_stop_order_id):
                             new_stop_id = comp.executor._place_stop_order(
                                 symbol, updated_pos.size,
