@@ -575,6 +575,47 @@ def _trim_in_memory_history(pm) -> None:  # noqa: ANN001
         pm._portfolio.equity_curve = pm._portfolio.equity_curve[-_MAX_MEMORY_SNAPSHOTS:]
 
 
+def _emergency_position_cleanup(
+    strategy_name: str,
+    symbol: str,
+    new_state: str,
+    log,  # noqa: ANN001
+) -> None:
+    """
+    Last-resort cleanup when the full persist fails after a sell.
+
+    Opens a minimal, independent session to delete the stale
+    ``PositionRecord`` and update ``StrategyStateRecord.state`` so that
+    a worker restart doesn't resurrect the position.
+    """
+    from db import get_session
+    from db.models import PositionRecord, StrategyStateRecord
+
+    with get_session() as session:
+        pos = (
+            session.query(PositionRecord)
+            .filter_by(symbol=symbol, strategy=strategy_name)
+            .first()
+        )
+        if pos is not None:
+            session.delete(pos)
+
+        state_rec = (
+            session.query(StrategyStateRecord)
+            .filter_by(symbol=symbol, strategy=strategy_name)
+            .first()
+        )
+        if state_rec is not None and state_rec.state in ("position", "reduced"):
+            state_rec.state = new_state
+
+    log.warning(
+        "single_tick: emergency position cleanup succeeded",
+        strategy=strategy_name,
+        symbol=symbol,
+        new_state=new_state,
+    )
+
+
 # ── Alerting helper (task 4.9) ─────────────────────────────────────────────
 
 
@@ -1254,6 +1295,20 @@ def run_single_strategy_tick(
                 error=str(persist_exc),
                 exc_info=True,
             )
+            # If a sell just closed the position but the full persist
+            # failed, ensure the PositionRecord and strategy state are
+            # still cleaned up so a worker restart doesn't resurrect
+            # the position and trigger repeated SELL alerts.
+            if not comp.pm.has_position(symbol):
+                try:
+                    _emergency_position_cleanup(
+                        strategy_name, symbol, comp.strategy.state.value, log,
+                    )
+                except Exception as cleanup_exc:
+                    log.error(
+                        "single_tick: emergency position cleanup also failed",
+                        error=str(cleanup_exc),
+                    )
 
         # ── 8. Trim in-memory history ────────────────────────
         _trim_in_memory_history(comp.pm)
