@@ -24,7 +24,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import TimerIcon from '@mui/icons-material/Timer';
 import TuneIcon from '@mui/icons-material/Tune';
 
-import { useStrategyState, useStrategySignals, usePortfolio, useStrategyConfig, useUpdateStrategyConfig, useResetStrategyConfig } from '../api';
+import { useStrategyState, useStrategySignals, usePortfolio, useExitProximity, useStrategyConfig, useUpdateStrategyConfig, useResetStrategyConfig } from '../api';
 import type { FieldMeta } from '../api';
 import { useStrategyStore } from '../stores/strategyStore';
 import type { RegimeInfo } from '../stores/strategyStore';
@@ -113,12 +113,23 @@ function ConditionsBar({ entries }: { entries: CondEntry[] }) {
 
 const SCALE_STEPS = ['50%', '75%', '100%'];
 
+function exitProxLabel(pct: number): string {
+  return `${(pct * 100).toFixed(1)}%`;
+}
+
+function exitProxColor(pct: number): 'success.main' | 'warning.main' | 'error.main' {
+  if (pct > 0.15) return 'success.main';
+  if (pct > 0.05) return 'warning.main';
+  return 'error.main';
+}
+
 function StrategyCard({ stratKey }: { stratKey: string }) {
   const st = useStrategyStore((s) => s.states[stratKey]);
   const sig = useStrategyStore((s) => s.signals[stratKey]);
   const condStore = useStrategyStore((s) => s.conditions[stratKey]);
   const regime = useStrategyStore((s) => s.regimes[stratKey]);
   const { data: portfolio } = usePortfolio();
+  const { data: exitProximityData } = useExitProximity();
 
   const condEntries = useMemo(() => getCondEntries(condStore, sig), [condStore, sig]);
   const metCount = condEntries.filter(([, v]) => v === true).length;
@@ -133,6 +144,9 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
 
   if (!st) return null;
 
+  const killSwitchTriggered = !!(st.state_data as Record<string, unknown> | null)?.kill_switch_triggered;
+  const exitProx = exitProximityData?.find((d) => d.symbol === st.symbol && d.strategy === st.strategy);
+
   const pos = portfolio?.positions?.find((p) => p.symbol === st.symbol);
   const scaleInCount = pos?.scale_in_count ?? 0;
   const consecutiveBuys = st.consecutive_buy_candles ?? 0;
@@ -145,7 +159,13 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
     <Accordion
       defaultExpanded={false}
       disableGutters
-      sx={{ '&:before': { display: 'none' } }}
+      sx={{
+        '&:before': { display: 'none' },
+        ...(killSwitchTriggered && {
+          border: '2px solid',
+          borderColor: 'error.main',
+        }),
+      }}
     >
       <AccordionSummary
         expandIcon={<ExpandMoreIcon />}
@@ -162,6 +182,20 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
         />
         {regime && (
           <Chip label={regime.regime} size="small" color={regimeColor(regime.regime)} variant="outlined" />
+        )}
+        {killSwitchTriggered && (
+          <Chip label="KILL SWITCH" size="small" color="error" variant="filled" />
+        )}
+
+        {exitProx && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, ml: 1 }}>
+            <Typography variant="caption" color="text.secondary">
+              Hard <Typography component="span" variant="caption" fontWeight={600} sx={{ color: exitProxColor(exitProx.hard_stop_pct) }}>{exitProxLabel(exitProx.hard_stop_pct)}</Typography>
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Trail <Typography component="span" variant="caption" fontWeight={600} sx={{ color: exitProxColor(exitProx.trailing_stop_pct) }}>{exitProxLabel(exitProx.trailing_stop_pct)}</Typography>
+            </Typography>
+          </Box>
         )}
 
         {condEntries.length > 0 && (
