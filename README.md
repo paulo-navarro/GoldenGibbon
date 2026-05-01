@@ -100,58 +100,108 @@ GoldenGibbon follows a strict unidirectional data flow through isolated layers:
 
 ## ✨ Features
 
-### Current (Phase 1 - Foundation & Backtest Engine ✅)
+### Data & Market Feed
 
-- ✅ **Data Loader** — Fetch historical candles from Binance REST API with PostgreSQL caching
-- ✅ **Indicator Engine** — Pure functional indicators: EMA, SMA, RSI, ADX, ATR, Bollinger Bands
-- ✅ **Config Layer** — YAML-based configuration for symbols, strategies, and settings
-- ✅ **Docker Environment** — Multi-stage builds with PostgreSQL and Redis
-- ✅ **Strategy Engine** — Abstract interface supporting Smart Hodler (Trend) and Mean Reversion (Counter-trend)
-- ✅ **Risk Engine** — Sizing logic, hard stops, trailing stops (ATR-based), and time-based exits
-- ✅ **Portfolio Manager** — Full accounting of balance, positions, trade history, and equity curve
-- ✅ **Backtest Runner** — Fast candle-by-candle simulation loop with orderbook replay
-- ✅ **Reporting** — Rich console output tables and PostgreSQL persistence of backtest results
-- ✅ **Logging** — Structured JSON logs (structlog) for full observability of every decision
-- ✅ **Test Suite** — Over 960 unit tests covering the entire pipeline
+- **Binance REST Client** — Historical candle fetching with PostgreSQL caching and symbol validation
+- **Binance WebSocket Feed** — Real-time candle-close stream driving the live trading pipeline
+- **Multi-Timeframe Support** — 15-minute and 1-hour candles computed and passed together into every strategy
+- **Reconciliation** — Background jobs ensuring DB/cache coherency between ticks
 
-### Current (Phase 2 - Real-Time Interface ✅ · Integration 🚧)
+### Indicator Engine
 
-- ✅ **FastAPI + Uvicorn** — Application factory with lifespan, CORS, health check
-- ✅ **Event System** — Redis pub/sub publisher with 6 channels and 26 event types
-- ✅ **Event Integration** — Strategy, execution, and portfolio layers publish events in real-time
-- ✅ **REST API** — 6 route modules: market, portfolio, trades, orders, strategy, system
-- ✅ **WebSocket Streaming** — Real-time event broadcasting with channel filtering and connection manager
-- ✅ **Database** — ORM models, Alembic migrations, seed script
-- ✅ **Infrastructure** — Docker services, Makefile targets, environment config
-- ✅ **React Dashboard Platform** — Vite + React + TS setup, MUI dark theme, App Shell layout with routing, Zustand stores, and TanStack query
-- ✅ **React Dashboard Features** — Live charts, strategy monitors, portfolio tracking, trade history, logs, and event streaming
-- 🚧 **Architecture Integration** — E2E tests, event flow checks, WebSocket bounce tests (Pending frontend connectivity)
+Pure functional indicators, cross-validated against the `ta` library:
 
-### Current (Phase 3 - Infrastructure & Paper Trading ✅)
+- EMA, SMA, ATR, RSI, ADX, Bollinger Bands
 
-- ✅ **Task Queue** — Celery + Redis setup with worker and beat scheduling
-- ✅ **Data Fetching** — Periodic tasks for fetching new candles and populating DB cache
-- ✅ **Live Data Feed** — Real-time Binance WebSocket tracking for instant candle-close processing
-- ✅ **Strategy Execution** — Celery task pipeline (Indicator → Strategy → Risk → Execute)
-- ✅ **Paper Trading** — Simulated execution driven by live data streams via Celery workers
-- ✅ **State Persistence** — Strategy states and portfolio safely restored across ticks
-- ✅ **Reconciliation** — Automated background processes ensuring DB/cache coherency
-- ✅ **Monitoring** — Health endpoints + Docker healthchecks for Celery workers and Beat
+### Strategy Engine
 
-### Future (Phase 4 - Real Trading 🔮)
+- **Auto-discovery registry** — drop a file in `core/strategies/`, it's available instantly
+- **Smart Hodler** — trend-following (EMA cross + ADX filter + volume confirmation + session gate)
+- **Mean Reversion** — range-bound counter-trend (Bollinger Bands + RSI oversold + ADX inverse filter)
+- **Session Filter** — suppresses entries during dead zones (weekends + overnight UTC)
+- **State machine** — `FLAT → POSITION → REDUCED → COOLDOWN` with configurable cooldown periods
 
-- 🔮 **Binance Execution** — Real broker integration (buy/sell, PENDING -> FILLED flows)
-- 🔮 **Order Management** — Full LIMIT and MARKET order tracking
-- 🔮 **Resilience** — Exponential backoff for network/broker failures, crash recovery
-- 🔮 **Capital Protection** — Hard maximums on position sizes, global kill-switch
-- 🔮 **Alerting** — Webhook/push notifications on critical events
+### Risk Engine
 
-### Future (Phase 5 - Research Platform 🔮)
+- **Scaled entries** — 50 % → 75 % → 100 % position sizing as conviction grows
+- **ATR trailing stop** — 2× ATR below highest close since entry
+- **Hard stop** — per-trade max drawdown threshold triggering cooldown
+- **Time stop** — exits Mean Reversion positions after N candles if target not reached
+- **Exit proximity tracking** — live distance-to-stop surfaced in the dashboard
+- **Global kill switch** — halts all new entries platform-wide instantly
 
-- 🔮 **Plugin Architecture** — Modular structure for injecting new custom strategies
-- 🔮 **Multi-Strategy** — Concurrent strategies running via separate Celery workers
-- 🔮 **Portfolio Allocation** — Engine to balance risk/capital dynamically between active strategies
-- 🔮 **Parameter Optimization** — Framework for backtest grid search and UI config dashboard
+### Execution Layer
+
+- **PaperExecutor** — full simulated execution with configurable slippage and fees
+- **BinanceExecutor** — real broker integration (MARKET orders, PENDING → FILLED flow)
+- **Exchange stop orders** — native stop-loss placement and management on Binance
+- **Retry logic** — exponential backoff for transient network and broker failures
+- **Crash recovery** — state restored safely from DB after unexpected restarts
+
+### Backtest Engine
+
+- **Candle-by-candle simulation loop** — identical pipeline to live trading
+- **Metrics** — total return, max drawdown, win rate, Sharpe ratio, profit factor, vs. Buy & Hold
+- **Rich reporting** — console tables + PostgreSQL persistence of every run
+- **Strategy comparison** — side-by-side results across multiple strategies
+- **Multi-strategy backtest** — concurrent strategy simulation in a single run
+- **Grid search optimizer** — parameter sweep with configurable objective function
+
+### Portfolio & Allocation
+
+- **Portfolio Manager** — USDT balance, open positions, equity curve, full trade history
+- **Portfolio Allocation Engine** — dynamic capital distribution across active strategies
+- **Regime detection** — market regime classification fed into allocation decisions
+
+### Infrastructure & Operations
+
+- **Celery + Redis** — distributed task queue with Beat scheduler for periodic jobs
+- **Strategy tick pipeline** — Celery chain: fetch → indicators → strategy → risk → execute
+- **State persistence** — strategy states and portfolio snapshots survive worker restarts
+- **Monitoring** — health endpoints + Docker healthchecks for app, workers, and Beat
+- **Alerting** — webhook/push notifications on critical events (stop-loss hit, kill switch, errors)
+- **Structured logging** — JSON logs via structlog for every decision in the pipeline
+- **Docker Compose** — multi-profile stack (`dev` / `prod`) with PostgreSQL 16, Redis 7
+
+### REST API (FastAPI)
+
+10 route modules: `market`, `portfolio`, `trades`, `orders`, `strategy`, `system`, `backtest`, `config`, `symbols`, `app_config`
+
+- Real-time candles, price, equity curve, open positions, trade history, order book
+- Strategy state and signal conditions per symbol
+- Backtest trigger and results retrieval
+- Live config inspection
+
+### WebSocket & Events
+
+- **Event publisher** — Redis pub/sub with 6 channels and 26 event types
+- **WebSocket endpoint** — real-time event broadcast with per-client channel filtering
+- **Connection manager** — multiple concurrent clients, heartbeat, auto-reconnect
+
+### React Dashboard
+
+11 pages with live WebSocket updates:
+
+| Page | Content |
+|------|---------|
+| **Dashboard** | Portfolio summary, equity curve, recent signals |
+| **Prices** | Live price tickers for all configured symbols |
+| **Portfolio** | Positions, balance breakdown, P&L |
+| **Strategy** | Per-symbol strategy state, signal conditions checklist |
+| **Trades** | Full trade history with filters and stats |
+| **Orders** | Open and historical orders |
+| **Metrics** | Backtest results and performance charts |
+| **Symbols** | Configured trading pairs and their status |
+| **Logs** | Streaming structured log viewer |
+| **Activity** | Real-time event stream from all channels |
+| **Settings** | Platform configuration |
+
+- MUI v7 dark theme, Zustand stores, TanStack Query v5, Recharts
+- Exit proximity indicator and cycle status components
+
+### Test Suite
+
+**1 360 passing tests** across every layer: indicators, strategies, risk engine, execution, portfolio, backtest, API routes, WebSocket, events, Celery tasks, and database.
 
 ---
 
@@ -346,63 +396,49 @@ docker compose run --rm -e PYTHONPATH=/app app pytest tests/test_indicators.py -
 docker compose run --rm -e PYTHONPATH=/app app pytest tests/test_database.py -v
 ```
 
-Current test coverage: **841 passing tests** across indicators, strategies, events, API routes, and execution engine.
+Current test coverage: **1 360 passing tests** across indicators, strategies, events, API routes, execution engine, backtest, and Celery tasks.
 
 ---
 
-## 📊 Development Roadmap
+## 📊 Roadmap
 
-Progress is tracked in [`kanban.md`](kanban.md). Current status:
+Active development is tracked in [roadmap/kanban.md](roadmap/kanban.md).
 
-### Phase 1: Foundation & Backtest Engine (100% Complete)
-- ✅ **Tasks 1.1–1.28** — Fully implemented (Data, Indicators, Strategy engine, Risk manager, Portfolio tracking, Execution simulation, Backtesting loop, Logging)
+**Completed:** Phases 1–4 (foundation, backtest engine, real-time interface, live trading infrastructure, Binance execution, alerting, allocation, regime detection, UI visual improvements)
 
-### Phase 2: Real-Time Interface (95% Complete)
-- ✅ **Tasks 2.1–2.21** — Backend complete: FastAPI, Pydantic models, ORM, Alembic migrations, event publisher, event channels, REST routes, WebSocket endpoint, event integration, Docker service, env config
-- ✅ **Tasks 2.22–2.52** — Frontend complete: React Zustand stores, real-time charts/tables, WebSocket streams, UI pages, Vite + Docker deployment, DB seeds, Makefile
-- ✅ **Task 2.55** — Verify all REST endpoints return data (use seed data)
-- 📋 **Tasks 2.53, 2.54, 2.56** — Architecture integration tests (event flow verification, WS reconnection, end-to-end)
-
-### Phase 3: Infrastructure & Paper Trading (100% Complete)
-- ✅ **Tasks 3.1–3.10** — Fully implemented (Redis + Celery set up, worker/beat schedules, candle fetching task, strategy tick task, Binance WebSocket feed, paper trading execution loop, state persistence/recovery, reconciliation jobs, monitoring)
-
-### Phase 4: Real Trading (0% Complete)
-- 📋 Tasks 4.1–4.10 (Binance executor, capital limits, alerting)
-
-### Phase 5: Research Platform (0% Complete)
-- 📋 Tasks 5.1–5.7 (Multi-strategy, optimization, parameter tuning, config migration)
+**Next:** Phase 5 — BearGuard short strategy (spot margin shorts via Binance Cross Margin)
 
 ---
 
 ## 🛠️ Technology Stack
 
 **Backend:**
-- Python 3.12
-- FastAPI + Uvicorn
-- SQLAlchemy 2.x + Alembic
-- PostgreSQL 16
-- Redis 7 (event pub/sub)
-- pandas + numpy
+- Python 3.12, FastAPI + Uvicorn
+- SQLAlchemy 2.x + Alembic, PostgreSQL 16
+- Redis 7 (event pub/sub + Celery broker)
+- Celery 5 + Celery Beat
+- pandas, numpy, ta
+- structlog
 
 **Data Sources:**
 - Binance REST API
-- Binance WebSocket (planned)
+- Binance WebSocket (real-time candles)
 
 **Infrastructure:**
-- Docker + Docker Compose
-- Celery + Celery Beat (planned)
+- Docker + Docker Compose (profiles: `dev`, `prod`)
+- Multi-stage Dockerfile
 
-**Frontend (planned):**
-- React + TypeScript
-- Vite
-- Zustand (state management)
-- Recharts (charting)
-- TanStack Query
+**Frontend:**
+- React 19 + TypeScript, Vite
+- MUI v7 (dark theme)
+- Zustand 5 (state management)
+- TanStack Query v5
+- Recharts
 
 **Testing:**
-- pytest
-- pytest-asyncio
+- pytest + pytest-asyncio
 - ta library (cross-validation)
+- 1 360 tests
 
 ---
 
@@ -431,31 +467,13 @@ This is a personal trading platform under active development. Contributions, sug
 [MIT License](LICENSE) (or specify your preferred license)
 
 ---
-
 ## 🔗 Resources
 
 - [Blueprint](blueprint.md) — Detailed technical specification
-- [Kanban](kanban.md) — Development roadmap and task tracking
-- [Smart Hodler Strategy](strategy_smart_hodler.md) — Trend-following strategy specification
-- [Mean Reversion Strategy](strategy_mean_reversion.md) — Mean-reversion strategy specification
-
----
-
-## 📈 MVP Progress
-
-The **full roadmap (Phases 1 through 5)** constitutes the MVP for the GoldenGibbon platform.
-
-```text
-Phase 1  ██████████████████████████████  30/30  100%
-Phase 2  ████████████████████████████░░  53/56   95%
-Phase 3  ██████████████████████████████  10/10  100%
-Phase 4  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   0/10    0%
-Phase 5  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   0/7     0%
-─────────────────────────────────────────────────────
-Overall  ██████████████████████████░░░░  93/113  82%
-```
-
-> *Last updated: 8 March 2026 · Over 960 tests passing*
+- [Roadmap](roadmap/kanban.md) — Development kanban and task tracking
+- [Smart Hodler Strategy](roadmap/strategy_smart_hodler.md) — Trend-following strategy specification
+- [Mean Reversion Strategy](roadmap/strategy_mean_reversion.md) — Mean-reversion strategy specification
+- [BearGuard Strategy](roadmap/strategy_bear_guard.md) — Short strategy specification (Phase 5)
 
 ---
 
