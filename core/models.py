@@ -152,14 +152,25 @@ class Candle(BaseModel):
     quote_volume: Optional[Decimal] = None
     trades_count: Optional[int] = None
     
-    @field_validator("open", "high", "low", "close", "volume", mode="before")
+    @field_validator("open", "high", "low", "close", mode="before")
     @classmethod
-    def ensure_positive(cls, v: Any) -> Decimal:
-        """Ensure price and volume values are positive."""
+    def ensure_positive_price(cls, v: Any) -> Decimal:
+        """Ensure price values are strictly positive (no zero)."""
+        if v is not None:
+            value = Decimal(str(v))
+            if value <= 0:
+                raise ValueError("Price must be strictly positive")
+            return value
+        return v
+
+    @field_validator("volume", mode="before")
+    @classmethod
+    def ensure_non_negative_volume(cls, v: Any) -> Decimal:
+        """Ensure volume is non-negative (zero is valid for low-liquidity candles)."""
         if v is not None:
             value = Decimal(str(v))
             if value < 0:
-                raise ValueError("Price and volume must be positive")
+                raise ValueError("Volume must be non-negative")
             return value
         return v
     

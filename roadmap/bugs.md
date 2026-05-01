@@ -228,3 +228,79 @@ When a Binance API call fails mid-fetch, the loader logs an error but continues 
 
 - [x] Remove default — `strategy` is now a required field, forcing all callers to supply it explicitly
 - [x] Updated `tests/test_models.py` and `tests/test_database.py` to pass `strategy` explicitly
+
+---
+
+## BUG-010: Stop order cancelled before sell confirmed in `_execute_close`
+
+**Status:** Fixed
+**Reported:** 2026-05-01
+
+### Symptom
+
+`_execute_close` cancels the exchange stop order first, then places the sell order. If the sell fails, the position is left unprotected (no stop order, no exit).
+
+### Affected code
+
+- `core/execution/binance.py` — `_execute_close` method
+
+### Fix
+
+- [x] Moved stop order cancellation to after the sell order is confirmed filled
+
+---
+
+## BUG-011: Timezone mismatch in `_count_candles_held()`
+
+**Status:** Fixed
+**Reported:** 2026-05-01
+
+### Symptom
+
+`current_time` from `market_data.candles.index[-1]` may be timezone-naive, while `position.entry_time` is UTC-aware. Subtracting mismatched datetimes raises `TypeError` in live trading.
+
+### Affected code
+
+- `core/risk/__init__.py` — `_count_candles_held()` method
+
+### Fix
+
+- [x] Normalise both timestamps to naive UTC before subtraction
+
+---
+
+## BUG-012: `_execute_reduce` sends full position qty instead of fraction
+
+**Status:** Fixed
+**Reported:** 2026-05-01
+
+### Symptom
+
+On partial exits (SELL_HALF), `_execute_reduce` sent `decision.size` (full position) to the exchange instead of `size × sell_fraction`. This sold the entire position on-exchange while the portfolio manager only removed 50%, causing a desync.
+
+### Affected code
+
+- `core/execution/binance.py` — `_execute_reduce` method
+
+### Fix
+
+- [x] Compute `sell_qty = decision.size * sell_fraction` and override `decision.size` before calling `_place_and_fill`
+
+---
+
+## BUG-013: Zero close price not rejected by Candle validator
+
+**Status:** Fixed
+**Reported:** 2026-05-01
+
+### Symptom
+
+`ensure_positive` validator allows `value == 0`. A zero close price causes division-by-zero in PnL calculations and position sizing.
+
+### Affected code
+
+- `core/models.py` — `Candle.ensure_positive` field validator
+
+### Fix
+
+- [x] Split validator: price fields (`open`, `high`, `low`, `close`) now require strictly positive (`> 0`); volume allows zero (valid for low-liquidity candles)

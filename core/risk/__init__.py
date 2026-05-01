@@ -726,7 +726,13 @@ class RiskEngine:
         # Handle pandas Timestamp → datetime
         if hasattr(current_time, "to_pydatetime"):
             current_time = current_time.to_pydatetime()
-        elapsed_minutes = (current_time - position.entry_time).total_seconds() / 60
+        # Normalise both to naive UTC to avoid TypeError on aware/naive mismatch.
+        if current_time.tzinfo is not None:
+            current_time = current_time.replace(tzinfo=None)
+        entry_time = position.entry_time
+        if entry_time.tzinfo is not None:
+            entry_time = entry_time.replace(tzinfo=None)
+        elapsed_minutes = (current_time - entry_time).total_seconds() / 60
         if self._timeframe_minutes <= 0:
             return 0
         return int(elapsed_minutes / self._timeframe_minutes)

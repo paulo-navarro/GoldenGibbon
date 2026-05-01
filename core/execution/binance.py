@@ -412,12 +412,6 @@ class BinanceExecutor:
         timestamp: datetime,
     ) -> Optional[ExecutionResult]:
         """CLOSE -> sell entire position."""
-        if self._exchange_stops_enabled:
-            pos = self._pm.get_position(decision.symbol)
-            if pos and pos.exchange_stop_order_id:
-                self._cancel_stop_order(decision.symbol, pos.exchange_stop_order_id)
-                self._pm.update_stop_order_id(decision.symbol, None)
-
         real_balance = self._get_available_balance(decision.symbol)
         if real_balance is not None and real_balance < decision.size:
             logger.warning(
@@ -477,6 +471,15 @@ class BinanceExecutor:
             )
             return None
 
+        # Cancel the exchange stop order only AFTER the sell is confirmed.
+        # If cancelled before and the sell fails, the position would be
+        # left unprotected (no stop, no exit).
+        if self._exchange_stops_enabled:
+            pos = self._pm.get_position(decision.symbol)
+            if pos and pos.exchange_stop_order_id:
+                self._cancel_stop_order(decision.symbol, pos.exchange_stop_order_id)
+                self._pm.update_stop_order_id(decision.symbol, None)
+
         fill_price = order.avg_fill_price or decision.price
 
         trade = self._pm.close_position(
@@ -531,6 +534,12 @@ class BinanceExecutor:
             if pos and pos.exchange_stop_order_id:
                 self._cancel_stop_order(decision.symbol, pos.exchange_stop_order_id)
                 self._pm.update_stop_order_id(decision.symbol, None)
+
+        # decision.size is the FULL position size from the risk engine.
+        # Compute the actual sell quantity using sell_fraction.
+        sell_fraction = decision.sell_fraction or Decimal("0.5")
+        sell_qty = decision.size * sell_fraction
+        decision = decision.model_copy(update={"size": sell_qty})
 
         real_balance = self._get_available_balance(decision.symbol)
         if real_balance is not None and real_balance < decision.size:
