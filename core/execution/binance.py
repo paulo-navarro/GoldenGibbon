@@ -602,6 +602,16 @@ class BinanceExecutor:
         stop_price: Decimal,
         slippage_pct: Decimal = Decimal("0.005"),
     ) -> Optional[str]:
+        real_balance = self._get_available_balance(symbol)
+        if real_balance is not None and real_balance < quantity:
+            logger.info(
+                "binance.stop_order_clamped_to_real_balance",
+                symbol=symbol,
+                requested=str(quantity),
+                available=str(real_balance),
+            )
+            quantity = real_balance
+
         qty = self._format_quantity(symbol, quantity)
         if qty <= 0:
             logger.error("binance.stop_order_zero_qty", symbol=symbol)
