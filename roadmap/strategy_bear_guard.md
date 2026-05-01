@@ -16,19 +16,20 @@
 | `EMA 50` vs `EMA 200` | `EMA 50 < EMA 200` | Death cross — bear structure confirmed |
 | `Close` vs `EMA 50` | `Close < EMA 50` | Price is below the fast MA — confirming direction |
 | `ADX(14)` | `> 25` | Real trend, not noise — same threshold as Smart Hodler |
-| `Volume` | `> SMA(20) of volume` | Selling pressure participates — not a low-volume drift |
+| `Volume` | `>= 70% of SMA(20) of volume` | Selling pressure softly confirmed — configurable threshold (`volume_filter_pct`) |
+| `Borrow Rate` | `<= max_borrow_rate_pct / day` | Margin cost gate — avoids entries when borrowing cost is elevated |
 
-**SHORT signal** requires **all four conditions** to be true simultaneously.
+**SHORT signal** requires the structural conditions (EMA cross, ADX, close vs EMA50) plus hourly and session filters. The volume threshold is configurable (default: 70% of SMA20, set to 0 to disable). The borrow rate gate is checked live before entry.
 
 **COVER signal** — tiered exit system:
 
 | Priority | Condition | Action | Rationale |
 |---|---|---|---|
 | 1 — Hard cover | `EMA 50 > EMA 200` | Cover 100% immediately | Trend structure is reversed — golden cross |
-| 2 — Confirmed reversal | `Close > EMA 200` for **2 consecutive candles** | Cover 100% | Price reclaimed the long-term MA (avoids wick fakeouts) |
+| 2 — Confirmed reversal | `Close > EMA 200` for **3 consecutive candles** | Cover 100% | Price reclaimed the long-term MA (avoids wick fakeouts) |
 | 3 — Momentum exhaustion | `RSI(1H) > 70` AND `ADX falling` (current < 3 bars ago) | Cover 50% of position | Downtrend losing steam but not yet reversed |
 
-> **Why tiered?** A single candle closing above EMA 200 on 15m is often a wick in a still-bearish market. Requiring 2-candle confirmation avoids covering too early. The partial cover on momentum exhaustion locks in profit without abandoning a trend that may resume its descent.
+> **Why tiered?** A single candle closing above EMA 200 on 15m is often a wick in a still-bearish market. Bear market bounces on 15m routinely last 1–2 candles before resuming — requiring 3-candle confirmation (45 minutes) provides a more reliable signal without waiting too long. The partial cover on momentum exhaustion locks in profit without abandoning a trend that may resume its descent.
 
 **HOLD** in all other cases.
 
@@ -57,9 +58,9 @@ Same dead zones as Smart Hodler — low liquidity makes short entries unpredicta
 
 ```
 SHORT     = (EMA50 < EMA200) AND (ADX > 25) AND (Close < EMA50)
-            AND (Volume > SMA20_Volume) AND (1H EMA21 falling) AND (1H RSI < 55)
-            AND (Session OK)
-COVER 100% = (EMA50 > EMA200) OR (Close > EMA200 for 2 consecutive candles)
+            AND (Volume >= volume_filter_pct × SMA20_Volume) AND (1H EMA21 falling)
+            AND (1H RSI < 55) AND (Session OK) AND (borrow_rate <= max_borrow_rate)
+COVER 100% = (EMA50 > EMA200) OR (Close > EMA200 for 3 consecutive candles)
 COVER  50% = (1H RSI > 70) AND (ADX falling)
 HOLD       = everything else
 ```
@@ -74,15 +75,15 @@ No scale-in on shorts — entering incrementally into a short position adds coun
 
 | Condition | Action | Size |
 |---|---|---|
-| First SHORT signal | Enter short position | 75% of available capital |
+| First SHORT signal | Enter short position | 50% of available capital |
 | COVER 100% signal | Close full short | 100% of position |
 | COVER 50% signal | Partial cover (momentum exhaustion) | 50% of current position |
 
-### Why 75%? Why no scale-in?
+### Why 50%? Why no scale-in?
 
-- 75% (not 100%) ensures capital is available for a concurrent long position on another symbol — the system can run Smart Hodler longs and BearGuard shorts simultaneously
-- Short positions carry asymmetric risk: the loss on a short is theoretically unlimited (price can rise indefinitely), while the max gain is capped at the entry price (price can only go to zero). The 3% hard stop bounds this in practice, but a lower base size adds a further buffer.
-- Scale-in is excluded because short trends are faster and more violent than bull trends — waiting for 8–16 candles to scale in typically misses the best part of the move
+- 50% (not 75%) reflects the asymmetric risk of shorts: losses are theoretically unlimited while gains are capped at entry price. The smaller base size is a structural safety buffer on top of the hard stop.
+- Capital is preserved for concurrent long positions — BearGuard at 50% and Smart Hodler at 75% can both run simultaneously without over-exposing the portfolio.
+- Scale-in is excluded because short trends are faster and more violent than bull trends — waiting for 8–16 candles to scale in typically misses the best part of the move.
 
 ---
 
@@ -90,17 +91,17 @@ No scale-in on shorts — entering incrementally into a short position adds coun
 
 ### Hard Stop (inverted)
 
-- **Max adverse move per trade:** `+3%` above entry price
+- **Max adverse move per trade:** `+5%` above entry price
 - For a short, the stop fires when price **rises** above entry, not falls below it
-- `hard_stop_price = entry_price × (1 + 0.03)`
+- `hard_stop_price = entry_price × (1 + 0.05)`
 - If triggered → cover immediately, enter **cooldown period** (16 candles / ~4 hours)
 
-> **Why 3%?** Matches Smart Hodler's hard stop percentage for symmetry and consistency. The break-even ratchet (see below) quickly moves the stop to lock in profit once the trade goes in our favour, so the initial 3% window is only exposed at the very start.
+> **Why 5%?** Bear markets routinely produce 3–4% counter-trend bounces within 15m candles before resuming the downtrend. A tighter stop would be triggered by normal volatility rather than genuine trend reversal. 5% gives the position room to breathe while the break-even ratchet (+2% / +4% milestones) quickly moves the stop toward entry once the trade is profitable, limiting actual risk exposure on winners.
 
 ### Trailing Stop (inverted)
 
 - Tracks the **lowest close** since entry (instead of highest close used for longs)
-- Stop price ratchets **downward** as price falls: `trailing_stop = lowest_close + (ATR × 2.0)`
+- Stop price ratchets **downward** as price falls: `trailing_stop = lowest_close + (ATR × 2.5)`
 - Stop never moves up (only downward ratchet)
 - If `close > trailing_stop_price` → cover immediately with `ExitReason.TRAILING_STOP`
 
@@ -170,7 +171,7 @@ Reuses existing `StrategyState` enum: `FLAT`, `POSITION`, `REDUCED`, `COOLDOWN`.
    └───────────┘                 └──────────────┘                  │  REDUCED   │
          ▲                         │                               │  (partial) │
          │                         │ COVER 100%                    └────────────┘
-         │                         │ (golden cross | 2 closes above EMA200)       │ COVER 100%
+         │                         │ (golden cross | 3 closes above EMA200)       │ COVER 100%
          │                         ▼                                               ▼
          └───────────────────── FLAT ◄──────────────────────────────────────── FLAT
          (no cooldown on                                           (no cooldown on
@@ -188,7 +189,7 @@ Reuses existing `StrategyState` enum: `FLAT`, `POSITION`, `REDUCED`, `COOLDOWN`.
 
 ### Key difference from Smart Hodler
 
-- **No scale-in** — single entry at 75% capital
+- **No scale-in** — single entry at 50% capital
 - **Inverted stop logic** — hard stop is above entry, trailing stop ratchets downward
 - **No cooldown on profit exits** — bear setups can re-emerge quickly; pausing unnecessarily sacrifices opportunity
 
@@ -210,7 +211,7 @@ class BearGuard(Strategy):
           - self._state (FLAT / POSITION / REDUCED / COOLDOWN)
 
         Returns:
-          - Signal.SHORT      → risk engine sizes the short (75% of capital)
+          - Signal.SHORT      → risk engine sizes the short (50% of capital)
           - Signal.SELL_FULL  → cover 100% of position (golden cross / confirmed reversal)
           - Signal.SELL_HALF  → cover 50% of position (momentum exhaustion)
           - Signal.HOLD       → no action
@@ -230,7 +231,7 @@ BearGuard is **regime-complementary** to Smart Hodler:
 | ADX < 25 (ranging) | HOLD | HOLD |
 | Mean Reversion territory (ADX < 25, oversold) | HOLD | HOLD |
 
-Both strategies can run on the same or different symbols simultaneously without conflicting — position sizing (75% each) assumes at most one active position per symbol per strategy. The regime gating system (`Phase 3`) already blocks Smart Hodler from entering during downtrends; BearGuard adds the mirror image.
+Both strategies can run on the same or different symbols simultaneously without conflicting — BearGuard at 50% and Smart Hodler at 75% means total exposure stays well-managed even when both are active. The regime gating system (`Phase 3`) already blocks Smart Hodler from entering during downtrends; BearGuard adds the mirror image.
 
 ---
 
@@ -258,18 +259,20 @@ bear_guard:
   adx_threshold: 25
   hourly_rsi_bear_threshold: 55
   hourly_ema_lookback: 4           # bars to look back for EMA21 direction
+  volume_filter_pct: 0.70          # volume must be >= 70% of SMA20 (0.0 = disabled)
+  max_borrow_rate_pct: 0.003       # block entry if daily borrow rate > 0.3%/day
 
   # Exit
   rsi_overbought_threshold: 70
   adx_falling_lookback: 3          # bars to look back for ADX direction
-  exit_confirmation_candles: 2     # consecutive candles above EMA200 to trigger full cover
+  exit_confirmation_candles: 3     # consecutive candles above EMA200 to trigger full cover
 
   # Sizing
-  position_size_pct: 0.75          # 75% of available capital
+  position_size_pct: 0.50          # 50% of available capital
 
   # Stops
-  hard_stop_pct: 0.03              # 3% adverse move above entry
-  trailing_stop_atr_multiplier: 2.0
+  hard_stop_pct: 0.05              # 5% adverse move above entry
+  trailing_stop_atr_multiplier: 2.5
   trailing_stop_enabled: true
   breakeven_trigger_pct: 0.02      # ratchet hard stop to entry at +2% profit
   lockin_trigger_pct: 0.04         # ratchet hard stop to +1% profit at +4% profit
