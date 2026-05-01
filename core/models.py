@@ -23,6 +23,13 @@ class Signal(str, Enum):
     SELL_FULL = "sell_full"  # Exit 100% of position
     SELL_HALF = "sell_half"  # Exit 50% of position (momentum fade)
     HOLD = "hold"
+    SHORT = "short"          # Open short position (bear trend)
+
+
+class PositionSide(str, Enum):
+    """Side of a position (long or short)."""
+    LONG = "long"
+    SHORT = "short"
 
 
 class StrategyState(str, Enum):
@@ -92,6 +99,7 @@ class RiskDecision(BaseModel):
     """
     action: RiskAction
     symbol: str = ""
+    side: PositionSide = PositionSide.LONG  # Position direction for executor
     size: Decimal = Decimal("0")           # Base-asset amount (e.g. BTC qty)
     price: Decimal = Decimal("0")          # Reference price (current close)
     exit_reason: Optional[ExitReason] = None
@@ -119,6 +127,7 @@ class StopCheckResult(BaseModel):
     """
     decision: Optional[RiskDecision] = None
     highest_close: Optional[Decimal] = None
+    lowest_close: Optional[Decimal] = None
     trailing_stop_price: Optional[Decimal] = None
     hard_stop_price: Optional[Decimal] = None
     cooldown_candles: Optional[int] = None
@@ -293,16 +302,18 @@ class Position(BaseModel):
     """
     Open position data.
     
-    Tracks an active long position with entry price, stops, and scaling info.
+    Tracks an active position with entry price, stops, and scaling info.
     """
     symbol: str
     strategy: str = "unknown"  # Strategy that opened this position
+    side: PositionSide = PositionSide.LONG  # Position direction
     size: Decimal  # Amount in base asset (e.g., BTC)
     entry_price: Decimal  # Average entry price
     entry_time: datetime
-    highest_close: Decimal  # For trailing stop calculation
+    highest_close: Decimal  # For trailing stop calculation (longs)
+    lowest_close: Optional[Decimal] = None  # For trailing stop calculation (shorts)
     trailing_stop_price: Decimal
-    hard_stop_price: Decimal  # -3% from entry
+    hard_stop_price: Decimal  # -3% from entry (longs) / +5% from entry (shorts)
     scale_in_count: int = 0  # 0, 1, 2 for 50%, 75%, 100%
     buy_signal_candles: int = 0  # Consecutive candles with BUY signal
     exchange_stop_order_id: Optional[str] = None
@@ -327,9 +338,13 @@ class Position(BaseModel):
         Returns:
             tuple: (pnl_usdt, pnl_percent)
         """
-        pnl_per_unit = current_price - self.entry_price
+        if self.side == PositionSide.SHORT:
+            pnl_per_unit = self.entry_price - current_price
+            pnl_percent = (self.entry_price - current_price) / self.entry_price * 100
+        else:
+            pnl_per_unit = current_price - self.entry_price
+            pnl_percent = (current_price / self.entry_price - 1) * 100
         pnl_usdt = pnl_per_unit * self.size
-        pnl_percent = (current_price / self.entry_price - 1) * 100
         return pnl_usdt, pnl_percent
     
     model_config = ConfigDict(
@@ -532,6 +547,34 @@ class MeanReversionConditions(BaseModel):
         ])
 
 
+class BearGuardConditions(BaseModel):
+    """
+    Conditions checklist for BearGuard strategy.
+
+    Used for debugging and UI display to show which conditions are met.
+    """
+    death_cross: bool = False
+    close_below_ema_fast: bool = False
+    adx_above_threshold: bool = False
+    volume_above_average: bool = False
+    hourly_ema_falling: bool = False
+    hourly_rsi_bearish: bool = False
+    session_filter_pass: bool = False
+
+    @property
+    def all_short_conditions_met(self) -> bool:
+        """Check if all SHORT conditions are satisfied."""
+        return all([
+            self.death_cross,
+            self.close_below_ema_fast,
+            self.adx_above_threshold,
+            self.volume_above_average,
+            self.hourly_ema_falling,
+            self.hourly_rsi_bearish,
+            self.session_filter_pass,
+        ])
+
+
 class StrategyStateResponse(BaseModel):
     """
     API response for a strategy state record.
@@ -686,6 +729,7 @@ class BacktestResult(BaseModel):
 
 __all__ = [
     "Signal",
+    "PositionSide",
     "StrategyState",
     "OrderSide",
     "OrderType",
@@ -703,6 +747,7 @@ __all__ = [
     "Portfolio",
     "StrategyConditions",
     "MeanReversionConditions",
+    "BearGuardConditions",
     "StrategyStateResponse",
     "StrategySignalSnapshot",
     "BacktestMetrics",

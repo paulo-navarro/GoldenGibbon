@@ -6,8 +6,10 @@ import pytest
 from pydantic import ValidationError
 
 from core.config import (
+    BearGuardConfig,
     SessionDeadZone,
     Settings,
+    ShortConfig,
     SmartHodlerConfig,
     SymbolConfig,
     get_settings,
@@ -339,3 +341,88 @@ class TestEdgeCases:
         )
         assert len(settings.symbols) == 2
         assert len(settings.enabled_symbols) == 0
+
+
+# ── Short Config Tests ────────────────────────────────────────────────────────
+
+class TestShortConfig:
+    """Tests for ShortConfig (global kill switch)."""
+
+    def test_default_disabled(self):
+        """Shorts are disabled by default."""
+        config = ShortConfig()
+        assert config.enabled is False
+
+    def test_explicit_enabled(self):
+        config = ShortConfig(enabled=True)
+        assert config.enabled is True
+
+
+# ── BearGuard Config Tests ────────────────────────────────────────────────────
+
+class TestBearGuardConfig:
+    """Tests for BearGuardConfig validation."""
+
+    def test_default_values(self):
+        """Test that all defaults match strategy spec § 10."""
+        config = BearGuardConfig()
+        assert config.enabled is True
+        assert config.timeframe_primary == "15m"
+        assert config.timeframe_confirmation == "1h"
+        assert config.ema_fast == 50
+        assert config.ema_slow == 200
+        assert config.adx_threshold == 25
+        assert config.hourly_rsi_bear_threshold == 55
+        assert config.hourly_ema_lookback == 4
+        assert config.volume_filter_pct == 0.70
+        assert config.rsi_overbought_threshold == 70
+        assert config.adx_falling_lookback == 3
+        assert config.exit_confirmation_candles == 3
+        assert config.position_size_pct == 0.50
+        assert config.hard_stop_pct == 0.05
+        assert config.trailing_stop_atr_multiplier == 2.5
+        assert config.trailing_stop_enabled is True
+        assert config.breakeven_trigger_pct == 0.02
+        assert config.lockin_trigger_pct == 0.04
+        assert config.lockin_stop_pct == 0.01
+        assert config.cooldown_candles == 16
+        assert config.margin_type == "cross"
+        assert config.max_borrow_rate_pct == 0.003
+
+    def test_custom_overrides(self):
+        config = BearGuardConfig(
+            adx_threshold=30,
+            hard_stop_pct=0.08,
+            position_size_pct=0.40,
+            margin_type="isolated",
+        )
+        assert config.adx_threshold == 30
+        assert config.hard_stop_pct == 0.08
+        assert config.position_size_pct == 0.40
+        assert config.margin_type == "isolated"
+
+    def test_percentage_bounds(self):
+        """Test that bounded floats reject invalid values."""
+        with pytest.raises(ValidationError):
+            BearGuardConfig(hard_stop_pct=1.5)
+
+        with pytest.raises(ValidationError):
+            BearGuardConfig(position_size_pct=0)
+
+        with pytest.raises(ValidationError):
+            BearGuardConfig(position_size_pct=-0.1)
+
+    def test_ema_period_too_large(self):
+        with pytest.raises(ValidationError, match="EMA period too large"):
+            BearGuardConfig(ema_fast=1000)
+
+    def test_invalid_margin_type(self):
+        with pytest.raises(ValidationError, match="Invalid margin_type"):
+            BearGuardConfig(margin_type="leverage")
+
+    def test_settings_has_shorts_and_bear_guard(self):
+        """Settings exposes shorts kill switch and bear_guard config."""
+        settings = Settings(symbols=[])
+        assert settings.shorts.enabled is False
+        assert settings.strategies.bear_guard.hard_stop_pct == 0.05
+        assert settings.strategies.bear_guard.margin_type == "cross"

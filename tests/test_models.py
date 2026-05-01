@@ -11,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from core.models import (
+    BearGuardConditions,
     Candle,
     ExitReason,
     MarketData,
@@ -20,7 +21,11 @@ from core.models import (
     OrderType,
     Portfolio,
     Position,
+    PositionSide,
+    RiskAction,
+    RiskDecision,
     Signal,
+    StopCheckResult,
     StrategyConditions,
     StrategyState,
     Trade,
@@ -487,3 +492,161 @@ class TestEnums:
         assert ExitReason.EMA_CROSS.value == "ema_cross"
         assert ExitReason.TRAILING_STOP.value == "trailing_stop"
         assert ExitReason.HARD_STOP.value == "hard_stop"
+
+
+# ── Phase 5.1: Short Support Model Tests ────────────────────────────────────
+
+
+class TestPositionSide:
+    """Tests for PositionSide enum."""
+
+    def test_position_side_values(self):
+        assert PositionSide.LONG.value == "long"
+        assert PositionSide.SHORT.value == "short"
+
+    def test_signal_short_exists(self):
+        assert Signal.SHORT.value == "short"
+
+
+class TestPositionShort:
+    """Tests for Position model with short support."""
+
+    def _make_long_position(self) -> Position:
+        return Position(
+            symbol="BTCUSDT",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000.00"),
+            entry_time=datetime(2026, 2, 17, 10, 0),
+            highest_close=Decimal("50200.00"),
+            trailing_stop_price=Decimal("49800.00"),
+            hard_stop_price=Decimal("48500.00"),
+        )
+
+    def _make_short_position(self) -> Position:
+        return Position(
+            symbol="BTCUSDT",
+            side=PositionSide.SHORT,
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000.00"),
+            entry_time=datetime(2026, 2, 17, 10, 0),
+            highest_close=Decimal("50000.00"),
+            lowest_close=Decimal("49000.00"),
+            trailing_stop_price=Decimal("51500.00"),
+            hard_stop_price=Decimal("52500.00"),
+        )
+
+    def test_default_side_is_long(self):
+        pos = self._make_long_position()
+        assert pos.side == PositionSide.LONG
+
+    def test_short_side(self):
+        pos = self._make_short_position()
+        assert pos.side == PositionSide.SHORT
+
+    def test_lowest_close_optional(self):
+        pos = self._make_long_position()
+        assert pos.lowest_close is None
+
+    def test_lowest_close_set(self):
+        pos = self._make_short_position()
+        assert pos.lowest_close == Decimal("49000.00")
+
+    def test_calculate_unrealized_pnl_long_profit(self):
+        """Existing long PnL logic unchanged — price up = profit."""
+        pos = self._make_long_position()
+        pnl_usdt, pnl_percent = pos.calculate_unrealized_pnl(Decimal("51000.00"))
+        assert pnl_usdt == Decimal("100.00")  # (51000 - 50000) * 0.1
+        assert pnl_percent == Decimal("2.00")
+
+    def test_calculate_unrealized_pnl_long_loss(self):
+        """Long — price down = loss."""
+        pos = self._make_long_position()
+        pnl_usdt, pnl_percent = pos.calculate_unrealized_pnl(Decimal("49000.00"))
+        assert pnl_usdt == Decimal("-100.00")
+        assert pnl_percent == Decimal("-2.00")
+
+    def test_calculate_unrealized_pnl_short_profit(self):
+        """Short — price down = profit."""
+        pos = self._make_short_position()
+        pnl_usdt, pnl_percent = pos.calculate_unrealized_pnl(Decimal("45000.00"))
+        # (50000 - 45000) * 0.1 = 500
+        assert pnl_usdt == Decimal("500.00")
+        # (50000 - 45000) / 50000 * 100 = 10%
+        assert pnl_percent == Decimal("10.00")
+
+    def test_calculate_unrealized_pnl_short_loss(self):
+        """Short — price up = loss."""
+        pos = self._make_short_position()
+        pnl_usdt, pnl_percent = pos.calculate_unrealized_pnl(Decimal("55000.00"))
+        # (50000 - 55000) * 0.1 = -500
+        assert pnl_usdt == Decimal("-500.00")
+        # (50000 - 55000) / 50000 * 100 = -10%
+        assert pnl_percent == Decimal("-10.00")
+
+
+class TestRiskDecisionSide:
+    """Tests for RiskDecision side field."""
+
+    def test_default_side_is_long(self):
+        decision = RiskDecision(action=RiskAction.OPEN)
+        assert decision.side == PositionSide.LONG
+
+    def test_short_side(self):
+        decision = RiskDecision(action=RiskAction.OPEN, side=PositionSide.SHORT)
+        assert decision.side == PositionSide.SHORT
+
+
+class TestStopCheckResultLowestClose:
+    """Tests for StopCheckResult lowest_close field."""
+
+    def test_lowest_close_default_none(self):
+        result = StopCheckResult()
+        assert result.lowest_close is None
+
+    def test_lowest_close_set(self):
+        result = StopCheckResult(lowest_close=Decimal("48000.00"))
+        assert result.lowest_close == Decimal("48000.00")
+
+
+class TestBearGuardConditions:
+    """Tests for BearGuardConditions model."""
+
+    def test_all_false_by_default(self):
+        conds = BearGuardConditions()
+        assert conds.all_short_conditions_met is False
+
+    def test_all_true(self):
+        conds = BearGuardConditions(
+            death_cross=True,
+            close_below_ema_fast=True,
+            adx_above_threshold=True,
+            volume_above_average=True,
+            hourly_ema_falling=True,
+            hourly_rsi_bearish=True,
+            session_filter_pass=True,
+        )
+        assert conds.all_short_conditions_met is True
+
+    @pytest.mark.parametrize("field", [
+        "death_cross",
+        "close_below_ema_fast",
+        "adx_above_threshold",
+        "volume_above_average",
+        "hourly_ema_falling",
+        "hourly_rsi_bearish",
+        "session_filter_pass",
+    ])
+    def test_one_false_blocks(self, field):
+        """If any single condition is False, all_short_conditions_met is False."""
+        kwargs = {
+            "death_cross": True,
+            "close_below_ema_fast": True,
+            "adx_above_threshold": True,
+            "volume_above_average": True,
+            "hourly_ema_falling": True,
+            "hourly_rsi_bearish": True,
+            "session_filter_pass": True,
+        }
+        kwargs[field] = False
+        conds = BearGuardConditions(**kwargs)
+        assert conds.all_short_conditions_met is False

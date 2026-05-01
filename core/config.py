@@ -60,6 +60,14 @@ class SymbolsConfig(BaseModel):
         return [s for s in self.symbols if s.enabled]
 
 
+# ── Short Selling Configuration ───────────────────────────────────────────────
+
+class ShortConfig(BaseModel):
+    """Global short-selling configuration (kill switch)."""
+
+    enabled: bool = Field(default=False, description="Master switch — set True to enable short entries")
+
+
 # ── Strategy Configuration ────────────────────────────────────────────────────
 
 class SessionDeadZone(BaseModel):
@@ -198,6 +206,77 @@ class MeanReversionStrategyConfig(BaseModel):
     session_dead_zones: List[SessionDeadZone] = Field(default_factory=list)
 
 
+class BearGuardConfig(BaseModel):
+    """Configuration for the BearGuard (bear trend short) strategy."""
+
+    enabled: bool = Field(default=True)
+    description: Optional[str] = None
+    allocation_pct: Optional[float] = Field(default=None, ge=0, le=1, description="Capital allocation weight (0–1). None = equal split.")
+
+    # Timeframes
+    timeframe_primary: str = Field(default="15m")
+    timeframe_confirmation: str = Field(default="1h")
+
+    # Trend Detection (15m)
+    ema_fast: int = Field(default=50, ge=1)
+    ema_slow: int = Field(default=200, ge=1)
+    adx_period: int = Field(default=14, ge=1)
+    adx_threshold: float = Field(default=25, ge=0, le=100)
+    volume_sma_period: int = Field(default=20, ge=1)
+    volume_filter_pct: float = Field(default=0.70, gt=0, le=5.0)
+
+    # Hourly Confirmation (1H)
+    hourly_ema_lookback: int = Field(default=4, ge=1)
+    hourly_rsi_bear_threshold: float = Field(default=55, ge=0, le=100)
+    rsi_period: int = Field(default=14, ge=1)
+
+    # Exit Strategy
+    rsi_overbought_threshold: float = Field(default=70, ge=0, le=100)
+    adx_falling_lookback: int = Field(default=3, ge=1)
+    exit_confirmation_candles: int = Field(default=3, ge=1)
+
+    # Position Sizing (single entry, no scale-in)
+    position_size_pct: float = Field(default=0.50, gt=0, le=1)
+
+    # Stop-Loss
+    atr_period: int = Field(default=14, ge=1)
+    hard_stop_pct: float = Field(default=0.05, gt=0, le=1)
+    trailing_stop_atr_multiplier: float = Field(default=2.5, gt=0)
+    trailing_stop_enabled: bool = Field(default=True)
+
+    # Break-even ratchet
+    breakeven_trigger_pct: float = Field(default=0.02, ge=0, le=0.5)
+    lockin_trigger_pct: float = Field(default=0.04, ge=0, le=0.5)
+    lockin_stop_pct: float = Field(default=0.01, ge=0, le=0.5)
+
+    # Cooldown
+    cooldown_candles: int = Field(default=16, ge=0)
+
+    # Session Filter
+    session_filter_enabled: bool = Field(default=True)
+    session_dead_zones: List[SessionDeadZone] = Field(default_factory=list)
+
+    # Margin
+    margin_type: str = Field(default="cross")
+    max_borrow_rate_pct: float = Field(default=0.003, ge=0, le=0.1)
+
+    @field_validator("ema_fast", "ema_slow")
+    @classmethod
+    def validate_ema_periods(cls, v: int) -> int:
+        """Ensure EMA periods are reasonable."""
+        if v > 500:
+            raise ValueError(f"EMA period too large: {v}")
+        return v
+
+    @field_validator("margin_type")
+    @classmethod
+    def validate_margin_type(cls, v: str) -> str:
+        """Validate margin type."""
+        if v not in {"cross", "isolated"}:
+            raise ValueError(f"Invalid margin_type: {v}. Must be 'cross' or 'isolated'")
+        return v
+
+
 class StrategiesConfig(BaseModel):
     """Root configuration for all strategies."""
 
@@ -207,6 +286,7 @@ class StrategiesConfig(BaseModel):
     mean_reversion: MeanReversionStrategyConfig = Field(
         default_factory=MeanReversionStrategyConfig
     )
+    bear_guard: BearGuardConfig = Field(default_factory=BearGuardConfig)
 
     def get_strategy_config(self, name: str) -> BaseModel | Dict | None:
         """Return the config for a strategy by name, or None."""
@@ -426,6 +506,7 @@ NAMESPACE_MODELS: Dict[str, type] = {
     "alerting": AlertingConfig,
     "regime": RegimeConfig,
     "system": SystemConfig,
+    "shorts": ShortConfig,
 }
 
 
@@ -438,6 +519,7 @@ class Settings(BaseModel):
 
     symbols: List[SymbolConfig]
     strategies: StrategiesConfig = Field(default_factory=StrategiesConfig)
+    shorts: ShortConfig = Field(default_factory=ShortConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     data: DataConfig = Field(default_factory=DataConfig)
@@ -478,7 +560,7 @@ class Settings(BaseModel):
 
         # Load strategies
         strategies_dict: Dict[str, Any] = {}
-        for strategy_name in ["smart_hodler", "mean_reversion"]:
+        for strategy_name in ["smart_hodler", "mean_reversion", "bear_guard"]:
             db_data = _load_db_config(strategy_name)
             if db_data:
                 strategies_dict[strategy_name] = db_data

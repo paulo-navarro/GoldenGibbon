@@ -55,14 +55,14 @@ shorts:
 > **Prerequisite for:** everything else.
 > All changes are additive — no existing field is removed or renamed.
 
-- [ ] **5.1.1** Add `PositionSide` enum with values `LONG = "long"` and `SHORT = "short"`
-- [ ] **5.1.2** Add `Signal.SHORT = "short"` to the `Signal` enum
-- [ ] **5.1.3** Add `side: PositionSide = PositionSide.LONG` field to the `Position` model (default preserves all existing long positions)
-- [ ] **5.1.4** Add `lowest_close: Optional[Decimal] = None` to the `Position` model (short trailing stop tracks the lowest close since entry — mirrors `highest_close` for longs)
-- [ ] **5.1.5** Update `Position.calculate_unrealized_pnl()`: when `side == SHORT`, flip sign — `pnl_per_unit = entry_price - current_price` (instead of `current_price - entry_price`)
-- [ ] **5.1.6** Add `side: PositionSide = PositionSide.LONG` to `RiskDecision` model (executor reads this to know what kind of position to open)
-- [ ] **5.1.7** Add `BearGuardConditions` Pydantic model (fields: `death_cross`, `close_below_ema_fast`, `adx_above_threshold`, `volume_above_average`, `hourly_ema_falling`, `hourly_rsi_bearish`, `session_filter_pass`; property `all_short_conditions_met`) — follow `StrategyConditions` and `MeanReversionConditions` as pattern
-- [ ] **5.1.8** Export `PositionSide` and `BearGuardConditions` in `__all__`
+- [x] **5.1.1** Add `PositionSide` enum with values `LONG = "long"` and `SHORT = "short"`
+- [x] **5.1.2** Add `Signal.SHORT = "short"` to the `Signal` enum
+- [x] **5.1.3** Add `side: PositionSide = PositionSide.LONG` field to the `Position` model (default preserves all existing long positions)
+- [x] **5.1.4** Add `lowest_close: Optional[Decimal] = None` to the `Position` model (short trailing stop tracks the lowest close since entry — mirrors `highest_close` for longs)
+- [x] **5.1.5** Update `Position.calculate_unrealized_pnl()`: when `side == SHORT`, flip sign — `pnl_per_unit = entry_price - current_price` (instead of `current_price - entry_price`)
+- [x] **5.1.6** Add `side: PositionSide = PositionSide.LONG` to `RiskDecision` model (executor reads this to know what kind of position to open)
+- [x] **5.1.7** Add `BearGuardConditions` Pydantic model (fields: `death_cross`, `close_below_ema_fast`, `adx_above_threshold`, `volume_above_average`, `hourly_ema_falling`, `hourly_rsi_bearish`, `session_filter_pass`; property `all_short_conditions_met`) — follow `StrategyConditions` and `MeanReversionConditions` as pattern
+- [x] **5.1.8** Export `PositionSide` and `BearGuardConditions` in `__all__`
 
 **No migration needed** — `Position` is a Pydantic model, not an ORM model. The DB ORM `PositionRecord` (if it exists in `db/models.py`) may need a separate migration; evaluate in 5.1.x follow-up.
 
@@ -73,18 +73,18 @@ shorts:
 > **Prerequisite for:** risk engine (5.3), tick loop gating.
 > All fields have safe defaults so existing configs need no changes.
 
-- [ ] **5.2.1** Add `ShortConfig` Pydantic settings class with field `enabled: bool = Field(default=False)` — master kill switch
-- [ ] **5.2.2** Add `shorts: ShortConfig` field to the top-level `Settings` class
-- [ ] **5.2.3** Add `BearGuardConfig` strategy config class with all parameters from [strategy_bear_guard.md § 10](strategy_bear_guard.md#10-risk-parameters-default-config):
+- [x] **5.2.1** Add `ShortConfig` Pydantic settings class with field `enabled: bool = Field(default=False)` — master kill switch
+- [x] **5.2.2** Add `shorts: ShortConfig` field to the top-level `Settings` class
+- [x] **5.2.3** Add `BearGuardConfig` strategy config class with all parameters from [strategy_bear_guard.md § 10](strategy_bear_guard.md#10-risk-parameters-default-config):
   - Entry: `adx_threshold`, `hourly_rsi_bear_threshold`, `hourly_ema_lookback`
   - Exit: `rsi_overbought_threshold`, `adx_falling_lookback`, `exit_confirmation_candles`
   - Sizing: `position_size_pct`
   - Stops: `hard_stop_pct`, `trailing_stop_atr_multiplier`, `trailing_stop_enabled`, `breakeven_trigger_pct`, `lockin_trigger_pct`, `lockin_stop_pct`
   - Cooldown: `cooldown_candles`
   - Margin: `margin_type`
-- [ ] **5.2.4** Add `bear_guard: BearGuardConfig` to the `StrategiesConfig` class
-- [ ] **5.2.5** Add `bear_guard` section with defaults to `strategies.yaml`
-- [ ] **5.2.6** Write unit test in `tests/test_config.py`: load config with `bear_guard` section, assert all fields parse correctly and defaults are sane
+- [x] **5.2.4** Add `bear_guard: BearGuardConfig` to the `StrategiesConfig` class
+- [x] **5.2.5** Add `bear_guard` section with defaults to `strategies.yaml`
+- [x] **5.2.6** Write unit test in `tests/test_config.py`: load config with `bear_guard` section, assert all fields parse correctly and defaults are sane
 
 ---
 
