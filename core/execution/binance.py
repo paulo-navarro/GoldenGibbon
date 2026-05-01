@@ -603,7 +603,7 @@ class BinanceExecutor:
         slippage_pct: Decimal = Decimal("0.005"),
     ) -> Optional[str]:
         real_balance = self._get_available_balance(symbol)
-        if real_balance is not None and real_balance < quantity:
+        if real_balance is not None and real_balance > 0 and real_balance < quantity:
             logger.info(
                 "binance.stop_order_clamped_to_real_balance",
                 symbol=symbol,
