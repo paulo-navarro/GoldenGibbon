@@ -64,7 +64,7 @@ function BalanceCards() {
     { label: 'Total PnL', value: `$${fmt(portfolio.total_pnl)}`, color: pnlColor(portfolio.total_pnl) },
     { label: 'Equity', value: `$${fmt(portfolio.equity)}` },
     { label: 'USDT Balance', value: `$${fmt(portfolio.usdt_balance)}` },
-    { label: 'Positions Value', value: `$${fmt(portfolio.positions_cost_basis)}` },
+    { label: 'Positions Value', value: `$${fmt(portfolio.positions_value)}` },
   ];
 
   return (
