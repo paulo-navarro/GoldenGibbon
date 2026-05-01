@@ -159,7 +159,7 @@ class Candle(BaseModel):
         if v is not None:
             value = Decimal(str(v))
             if value <= 0:
-                raise ValueError("Price must be strictly positive")
+                raise ValueError("Price must be positive")
             return value
         return v
 
