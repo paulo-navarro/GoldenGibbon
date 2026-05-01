@@ -1049,7 +1049,7 @@ def run_single_strategy_tick(
         # ── 0b. Sync exchange stop config from live settings ──
         if hasattr(comp.executor, "_exchange_stops_enabled"):
             comp.executor._exchange_stops_enabled = settings.execution.exchange_stop_orders_enabled
-            comp.executor._stop_slippage = settings.execution.stop_limit_slippage_pct
+            comp.executor._stop_slippage = Decimal(str(settings.execution.stop_limit_slippage_pct))
 
         # ── 1. Load data + indicators from DB cache ──────────
         with get_session() as session:
