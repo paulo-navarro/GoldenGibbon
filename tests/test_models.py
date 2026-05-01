@@ -135,6 +135,7 @@ class TestTrade:
         """Test creating a valid trade."""
         trade = Trade(
             symbol="BTCUSDT",
+            strategy="smart_hodler",
             entry_price=Decimal("50000.00"),
             exit_price=Decimal("51000.00"),
             size=Decimal("0.1"),
@@ -220,7 +221,7 @@ class TestPortfolio:
         
         assert len(portfolio.positions) == 1
         assert portfolio.open_trades_count == 1
-        assert portfolio.positions_value == Decimal("5000.00")  # 0.1 * 50000
+        assert portfolio.positions_cost_basis == Decimal("5000.00")  # 0.1 * 50000
     
     def test_update_equity(self):
         """Test equity update with current prices."""

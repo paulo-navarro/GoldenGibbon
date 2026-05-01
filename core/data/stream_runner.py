@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import signal
 import sys
+from collections import OrderedDict
 from typing import Dict, Set, Tuple
 
 import structlog
@@ -30,8 +31,10 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 # Track already-triggered candle closes to prevent duplicates.
-# Key: (symbol, timeframe, open_time_iso).  Used as a bounded set.
-_closed_candles: Set[Tuple[str, str, str]] = set()
+# Key: (symbol, timeframe, open_time_iso).  OrderedDict preserves insertion
+# order so the oldest entry is always evicted first (FIFO), unlike set.pop()
+# which removes an arbitrary element.
+_closed_candles: OrderedDict[Tuple[str, str, str], None] = OrderedDict()
 _MAX_CLOSED_CACHE = 500  # trim when exceeded
 
 
@@ -79,13 +82,10 @@ def on_close(update: dict) -> None:
         logger.debug("stream_runner.duplicate_close_skipped", key=key)
         return
 
-    _closed_candles.add(key)
-    if len(_closed_candles) > _MAX_CLOSED_CACHE:
-        # Trim oldest half.  set() is unordered but we only need a rough
-        # bound — precision doesn't matter.
-        excess = len(_closed_candles) - _MAX_CLOSED_CACHE // 2
-        for _ in range(excess):
-            _closed_candles.pop()
+    _closed_candles[key] = None
+    # Evict the oldest entries when the cache exceeds the size limit.
+    while len(_closed_candles) > _MAX_CLOSED_CACHE:
+        _closed_candles.popitem(last=False)
 
     from core.events import EventChannel, EventType, get_publisher
 

@@ -30,7 +30,7 @@ The `candles` table defines `volume` and `quote_volume` as `Numeric(20, 8)`, whi
 
 - [x] Create an alembic migration to `ALTER COLUMN` `volume` and `quote_volume` from `Numeric(20, 8)` to `Numeric(30, 8)` (supports up to 10^22 integer digits)
 - [x] Update `db/models.py` `CandleRecord` to match
-- [ ] Run migration on production DB
+- [x] Run migration on production DB
 
 ---
 
@@ -101,7 +101,130 @@ The most likely reason the DB state was never cleaned up: the persist step (`_pe
 
 ### Fix
 
-- [ ] Immediate fix: redeploy and let reconciliation auto-repair BIOUSDT (or manually delete stale `PositionRecord` and set `StrategyStateRecord.state` to `flat`)
+- [x] Immediate fix: redeploy and let reconciliation auto-repair BIOUSDT (or manually delete stale `PositionRecord` and set `StrategyStateRecord.state` to `flat`)
 - [x] Code fix: make exchange reconciliation auto-repair when local position exists but Binance has zero balance for that asset (upgrade Check E from advisory to corrective)
 - [x] Auto-repair evicts in-memory `_worker_state` cache so next tick rebuilds from corrected DB
 - [x] Exchange reconciliation now returns `repairs` list and publishes `RECONCILIATION_REPAIRED` events
+
+---
+
+## BUG-004: `Portfolio.positions_value` uses entry price instead of mark-to-market
+
+**Status:** Fixed
+**Reported:** 2026-05-01
+
+### Symptom
+
+`DeprecationWarning: datetime.datetime.utcnow() is deprecated` appears in test output. Will raise an error in Python 3.14.
+
+### Affected code
+
+- `core/models.py` — `Order.created_at` field default: `Field(default_factory=datetime.utcnow)`
+- `core/data/loader.py` (×2) — `end_date = datetime.utcnow()`
+
+### Fix
+
+- [x] Replace all `datetime.utcnow()` with `datetime.now(timezone.utc)` in the affected files
+- [x] Normalise naive datetimes passed to `_fetch_in_chunks` (including `last_candle_time` from mocked candles) to UTC-aware to avoid offset-naive comparison errors
+
+### Symptom
+
+`Portfolio.positions_value` (a `@property` on the Pydantic model) calculated position value using `entry_price` instead of the current market price. The `KillSwitch` reads `portfolio.equity` to decide whether to halt trading — but `equity` is only correct after `update_equity(current_prices)` is called. Any codepath that skips that call and falls back to `positions_value` would see stale cost-basis values, meaning a position deep in the red would not trigger the global drawdown stop.
+
+Additionally, `backtest/metrics.py` used `positions_value` as a fallback for `initial_capital` when the equity curve was empty — incorrectly inflating the initial capital figure.
+
+### Affected code
+
+- `core/models.py` — `Portfolio.positions_value` property
+- `core/backtest/metrics.py` — fallback `usdt_balance + positions_value`
+
+### Fix
+
+- [x] Rename `Portfolio.positions_value` → `Portfolio.positions_cost_basis` with a clear docstring marking it as cost basis (not MTM)
+- [x] Fix `backtest/metrics.py` fallback: use `usdt_balance` only (when equity curve is empty, no positions were open)
+- [x] Update `tests/test_models.py` and `frontend/src/pages/PortfolioPage.tsx` to use the renamed property
+
+---
+
+## BUG-005: `datetime.utcnow()` is deprecated and will break on Python 3.14
+
+**Status:** Fixed
+**Reported:** 2026-05-01
+
+---
+
+## BUG-006: Sharpe ratio uses population variance instead of sample variance
+
+**Status:** Fixed
+**Reported:** 2026-05-01
+
+### Symptom
+
+Sharpe ratio is overestimated, especially for short backtests (< 200 candles). The formula divides by `len(returns)` (population variance) instead of `len(returns) - 1` (sample variance / Bessel's correction), which is the standard for financial time series.
+
+### Affected code
+
+- `core/backtest/metrics.py:192` — `variance = sum(...) / len(returns)`
+
+### Fix
+
+- [x] Change divisor to `len(returns) - 1` and raise the minimum snapshot guard from `< 2` to `< 3` to prevent division-by-zero with Bessel's correction
+
+---
+
+## BUG-007: `_closed_candles.pop()` evicts a random entry, risking duplicate tick triggers
+
+**Status:** Fixed
+**Reported:** 2026-05-01
+
+### Symptom
+
+After a WebSocket reconnect, a candle that was recently processed could be re-triggered if its key was the one randomly evicted from the dedup set during the trim. `set.pop()` is unordered in CPython. Additionally, the set is in-memory only — a worker restart clears it entirely, allowing any candle to be re-triggered once.
+
+### Affected code
+
+- `core/data/stream_runner.py:83-88` — trim loop using `set.pop()`
+
+### Fix
+
+- [x] Replace in-memory `set` with a size-bounded `collections.OrderedDict` so the oldest entry is always evicted first (FIFO / `popitem(last=False)`), eliminating the random eviction risk
+
+---
+
+## BUG-008: `DataLoader._fetch_in_chunks` silently skips failed chunks
+
+**Status:** Fixed
+**Reported:** 2026-05-01
+
+### Symptom
+
+When a Binance API call fails mid-fetch, the loader logs an error but continues with the next chunk. The caller receives a partial candle list with no indication of how many candles are missing. Backtests running on this data produce results that silently cover a shorter window than requested.
+
+### Affected code
+
+- `core/data/loader.py` — `_fetch_in_chunks` `except` block advances `current_start = current_end` and continues
+
+### Fix
+
+- [x] Track failed chunk date ranges in `failed_chunks` list
+- [x] After the loop, emit a `logger.warning` listing all failed ranges so the caller sees a clear indication that data may have gaps
+
+---
+
+## BUG-009: `Trade.strategy` default is hardcoded to `"smart_hodler"`
+
+**Status:** Fixed
+**Reported:** 2026-05-01
+
+### Symptom
+
+`Trade` Pydantic model has `strategy: str = "smart_hodler"`. If the `strategy` field is not explicitly passed when constructing a `Trade`, trades from Mean Reversion (or any future strategy) are recorded in the DB and displayed in the UI as `smart_hodler`. Metrics and filtering by strategy name are silently wrong.
+
+### Affected code
+
+- `core/models.py` — `Trade` model field definition
+
+### Fix
+
+- [x] Remove default — `strategy` is now a required field, forcing all callers to supply it explicitly
+- [x] Updated `tests/test_models.py` and `tests/test_database.py` to pass `strategy` explicitly

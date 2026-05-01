@@ -256,6 +256,7 @@ class TestConversions:
         """Test Pydantic Trade ↔ ORM TradeRecord conversion."""
         pydantic_trade = Trade(
             symbol="TESTUSDT9",
+            strategy="smart_hodler",
             entry_price=Decimal("50000.00"),
             exit_price=Decimal("51000.00"),
             size=Decimal("0.1"),

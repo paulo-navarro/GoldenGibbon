@@ -40,7 +40,10 @@ def compute_metrics(result: BacktestResult) -> BacktestMetrics:
     Returns:
         A populated ``BacktestMetrics`` model.
     """
-    initial_capital = result.portfolio.equity_curve[0].total_equity if result.equity_curve else result.portfolio.usdt_balance + result.portfolio.positions_value
+    # equity_curve[0] is the authoritative initial capital.
+    # Fallback: when the equity curve is empty no trades ran, so
+    # positions_value is 0 and initial_capital == usdt_balance.
+    initial_capital = result.portfolio.equity_curve[0].total_equity if result.equity_curve else result.portfolio.usdt_balance
     final_capital = result.equity_curve[-1].total_equity if result.equity_curve else initial_capital
 
     total_return = _pct(final_capital, initial_capital)
@@ -172,7 +175,8 @@ def _sharpe_ratio(equity_curve: List[PortfolioSnapshot]) -> Decimal | None:
     The annualisation factor is derived from the date range and number
     of snapshots so it works for any timeframe.
     """
-    if len(equity_curve) < 2:
+    # Need at least 3 snapshots (2 returns) for Bessel-corrected std dev (n-1 >= 1).
+    if len(equity_curve) < 3:
         return None
 
     # Per-snapshot simple returns
@@ -189,7 +193,8 @@ def _sharpe_ratio(equity_curve: List[PortfolioSnapshot]) -> Decimal | None:
         return None
 
     mean_ret = sum(returns) / len(returns)
-    variance = sum((r - mean_ret) ** 2 for r in returns) / len(returns)
+    # Bessel's correction (n-1) for sample standard deviation
+    variance = sum((r - mean_ret) ** 2 for r in returns) / (len(returns) - 1)
     std_ret = math.sqrt(variance)
 
     if std_ret == 0.0:

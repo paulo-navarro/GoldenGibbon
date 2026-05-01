@@ -6,7 +6,7 @@ They are separate from database ORM models to maintain clean separation
 between business logic and persistence layers.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -336,7 +336,7 @@ class Trade(BaseModel):
     Represents a completed trade with entry/exit details and PnL.
     """
     symbol: str
-    strategy: str = "smart_hodler"
+    strategy: str  # required — must be supplied by the caller (e.g. "smart_hodler", "mean_reversion")
     entry_price: Decimal
     exit_price: Decimal
     size: Decimal
@@ -379,7 +379,7 @@ class Order(BaseModel):
     limit_price: Optional[Decimal] = None  # Explicit limit price (separate from fill price)
     reject_reason: Optional[str] = None  # Why the exchange rejected/cancelled
     exchange_status: Optional[str] = None  # Raw exchange status string for debugging
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: Optional[datetime] = None
     filled_at: Optional[datetime] = None
     
@@ -432,8 +432,12 @@ class Portfolio(BaseModel):
         return self.usdt_balance
     
     @property
-    def positions_value(self) -> Decimal:
-        """Calculate total value of open positions."""
+    def positions_cost_basis(self) -> Decimal:
+        """Total cost basis of open positions (entry_price × size).
+
+        This is NOT mark-to-market. Use ``equity`` (updated by
+        ``update_equity()``) for the current market value.
+        """
         return sum(
             pos.size * pos.entry_price
             for pos in self.positions.values()

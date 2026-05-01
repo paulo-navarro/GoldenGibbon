@@ -6,7 +6,7 @@ Orchestrates fetching candles from Binance API and caching to Postgres database.
 
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -92,7 +92,7 @@ class DataLoader:
             )
         
         # Calculate date range
-        end_date = datetime.utcnow()
+        end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=lookback_days)
         
         logger.info(
@@ -133,7 +133,15 @@ class DataLoader:
         Returns:
             List of all fetched Candle objects
         """
+        # Normalise to timezone-aware UTC so comparisons are always consistent.
+        # Callers that pass naive datetimes are treated as UTC.
+        if start_date.tzinfo is None:
+            start_date = start_date.replace(tzinfo=timezone.utc)
+        if end_date.tzinfo is None:
+            end_date = end_date.replace(tzinfo=timezone.utc)
+
         all_candles = []
+        failed_chunks: list[tuple[str, str]] = []  # (start, end) of each failed chunk
         
         # Calculate chunk size in time
         timeframe_minutes = TIMEFRAME_MINUTES[timeframe]
@@ -179,18 +187,30 @@ class DataLoader:
                 if candles:
                     # Start next chunk after last candle to avoid overlap
                     last_candle_time = candles[-1].open_time
+                    # Normalise to aware UTC in case the candle carries a naive datetime
+                    if last_candle_time.tzinfo is None:
+                        last_candle_time = last_candle_time.replace(tzinfo=timezone.utc)
                     current_start = last_candle_time + timedelta(minutes=timeframe_minutes)
                 else:
                     # No more data available
                     break
                     
             except Exception as e:
+                failed_chunks.append(
+                    (current_start.date().isoformat(), current_end.date().isoformat())
+                )
                 logger.error(
                     f"Failed to fetch chunk {current_start.date()} to {current_end.date()}: {e}"
                 )
                 # Continue with next chunk on error
                 current_start = current_end
-        
+
+        if failed_chunks:
+            logger.warning(
+                f"_fetch_in_chunks: {len(failed_chunks)} chunk(s) failed — "
+                f"data may have gaps: {failed_chunks}"
+            )
+
         return all_candles
     
     def _cache_to_db(
@@ -317,7 +337,7 @@ class DataLoader:
         
         # Calculate date range
         if end_date is None:
-            end_date = datetime.utcnow()
+            end_date = datetime.now(timezone.utc)
         
         if lookback_days:
             start_date = end_date - timedelta(days=lookback_days)
