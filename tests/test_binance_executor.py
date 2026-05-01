@@ -156,7 +156,7 @@ class TestMarketOrderFill:
         assert isinstance(result, ExecutionResult)
         assert result.order.status == OrderStatus.FILLED
         assert result.order.exchange_order_id == "12345"
-        assert result.order.filled_amount == Decimal("0.10000")
+        assert result.order.filled_amount == Decimal("0.09990000")
         assert result.order.avg_fill_price == Decimal("50050.00")
         assert result.position is not None
 
@@ -222,7 +222,8 @@ class TestMarketOrderFill:
 
         # Weighted avg: (50000*0.05 + 50100*0.05) / 0.10 = 50050
         assert result.order.avg_fill_price == Decimal("50050")
-        assert result.order.filled_amount == Decimal("0.10000")
+        # Net qty: 0.10000 - 0.00005 BTC commission = 0.09995
+        assert result.order.filled_amount == Decimal("0.09995")
         # Fee: 0.00005 * 50000 + 0.05 USDT = 2.5 + 0.05 = 2.55
         assert result.order.fee_usdt == Decimal("2.55")
 

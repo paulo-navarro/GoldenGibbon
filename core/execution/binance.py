@@ -602,16 +602,6 @@ class BinanceExecutor:
         stop_price: Decimal,
         slippage_pct: Decimal = Decimal("0.005"),
     ) -> Optional[str]:
-        real_balance = self._get_available_balance(symbol)
-        if real_balance is not None and real_balance > 0 and real_balance < quantity:
-            logger.info(
-                "binance.stop_order_clamped_to_real_balance",
-                symbol=symbol,
-                requested=str(quantity),
-                available=str(real_balance),
-            )
-            quantity = real_balance
-
         qty = self._format_quantity(symbol, quantity)
         if qty <= 0:
             logger.error("binance.stop_order_zero_qty", symbol=symbol)
@@ -955,9 +945,14 @@ class BinanceExecutor:
         exchange_order_id = str(response["orderId"])
 
         # Compute weighted average fill price and total fees from fills array
+        base_asset = decision.symbol.replace("USDT", "")
         fills = response.get("fills", [])
         if fills:
-            avg_price, total_qty, total_fee = self._aggregate_fills(fills)
+            avg_price, total_qty, total_fee, base_commission = self._aggregate_fills(
+                fills, base_asset=base_asset,
+            )
+            if side == OrderSide.BUY and base_commission > 0:
+                total_qty -= base_commission
         else:
             # Fallback: use cumulativeQuoteQty / executedQty
             exec_qty = Decimal(response.get("executedQty", str(qty)))
@@ -998,9 +993,14 @@ class BinanceExecutor:
     @staticmethod
     def _aggregate_fills(
         fills: List[Dict[str, str]],
-    ) -> Tuple[Decimal, Decimal, Decimal]:
+        base_asset: str = "",
+    ) -> Tuple[Decimal, Decimal, Decimal, Decimal]:
         """
-        Aggregate fills array into (avg_price, total_qty, total_fee_usdt).
+        Aggregate fills array into (avg_price, total_qty, total_fee_usdt, base_commission).
+
+        ``base_commission`` is the total commission paid in the base asset
+        (e.g. INJ for INJUSDT).  For BUY orders this must be subtracted
+        from ``total_qty`` to get the net received amount.
 
         Each fill: {"price": "...", "qty": "...", "commission": "...",
                      "commissionAsset": "..."}
@@ -1008,25 +1008,27 @@ class BinanceExecutor:
         total_cost = Decimal("0")
         total_qty = Decimal("0")
         total_fee = Decimal("0")
+        base_commission = Decimal("0")
 
         for fill in fills:
             price = Decimal(fill["price"])
             qty = Decimal(fill["qty"])
             commission = Decimal(fill["commission"])
+            commission_asset = fill.get("commissionAsset", "")
 
             total_cost += price * qty
             total_qty += qty
 
-            # Approximate fee in USDT (if commission asset is BNB/BTC,
-            # this is an approximation — close enough for tracking)
-            if fill.get("commissionAsset") in ("USDT", "BUSD", "FDUSD"):
+            if commission_asset == base_asset:
+                base_commission += commission
+                total_fee += commission * price
+            elif commission_asset in ("USDT", "BUSD", "FDUSD"):
                 total_fee += commission
             else:
-                # Rough estimate: commission in base asset × fill price
                 total_fee += commission * price
 
         avg_price = (total_cost / total_qty) if total_qty > 0 else Decimal("0")
-        return avg_price, total_qty, total_fee
+        return avg_price, total_qty, total_fee, base_commission
 
     # ── Private: quantity / price formatting ─────────────────────────────
 
