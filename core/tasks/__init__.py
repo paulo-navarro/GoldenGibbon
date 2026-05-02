@@ -345,7 +345,11 @@ def _get_or_create_components(
 
                 usdt_bal = balances.get("USDT", {})
                 real_usdt = usdt_bal.get("free", Decimal("0")) + usdt_bal.get("locked", Decimal("0"))
-                pm._portfolio.usdt_balance = real_usdt
+
+                # NOTE: We do NOT set pm._portfolio.usdt_balance = real_usdt here.
+                # Each strategy pair tracks its own allocated capital independently.
+                # Setting the full account balance would inflate equity for kill-switch
+                # calculations and cause false drawdown triggers across all 68 pairs.
 
                 # Check if this symbol's base asset has a balance on the exchange
                 base_asset = symbol.replace("USDT", "")
@@ -365,7 +369,7 @@ def _get_or_create_components(
                         )
 
                 logger.info(
-                    "tick_components: synced real balance",
+                    "tick_components: real balance check",
                     strategy=strategy_name, symbol=symbol,
                     config_capital=str(cap), real_usdt=str(real_usdt),
                 )

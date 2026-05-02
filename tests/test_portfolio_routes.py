@@ -235,10 +235,15 @@ class TestGetPortfolio:
         assert data["usdt_balance"] == "10700.00000000"
 
     def test_equity_from_snapshot(self, seeded_client):
-        """Equity comes from the latest snapshot's total_equity."""
+        """Equity = usdt_balance + positions_value (MTM from entry prices when no candles)."""
         data = seeded_client.get("/api/portfolio/").json()
-        # 10700 + 500 + 14*10 = 11340
-        assert data["equity"] == "11340.00000000"
+        # usdt_balance from snapshot fallback: 10700
+        # positions: 0.5*42000 + 1.5*43000 + 2.5*44000 = 195500
+        # equity = 10700 + 195500 = 206200
+        usdt_balance = Decimal(data["usdt_balance"])
+        positions_value = Decimal(data["positions_value"])
+        equity = Decimal(data["equity"])
+        assert equity == usdt_balance + positions_value
 
     def test_last_updated_set(self, seeded_client):
         data = seeded_client.get("/api/portfolio/").json()

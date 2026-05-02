@@ -30,7 +30,7 @@ from core.config import get_settings
 from core.models import ExitProximityResponse, Position, PortfolioSnapshot
 from core.risk.proximity import compute_exit_proximity
 from db import get_db
-from db.models import CandleRecord, PositionRecord, TradeRecord
+from db.models import CandleRecord, PositionRecord, StrategyStateRecord, TradeRecord
 from db.models import PortfolioSnapshot as PortfolioSnapshotRecord
 from db.utils import candles_to_dataframe, orm_to_position, orm_to_portfolio_snapshot
 
@@ -79,25 +79,55 @@ def get_portfolio(
     position_records = list(db.execute(pos_stmt).scalars().all())
     positions = [orm_to_position(r) for r in position_records]
 
-    # Fetch latest snapshot for balance/equity summary, filtered by trading_mode
-    snap_stmt = (
-        select(PortfolioSnapshotRecord)
-        .where(PortfolioSnapshotRecord.trading_mode == mode)
-        .order_by(PortfolioSnapshotRecord.timestamp.desc())
-        .limit(1)
-    )
-    snapshot = db.execute(snap_stmt).scalars().first()
+    # Calculate positions_value from actual open positions using latest candle close
+    positions_value = Decimal("0")
+    if position_records:
+        position_symbols = list({r.symbol for r in position_records})
+        # Get latest close price per symbol
+        latest_prices: dict[str, Decimal] = {}
+        for sym in position_symbols:
+            latest_candle = db.execute(
+                select(CandleRecord.close)
+                .where(CandleRecord.symbol == sym)
+                .order_by(CandleRecord.open_time.desc())
+                .limit(1)
+            ).scalar()
+            if latest_candle is not None:
+                latest_prices[sym] = latest_candle
 
-    if snapshot is None:
-        return PortfolioResponse(
-            usdt_balance="0",
-            equity="0",
-            positions_value="0",
-            total_pnl="0",
-            open_positions_count=len(positions),
-            positions=positions,
-            last_updated=None,
+        for rec in position_records:
+            price = latest_prices.get(rec.symbol, rec.entry_price)
+            positions_value += rec.size * price
+
+    # Aggregate usdt_balance from all strategy state records (live tick data).
+    # Falls back to latest snapshot if no strategy states exist (e.g. paper/backtest).
+    state_records = list(db.execute(select(StrategyStateRecord)).scalars().all())
+    usdt_balance = Decimal("0")
+    last_updated: datetime | None = None
+    has_state_balance = False
+    for sr in state_records:
+        data = sr.state_data or {}
+        bal = data.get("usdt_balance")
+        if bal is not None:
+            usdt_balance += Decimal(str(bal))
+            has_state_balance = True
+        if last_updated is None or sr.updated_at > last_updated:
+            last_updated = sr.updated_at
+
+    if not has_state_balance:
+        # Fallback: use latest snapshot (paper mode / no ticks yet)
+        snap_stmt = (
+            select(PortfolioSnapshotRecord)
+            .where(PortfolioSnapshotRecord.trading_mode == mode)
+            .order_by(PortfolioSnapshotRecord.timestamp.desc())
+            .limit(1)
         )
+        snapshot = db.execute(snap_stmt).scalars().first()
+        if snapshot is not None:
+            usdt_balance = snapshot.usdt_balance
+            last_updated = snapshot.timestamp
+
+    equity = usdt_balance + positions_value
 
     total_pnl = (
         db.execute(
@@ -109,13 +139,13 @@ def get_portfolio(
     )
 
     return PortfolioResponse(
-        usdt_balance=str(snapshot.usdt_balance),
-        equity=str(snapshot.total_equity),
-        positions_value=str(snapshot.positions_value),
+        usdt_balance=str(usdt_balance),
+        equity=str(equity),
+        positions_value=str(positions_value),
         total_pnl=str(total_pnl),
         open_positions_count=len(positions),
         positions=positions,
-        last_updated=snapshot.timestamp,
+        last_updated=last_updated,
     )
 
 
