@@ -142,10 +142,11 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
     return () => clearInterval(interval);
   }, [inCooldown]);
 
+  const killSwitchReset = useResetKillSwitch(st?.symbol ?? '', st?.strategy ?? '');
+
   if (!st) return null;
 
   const killSwitchTriggered = !!(st.state_data as Record<string, unknown> | null)?.kill_switch_triggered;
-  const killSwitchReset = useResetKillSwitch(st.symbol, st.strategy);
   const exitProx = exitProximityData?.find((d) => d.symbol === st.symbol && d.strategy === st.strategy);
 
   const pos = portfolio?.positions?.find((p) => p.symbol === st.symbol);

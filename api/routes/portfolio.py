@@ -99,33 +99,60 @@ def get_portfolio(
             price = latest_prices.get(rec.symbol, rec.entry_price)
             positions_value += rec.size * price
 
-    # Aggregate usdt_balance from all strategy state records (live tick data).
-    # Falls back to latest snapshot if no strategy states exist (e.g. paper/backtest).
-    state_records = list(db.execute(select(StrategyStateRecord)).scalars().all())
+    # Get USDT balance: for live mode, query Binance; for paper, use strategy state/snapshots.
     usdt_balance = Decimal("0")
     last_updated: datetime | None = None
-    has_state_balance = False
-    for sr in state_records:
-        data = sr.state_data or {}
-        bal = data.get("usdt_balance")
-        if bal is not None:
-            usdt_balance += Decimal(str(bal))
-            has_state_balance = True
-        if last_updated is None or sr.updated_at > last_updated:
-            last_updated = sr.updated_at
 
-    if not has_state_balance:
-        # Fallback: use latest snapshot (paper mode / no ticks yet)
-        snap_stmt = (
-            select(PortfolioSnapshotRecord)
-            .where(PortfolioSnapshotRecord.trading_mode == mode)
-            .order_by(PortfolioSnapshotRecord.timestamp.desc())
-            .limit(1)
-        )
-        snapshot = db.execute(snap_stmt).scalars().first()
-        if snapshot is not None:
-            usdt_balance = snapshot.usdt_balance
-            last_updated = snapshot.timestamp
+    if mode == "live":
+        # Live mode: get real USDT balance from exchange
+        try:
+            from core.execution.binance import BinanceExecutor
+            from core.portfolio import PortfolioManager as _PM
+
+            _pm = _PM(initial_capital=Decimal("0"))
+            _executor = BinanceExecutor.from_settings(
+                strategy_name="_portfolio_query", portfolio_manager=_pm,
+            )
+            account = _executor.get_account_info()
+            balances = account.get("balances", {})
+            usdt_bal = balances.get("USDT", {})
+            usdt_balance = usdt_bal.get("free", Decimal("0")) + usdt_bal.get("locked", Decimal("0"))
+        except Exception:
+            # Fallback to latest snapshot if Binance is unreachable
+            snap_stmt = (
+                select(PortfolioSnapshotRecord)
+                .where(PortfolioSnapshotRecord.trading_mode == "live")
+                .order_by(PortfolioSnapshotRecord.timestamp.desc())
+                .limit(1)
+            )
+            snapshot = db.execute(snap_stmt).scalars().first()
+            if snapshot is not None:
+                usdt_balance = snapshot.usdt_balance
+                last_updated = snapshot.timestamp
+    else:
+        # Paper mode: aggregate from strategy state records, fallback to snapshot
+        state_records = list(db.execute(select(StrategyStateRecord)).scalars().all())
+        has_state_balance = False
+        for sr in state_records:
+            data = sr.state_data or {}
+            bal = data.get("usdt_balance")
+            if bal is not None:
+                usdt_balance += Decimal(str(bal))
+                has_state_balance = True
+            if last_updated is None or sr.updated_at > last_updated:
+                last_updated = sr.updated_at
+
+        if not has_state_balance:
+            snap_stmt = (
+                select(PortfolioSnapshotRecord)
+                .where(PortfolioSnapshotRecord.trading_mode == mode)
+                .order_by(PortfolioSnapshotRecord.timestamp.desc())
+                .limit(1)
+            )
+            snapshot = db.execute(snap_stmt).scalars().first()
+            if snapshot is not None:
+                usdt_balance = snapshot.usdt_balance
+                last_updated = snapshot.timestamp
 
     equity = usdt_balance + positions_value
 
