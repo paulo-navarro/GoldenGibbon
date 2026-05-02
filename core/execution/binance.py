@@ -413,6 +413,22 @@ class BinanceExecutor:
     ) -> Optional[ExecutionResult]:
         """CLOSE -> sell entire position."""
         real_balance = self._get_available_balance(decision.symbol)
+
+        # If free balance is 0 but we have an exchange stop order, the balance
+        # is locked by that stop. Cancel it first to unlock the asset.
+        if real_balance is not None and real_balance <= Decimal("0"):
+            pos = self._pm.get_position(decision.symbol)
+            if pos and pos.exchange_stop_order_id:
+                logger.info(
+                    "binance.close_cancel_stop_to_unlock",
+                    symbol=decision.symbol,
+                    order_id=pos.exchange_stop_order_id,
+                )
+                self._cancel_stop_order(decision.symbol, pos.exchange_stop_order_id)
+                self._pm.update_stop_order_id(decision.symbol, None)
+                # Re-query balance after cancel
+                real_balance = self._get_available_balance(decision.symbol)
+
         if real_balance is not None and real_balance < decision.size:
             logger.warning(
                 "binance.close_clamped_to_real_balance",
