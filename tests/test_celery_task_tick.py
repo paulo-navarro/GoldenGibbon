@@ -151,6 +151,105 @@ _PATCH_KLINES = "core.data.binance_client.BinanceClient.fetch_klines"
 # ── Single tick happy path ──────────────────────────────────────────────────
 
 
+class TestKillSwitchExternalReset:
+    """Tick loop detects when DB kill-switch was reset externally."""
+
+    @patch(_PATCH_PUBLISH)
+    @patch(_PATCH_KLINES, return_value=[])
+    @patch(_PATCH_LOADER)
+    def test_external_reset_unlatches_in_memory_kill_switch(
+        self, mock_loader, mock_klines, mock_publish
+    ):
+        """When reset_kill_switches.py clears DB, next tick resumes trading."""
+        mock_loader.return_value = _make_market_data()
+        from core.tasks import _worker_state, run_single_strategy_tick
+
+        # 1. Run a tick to initialise worker state
+        result1 = run_single_strategy_tick.apply(args=["smart_hodler", "BTCUSDT"])
+        assert result1.successful()
+        assert result1.result.get("kill_switch") is not True
+
+        # 2. Latch the in-memory kill switch
+        key = ("smart_hodler", "BTCUSDT")
+        comp = _worker_state[key]
+        assert comp.kill_switch is not None
+        comp.kill_switch._triggered = True
+        comp.kill_switch._trigger_reason = "test"
+
+        # 3. Simulate reset_kill_switches.py: clear DB state
+        from db import get_session
+        from db.models import StrategyStateRecord
+
+        with get_session() as session:
+            state = (
+                session.query(StrategyStateRecord)
+                .filter_by(symbol="BTCUSDT", strategy="smart_hodler")
+                .first()
+            )
+            if state and state.state_data:
+                state.state_data = {
+                    **state.state_data,
+                    "kill_switch_triggered": False,
+                    "kill_switch_reason": None,
+                    "kill_switch_trigger_time": None,
+                    "kill_switch_peak_equity": "0",
+                    "kill_switch_day_start_equity": "0",
+                    "kill_switch_current_day": None,
+                    "kill_switch_trading_mode": "live",
+                }
+
+        # 4. Next tick should detect the DB reset and resume
+        mock_loader.return_value = _make_market_data()
+        result2 = run_single_strategy_tick.apply(args=["smart_hodler", "BTCUSDT"])
+        assert result2.successful()
+        assert result2.result.get("kill_switch") is not True, (
+            "tick should resume trading after external DB reset"
+        )
+        assert comp.kill_switch.is_triggered is False
+
+    @patch(_PATCH_PUBLISH)
+    @patch(_PATCH_KLINES, return_value=[])
+    @patch(_PATCH_LOADER)
+    def test_kill_switch_stays_latched_without_db_reset(
+        self, mock_loader, mock_klines, mock_publish
+    ):
+        """Kill switch remains active when DB still shows triggered."""
+        mock_loader.return_value = _make_market_data()
+        from core.tasks import _worker_state, run_single_strategy_tick
+
+        # 1. Initialise
+        run_single_strategy_tick.apply(args=["smart_hodler", "BTCUSDT"])
+
+        # 2. Latch in-memory AND persist to DB (simulates a real trigger)
+        key = ("smart_hodler", "BTCUSDT")
+        comp = _worker_state[key]
+        comp.kill_switch._triggered = True
+        comp.kill_switch._trigger_reason = "test"
+
+        from db import get_session
+        from db.models import StrategyStateRecord
+
+        with get_session() as session:
+            state = (
+                session.query(StrategyStateRecord)
+                .filter_by(symbol="BTCUSDT", strategy="smart_hodler")
+                .first()
+            )
+            if state and state.state_data:
+                state.state_data = {
+                    **state.state_data,
+                    "kill_switch_triggered": True,
+                    "kill_switch_reason": "test",
+                }
+
+        # 3. Next tick should stay blocked
+        mock_loader.return_value = _make_market_data()
+        result = run_single_strategy_tick.apply(args=["smart_hodler", "BTCUSDT"])
+        assert result.successful()
+        assert result.result.get("kill_switch") is True
+        assert comp.kill_switch.is_triggered is True
+
+
 class TestRunSingleStrategyTick:
     """run_single_strategy_tick processes a single (strategy, symbol) pair."""
 

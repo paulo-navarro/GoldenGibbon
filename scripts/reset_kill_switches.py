@@ -4,6 +4,10 @@ One-shot script to reset all kill-switch states in the database.
 Clears triggered flags and peak_equity so the next tick re-initialises
 from current equity.  Sets trading_mode to "live" for all records.
 
+The running Celery worker will detect the DB reset on the next tick
+and sync its in-memory kill-switch state automatically — no worker
+restart required.
+
 Usage:
     docker compose run --rm app python scripts/reset_kill_switches.py
 """

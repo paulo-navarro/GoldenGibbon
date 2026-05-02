@@ -345,7 +345,7 @@ class LiveTradingConfig(BaseModel):
     max_order_size_usdt: float = Field(default=1000, gt=0)
     kill_switch_max_drawdown: float = Field(default=0.15, gt=0, le=1)
     reconcile_on_startup: bool = Field(default=True)
-    reconciliation_interval_hours: int = Field(default=4, ge=1)
+    reconciliation_interval_minutes: int = Field(default=15, ge=1)
     api_key: str = Field(default="")
     api_secret: str = Field(default="")
     use_testnet: bool = Field(default=True)

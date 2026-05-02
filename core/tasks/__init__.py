@@ -1074,6 +1074,32 @@ def run_single_strategy_tick(
             candle_time = candle_time.to_pydatetime()
         close = Decimal(str(market_data.candles["close"].iloc[-1]))
 
+        # ── Kill-switch: detect external reset (e.g. reset_kill_switches.py) ──
+        if comp.kill_switch and comp.kill_switch.is_triggered:
+            try:
+                from db.models import StrategyStateRecord as _SSR
+
+                with get_session() as session:
+                    _state = (
+                        session.query(_SSR)
+                        .filter_by(symbol=symbol, strategy=strategy_name)
+                        .first()
+                    )
+                    if _state and not (_state.state_data or {}).get(
+                        "kill_switch_triggered", False
+                    ):
+                        log.info(
+                            "single_tick: kill-switch reset detected in DB, syncing",
+                            strategy=strategy_name,
+                            symbol=symbol,
+                        )
+                        comp.kill_switch.hard_reset()
+            except Exception as reset_exc:
+                log.error(
+                    "single_tick: kill-switch reset check failed",
+                    error=str(reset_exc),
+                )
+
         # ── Kill-switch gate (task 4.5) ─────────────────────
         if comp.kill_switch and comp.kill_switch.is_triggered:
             log.warning(
@@ -1889,7 +1915,7 @@ def run_reconciliation(self) -> Dict[str, Any]:  # noqa: ANN001
     """
     Reconcile local DB state against expected invariants.
 
-    Called every 4 hours by Celery Beat (``reconciliation-4h``) and
+    Called every 15 minutes by Celery Beat (``reconciliation-15m``) and
     once on worker startup (``worker_ready`` signal).  For each
     ``(strategy, symbol)`` pair the task runs three consistency
     checks via :func:`_reconcile_pair`:

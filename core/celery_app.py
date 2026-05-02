@@ -73,11 +73,10 @@ app.conf.update(
             # ~60 s to populate the DB cache before the tick runs.
             "schedule": crontab(minute="2,17,32,47"),
         },
-        "reconciliation-4h": {
+        "reconciliation-15m": {
             "task": "core.tasks.run_reconciliation",
-            # Every 4 hours at :05 — matches settings.yaml
-            # reconciliation_interval_hours: 4.
-            "schedule": crontab(minute=5, hour="*/4"),
+            # Every 15 minutes at :05, :20, :35, :50.
+            "schedule": crontab(minute="5,20,35,50"),
         },
         "heartbeat-60s": {
             "task": "core.tasks.emit_heartbeat",

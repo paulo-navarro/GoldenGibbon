@@ -84,7 +84,7 @@ class TestBeatSchedule:
         from core.celery_app import app
 
         assert "fetch-candles-15m" in app.conf.beat_schedule
-        assert "reconciliation-4h" in app.conf.beat_schedule
+        assert "reconciliation-15m" in app.conf.beat_schedule
         assert "heartbeat-60s" in app.conf.beat_schedule
 
     def test_fetch_candles_schedule(self):
@@ -101,13 +101,12 @@ class TestBeatSchedule:
     def test_reconciliation_schedule(self):
         from core.celery_app import app
 
-        entry = app.conf.beat_schedule["reconciliation-4h"]
+        entry = app.conf.beat_schedule["reconciliation-15m"]
         assert entry["task"] == "core.tasks.run_reconciliation"
 
         schedule = entry["schedule"]
         assert isinstance(schedule, crontab)
-        assert schedule.minute == {5}
-        assert schedule.hour == {0, 4, 8, 12, 16, 20}
+        assert schedule.minute == {5, 20, 35, 50}
 
 
 # ── Task stubs ───────────────────────────────────────────────────────────────
