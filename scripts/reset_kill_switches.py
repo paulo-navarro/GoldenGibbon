@@ -12,6 +12,8 @@ Usage:
     docker compose run --rm app python scripts/reset_kill_switches.py
 """
 
+from sqlalchemy.orm.attributes import flag_modified
+
 from db import get_session
 from db.models import StrategyStateRecord
 
@@ -40,7 +42,8 @@ def main() -> None:
             changed = True
 
             if changed:
-                rec.state_data = data
+                rec.state_data = {**data}
+                flag_modified(rec, "state_data")
                 updated += 1
 
         session.commit()

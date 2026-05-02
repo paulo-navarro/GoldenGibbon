@@ -532,6 +532,21 @@ export function useResetStrategyConfig(name: string) {
   });
 }
 
+// ── Kill-switch reset ───────────────────────────────────────────────────────
+
+export function useResetKillSwitch(symbol: string, strategy: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () =>
+      postApi<{ status: string }>(`/api/strategy/kill-switch/${symbol}/${strategy}/reset`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['strategy-state'] });
+      queryClient.invalidateQueries({ queryKey: ['strategy-signals'] });
+    },
+  });
+}
+
 // ── Parameter Optimization (task 5.6) ───────────────────────────────────────
 
 export interface GridSearchRow {

@@ -317,3 +317,82 @@ class TestGetStrategySignals:
     def test_empty_when_no_states(self, client):
         data = client.get("/api/strategy/signals").json()
         assert data == []
+
+
+# ── POST /api/strategy/kill-switch/{symbol}/{strategy}/reset ─────────────────
+
+
+class TestResetKillSwitch:
+    """Kill-switch reset endpoint."""
+
+    def test_returns_404_for_unknown_pair(self, client):
+        resp = client.post("/api/strategy/kill-switch/XYZUSDT/smart_hodler/reset")
+        assert resp.status_code == 404
+
+    def test_resets_triggered_kill_switch(self, seeded_client):
+        # Seed a triggered kill switch
+        with get_session() as db:
+            rec = (
+                db.query(StrategyStateRecord)
+                .filter_by(symbol="BTCUSDT", strategy="smart_hodler")
+                .first()
+            )
+            rec.state_data = {
+                **(rec.state_data or {}),
+                "kill_switch_triggered": True,
+                "kill_switch_reason": "Global drawdown 15.2% exceeded threshold 15.0%",
+                "kill_switch_peak_equity": "10000",
+                "kill_switch_trading_mode": "live",
+            }
+            db.commit()
+
+        resp = seeded_client.post(
+            "/api/strategy/kill-switch/BTCUSDT/smart_hodler/reset"
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["symbol"] == "BTCUSDT"
+        assert body["strategy"] == "smart_hodler"
+
+        # Verify DB was updated
+        with get_session() as db:
+            rec = (
+                db.query(StrategyStateRecord)
+                .filter_by(symbol="BTCUSDT", strategy="smart_hodler")
+                .first()
+            )
+            assert rec.state_data["kill_switch_triggered"] is False
+            assert rec.state_data["kill_switch_peak_equity"] == "0"
+            assert rec.state_data["kill_switch_reason"] is None
+
+    def test_reset_preserves_trading_mode(self, seeded_client):
+        with get_session() as db:
+            rec = (
+                db.query(StrategyStateRecord)
+                .filter_by(symbol="BTCUSDT", strategy="smart_hodler")
+                .first()
+            )
+            rec.state_data = {
+                **(rec.state_data or {}),
+                "kill_switch_triggered": True,
+                "kill_switch_trading_mode": "paper",
+            }
+            db.commit()
+
+        seeded_client.post("/api/strategy/kill-switch/BTCUSDT/smart_hodler/reset")
+
+        with get_session() as db:
+            rec = (
+                db.query(StrategyStateRecord)
+                .filter_by(symbol="BTCUSDT", strategy="smart_hodler")
+                .first()
+            )
+            assert rec.state_data["kill_switch_trading_mode"] == "paper"
+
+    def test_symbol_case_insensitive(self, seeded_client):
+        resp = seeded_client.post(
+            "/api/strategy/kill-switch/btcusdt/smart_hodler/reset"
+        )
+        assert resp.status_code == 200
+        assert resp.json()["symbol"] == "BTCUSDT"

@@ -27,6 +27,7 @@ export {
   useStrategyConfig,
   useUpdateStrategyConfig,
   useResetStrategyConfig,
+  useResetKillSwitch,
   // Optimization
   useOptimize,
   useWalkForward,

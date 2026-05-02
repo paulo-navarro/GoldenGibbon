@@ -12,8 +12,9 @@ GET /state
 
 GET /signals
     Derived signal snapshots with conditions extracted from state_data.
-    Signal derivation is basic (always HOLD) until Phase 3 task 3.8
-    implements live state persistence.
+
+POST /kill-switch/{symbol}/{strategy}/reset
+    Reset the kill-switch for a single symbol/strategy pair.
 """
 
 from __future__ import annotations
@@ -21,9 +22,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from core.models import StrategySignalSnapshot, StrategyStateResponse
 from db import get_db
@@ -95,3 +97,49 @@ def get_strategy_signals(
     stmt = stmt.order_by(StrategyStateRecord.id.desc())
     records = list(db.execute(stmt).scalars().all())
     return [orm_to_signal_snapshot(r) for r in records]
+
+
+# ── Kill-switch reset ────────────────────────────────────────────────────────
+
+
+@router.post("/kill-switch/{symbol}/{strategy}/reset")
+def reset_kill_switch(
+    symbol: str,
+    strategy: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Reset the kill-switch for a single symbol/strategy pair.
+
+    Clears the triggered flag and peak equity in the DB.  The running
+    Celery worker detects the DB change on the next tick and syncs its
+    in-memory state automatically.
+    """
+    rec = (
+        db.query(StrategyStateRecord)
+        .filter_by(symbol=symbol.upper(), strategy=strategy)
+        .first()
+    )
+    if rec is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No state record for {strategy}:{symbol}",
+        )
+
+    data = rec.state_data or {}
+    data.update(
+        {
+            "kill_switch_triggered": False,
+            "kill_switch_reason": None,
+            "kill_switch_trigger_time": None,
+            "kill_switch_peak_equity": "0",
+            "kill_switch_day_start_equity": "0",
+            "kill_switch_current_day": None,
+            "kill_switch_trading_mode": data.get("kill_switch_trading_mode", "live"),
+        }
+    )
+    rec.state_data = {**data}
+    flag_modified(rec, "state_data")
+    db.commit()
+
+    return {"status": "ok", "symbol": symbol.upper(), "strategy": strategy}

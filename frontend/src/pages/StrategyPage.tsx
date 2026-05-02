@@ -24,7 +24,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import TimerIcon from '@mui/icons-material/Timer';
 import TuneIcon from '@mui/icons-material/Tune';
 
-import { useStrategyState, useStrategySignals, usePortfolio, useExitProximity, useStrategyConfig, useUpdateStrategyConfig, useResetStrategyConfig } from '../api';
+import { useStrategyState, useStrategySignals, usePortfolio, useExitProximity, useStrategyConfig, useUpdateStrategyConfig, useResetStrategyConfig, useResetKillSwitch } from '../api';
 import type { FieldMeta } from '../api';
 import { useStrategyStore } from '../stores/strategyStore';
 import type { RegimeInfo } from '../stores/strategyStore';
@@ -145,6 +145,7 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
   if (!st) return null;
 
   const killSwitchTriggered = !!(st.state_data as Record<string, unknown> | null)?.kill_switch_triggered;
+  const killSwitchReset = useResetKillSwitch(st.symbol, st.strategy);
   const exitProx = exitProximityData?.find((d) => d.symbol === st.symbol && d.strategy === st.strategy);
 
   const pos = portfolio?.positions?.find((p) => p.symbol === st.symbol);
@@ -294,6 +295,43 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
                 until {new Date(st.cooldown_until!).toLocaleString()}
               </Typography>
             </Box>
+          </>
+        )}
+
+        {/* Kill-switch reset */}
+        {killSwitchTriggered && (
+          <>
+            <Divider sx={{ my: 1.5 }} />
+            <Alert
+              severity="error"
+              variant="outlined"
+              action={
+                <Button
+                  color="error"
+                  size="small"
+                  variant="contained"
+                  disabled={killSwitchReset.isPending}
+                  onClick={() => killSwitchReset.mutate()}
+                >
+                  {killSwitchReset.isPending ? 'Resetting...' : 'Reset Kill Switch'}
+                </Button>
+              }
+            >
+              Kill switch triggered
+              {(st.state_data as Record<string, unknown> | null)?.kill_switch_reason
+                ? ` — ${(st.state_data as Record<string, unknown>).kill_switch_reason}`
+                : ''}
+            </Alert>
+            {killSwitchReset.isSuccess && (
+              <Alert severity="success" variant="outlined" sx={{ mt: 1 }}>
+                Kill switch reset — trading resumes on next tick
+              </Alert>
+            )}
+            {killSwitchReset.isError && (
+              <Alert severity="error" variant="outlined" sx={{ mt: 1 }}>
+                Reset failed — try again
+              </Alert>
+            )}
           </>
         )}
 
