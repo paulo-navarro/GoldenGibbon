@@ -20,6 +20,7 @@ from core.models import (
     MarketData,
     Portfolio,
     Position,
+    PositionSide,
     RiskAction,
     RiskDecision,
     Signal,
@@ -49,17 +50,21 @@ class RiskEngine:
         strategy_name: str,
         strategy_config: Dict[str, Any],
         risk_config: Optional[Dict[str, Any]] = None,
+        *,
+        shorts_enabled: bool = False,
     ) -> None:
         """
         Args:
-            strategy_name: ``"smart_hodler"`` or ``"mean_reversion"``.
+            strategy_name: ``"smart_hodler"``, ``"mean_reversion"``, or ``"bear_guard"``.
             strategy_config: Strategy-specific section from strategies.yaml.
             risk_config: Global risk section from settings.yaml.
                          Falls back to sensible defaults when None.
+            shorts_enabled: Master kill switch for short positions.
         """
         self._strategy_name = strategy_name
         self._strategy_config = strategy_config
         self._risk_config = risk_config or {}
+        self._shorts_enabled = shorts_enabled
 
         # ── Resolved sizing params ───────────────────────────────────
         if strategy_name == "smart_hodler":
@@ -84,6 +89,13 @@ class RiskEngine:
         elif strategy_name == "mean_reversion":
             self._initial_pct = Decimal(
                 str(strategy_config.get("entry_pct", 0.75))
+            )
+            self._sell_half_fraction = Decimal(
+                str(strategy_config.get("exit_partial_pct", 0.50))
+            )
+        elif strategy_name == "bear_guard":
+            self._initial_pct = Decimal(
+                str(strategy_config.get("position_size_pct", 0.50))
             )
             self._sell_half_fraction = Decimal(
                 str(strategy_config.get("exit_partial_pct", 0.50))
@@ -226,6 +238,7 @@ class RiskEngine:
             decision = RiskDecision(
                 action=RiskAction.CLOSE,
                 symbol=symbol,
+                side=position.side,
                 size=position.size,
                 price=close,
                 exit_reason=self._infer_exit_reason_full(market_data),
@@ -248,6 +261,7 @@ class RiskEngine:
             decision = RiskDecision(
                 action=RiskAction.REDUCE,
                 symbol=symbol,
+                side=position.side,
                 size=position.size,
                 price=close,
                 exit_reason=ExitReason.MOMENTUM_FADE,
@@ -280,6 +294,38 @@ class RiskEngine:
                     action=decision.action.value,
                     symbol=symbol,
                     signal=signal.value,
+                    size=str(decision.size),
+                    price=str(close),
+                )
+            return decision
+
+        # ── SHORT ────────────────────────────────────────────────────
+        if signal == Signal.SHORT:
+            # 5.3.1 — Kill switch gate
+            if not self._shorts_enabled:
+                logger.info(
+                    "risk.short_disabled",
+                    symbol=symbol,
+                    signal=signal.value,
+                )
+                return RiskDecision(action=RiskAction.HOLD)
+
+            # 5.3.3 — No scale-in for shorts; hold if already in a short
+            short_position = self._find_short_position(symbol, portfolio)
+            if short_position is not None:
+                return RiskDecision(action=RiskAction.HOLD)
+
+            # 5.3.2 — Open new short position
+            decision = self._evaluate_short_open(
+                symbol, close, portfolio, market_data
+            )
+            if decision.action != RiskAction.HOLD:
+                logger.info(
+                    "risk.evaluate",
+                    action=decision.action.value,
+                    symbol=symbol,
+                    signal=signal.value,
+                    side="short",
                     size=str(decision.size),
                     price=str(close),
                 )
@@ -333,6 +379,7 @@ class RiskEngine:
             return StopCheckResult()
 
         close = Decimal(str(market_data.candles["close"].iloc[-1]))
+        is_short = position.side == PositionSide.SHORT
 
         # ── Break-even ratchet (all strategies) ─────────────────────
         ratcheted_hard_stop = position.hard_stop_price
@@ -341,39 +388,81 @@ class RiskEngine:
             and position.hard_stop_price > 0
             and position.entry_price > 0
         ):
-            profit_pct = (close - position.entry_price) / position.entry_price
-            new_stop = position.hard_stop_price
+            if is_short:
+                # Short: profit when price falls
+                profit_pct = (position.entry_price - close) / position.entry_price
+                new_stop = position.hard_stop_price
 
-            if profit_pct >= self._lockin_trigger:
-                new_stop = position.entry_price * (1 + self._lockin_stop_pct)
-            elif profit_pct >= self._breakeven_trigger:
-                new_stop = position.entry_price
+                if profit_pct >= self._lockin_trigger:
+                    new_stop = position.entry_price * (1 - self._lockin_stop_pct)
+                elif profit_pct >= self._breakeven_trigger:
+                    new_stop = position.entry_price
 
-            if new_stop > position.hard_stop_price:
-                if new_stop > position.entry_price:
-                    logger.info(
-                        "risk.ratchet_lockin",
-                        symbol=symbol,
-                        old_stop=str(position.hard_stop_price),
-                        new_stop=str(new_stop),
-                        profit_pct=str(profit_pct),
-                        entry_price=str(position.entry_price),
-                        close=str(close),
-                    )
-                else:
-                    logger.info(
-                        "risk.ratchet_breakeven",
-                        symbol=symbol,
-                        old_stop=str(position.hard_stop_price),
-                        new_stop=str(new_stop),
-                        profit_pct=str(profit_pct),
-                        entry_price=str(position.entry_price),
-                        close=str(close),
-                    )
-                ratcheted_hard_stop = new_stop
+                # Short stops only ratchet DOWN (never up)
+                if new_stop < position.hard_stop_price:
+                    if new_stop < position.entry_price:
+                        logger.info(
+                            "risk.ratchet_lockin",
+                            symbol=symbol,
+                            side="short",
+                            old_stop=str(position.hard_stop_price),
+                            new_stop=str(new_stop),
+                            profit_pct=str(profit_pct),
+                            entry_price=str(position.entry_price),
+                            close=str(close),
+                        )
+                    else:
+                        logger.info(
+                            "risk.ratchet_breakeven",
+                            symbol=symbol,
+                            side="short",
+                            old_stop=str(position.hard_stop_price),
+                            new_stop=str(new_stop),
+                            profit_pct=str(profit_pct),
+                            entry_price=str(position.entry_price),
+                            close=str(close),
+                        )
+                    ratcheted_hard_stop = new_stop
+            else:
+                # Long: profit when price rises (existing logic)
+                profit_pct = (close - position.entry_price) / position.entry_price
+                new_stop = position.hard_stop_price
+
+                if profit_pct >= self._lockin_trigger:
+                    new_stop = position.entry_price * (1 + self._lockin_stop_pct)
+                elif profit_pct >= self._breakeven_trigger:
+                    new_stop = position.entry_price
+
+                if new_stop > position.hard_stop_price:
+                    if new_stop > position.entry_price:
+                        logger.info(
+                            "risk.ratchet_lockin",
+                            symbol=symbol,
+                            old_stop=str(position.hard_stop_price),
+                            new_stop=str(new_stop),
+                            profit_pct=str(profit_pct),
+                            entry_price=str(position.entry_price),
+                            close=str(close),
+                        )
+                    else:
+                        logger.info(
+                            "risk.ratchet_breakeven",
+                            symbol=symbol,
+                            old_stop=str(position.hard_stop_price),
+                            new_stop=str(new_stop),
+                            profit_pct=str(profit_pct),
+                            entry_price=str(position.entry_price),
+                            close=str(close),
+                        )
+                    ratcheted_hard_stop = new_stop
 
         # ── Hard stop (all strategies) ───────────────────────────────
-        if ratcheted_hard_stop > 0 and close < ratcheted_hard_stop:
+        hard_stop_hit = (
+            (ratcheted_hard_stop > 0 and close > ratcheted_hard_stop)
+            if is_short
+            else (ratcheted_hard_stop > 0 and close < ratcheted_hard_stop)
+        )
+        if hard_stop_hit:
             logger.info(
                 "risk.hard_stop",
                 symbol=symbol,
@@ -384,10 +473,20 @@ class RiskEngine:
             decision = RiskDecision(
                 action=RiskAction.CLOSE,
                 symbol=symbol,
+                side=position.side,
                 size=position.size,
                 price=close,
                 exit_reason=ExitReason.HARD_STOP,
             )
+            if is_short:
+                lowest = min(position.lowest_close or close, close)
+                return StopCheckResult(
+                    decision=decision,
+                    lowest_close=lowest,
+                    trailing_stop_price=position.trailing_stop_price,
+                    hard_stop_price=ratcheted_hard_stop,
+                    cooldown_candles=self._cooldown_candles,
+                )
             return StopCheckResult(
                 decision=decision,
                 highest_close=max(position.highest_close, close),
@@ -432,44 +531,86 @@ class RiskEngine:
                     )
         # ── Trailing stop (all strategies, when enabled) ────────────
         if self._trailing_enabled:
-            # 1. Ratchet highest_close
-            highest = max(position.highest_close, close)
+            if is_short:
+                # Short: ratchet lowest_close downward
+                lowest = min(position.lowest_close or close, close)
 
-            # 2. Recompute trailing stop from (possibly new) highest close
-            new_trailing = self._compute_trailing_stop(highest, market_data)
+                # Recompute trailing stop from (possibly new) lowest close
+                new_trailing = self._compute_short_trailing_stop(lowest, market_data)
 
-            # Only ratchet the stop upward; never lower it
-            if position.trailing_stop_price > 0:
-                new_trailing = max(new_trailing, position.trailing_stop_price)
+                # Only ratchet the stop downward; never raise it
+                if position.trailing_stop_price > 0:
+                    new_trailing = min(new_trailing, position.trailing_stop_price)
 
-            # 3. Check trailing-stop violation (strict less-than)
-            if new_trailing > 0 and close < new_trailing:
-                logger.info(
-                    "risk.trailing_stop",
-                    symbol=symbol,
-                    close=str(close),
-                    trailing_stop=str(new_trailing),
-                )
-                decision = RiskDecision(
-                    action=RiskAction.CLOSE,
-                    symbol=symbol,
-                    size=position.size,
-                    price=close,
-                    exit_reason=ExitReason.TRAILING_STOP,
-                )
+                # Breach: price rose above trailing stop
+                if new_trailing > 0 and close > new_trailing:
+                    logger.info(
+                        "risk.trailing_stop",
+                        symbol=symbol,
+                        side="short",
+                        close=str(close),
+                        trailing_stop=str(new_trailing),
+                    )
+                    decision = RiskDecision(
+                        action=RiskAction.CLOSE,
+                        symbol=symbol,
+                        side=PositionSide.SHORT,
+                        size=position.size,
+                        price=close,
+                        exit_reason=ExitReason.TRAILING_STOP,
+                    )
+                    return StopCheckResult(
+                        decision=decision,
+                        lowest_close=lowest,
+                        trailing_stop_price=new_trailing,
+                        hard_stop_price=ratcheted_hard_stop,
+                    )
+
+                # No stop hit – return updated levels
                 return StopCheckResult(
-                    decision=decision,
+                    lowest_close=lowest,
+                    trailing_stop_price=new_trailing,
+                    hard_stop_price=ratcheted_hard_stop,
+                )
+            else:
+                # Long: ratchet highest_close upward (existing logic)
+                highest = max(position.highest_close, close)
+
+                # Recompute trailing stop from (possibly new) highest close
+                new_trailing = self._compute_trailing_stop(highest, market_data)
+
+                # Only ratchet the stop upward; never lower it
+                if position.trailing_stop_price > 0:
+                    new_trailing = max(new_trailing, position.trailing_stop_price)
+
+                # Breach: price fell below trailing stop
+                if new_trailing > 0 and close < new_trailing:
+                    logger.info(
+                        "risk.trailing_stop",
+                        symbol=symbol,
+                        close=str(close),
+                        trailing_stop=str(new_trailing),
+                    )
+                    decision = RiskDecision(
+                        action=RiskAction.CLOSE,
+                        symbol=symbol,
+                        size=position.size,
+                        price=close,
+                        exit_reason=ExitReason.TRAILING_STOP,
+                    )
+                    return StopCheckResult(
+                        decision=decision,
+                        highest_close=highest,
+                        trailing_stop_price=new_trailing,
+                        hard_stop_price=ratcheted_hard_stop,
+                    )
+
+                # No stop hit – return updated levels for the caller to persist
+                return StopCheckResult(
                     highest_close=highest,
                     trailing_stop_price=new_trailing,
                     hard_stop_price=ratcheted_hard_stop,
                 )
-
-            # No stop hit – return updated levels for the caller to persist
-            return StopCheckResult(
-                highest_close=highest,
-                trailing_stop_price=new_trailing,
-                hard_stop_price=ratcheted_hard_stop,
-            )
 
         # Trailing disabled – return hard stop only
         return StopCheckResult(
@@ -523,6 +664,91 @@ class RiskEngine:
             hard_stop_price=hard_stop,
             trailing_stop_price=trailing_stop,
         )
+
+    # ── Private: short-position helpers ──────────────────────────────
+
+    @staticmethod
+    def _find_short_position(
+        symbol: str, portfolio: Portfolio
+    ) -> Optional[Position]:
+        """Return the short position for *symbol*, or None."""
+        pos = portfolio.positions.get(symbol)
+        if pos is not None and pos.side == PositionSide.SHORT:
+            return pos
+        return None
+
+    def _evaluate_short_open(
+        self,
+        symbol: str,
+        close: Decimal,
+        portfolio: Portfolio,
+        market_data: MarketData,
+    ) -> RiskDecision:
+        """Size and authorise a new short position (5.3.4)."""
+        # ── Daily trade limit check ──────────────────────────────────
+        if self._is_daily_limit_reached():
+            logger.info(
+                "risk.daily_limit_reached",
+                symbol=symbol,
+                action="short_open",
+                max_daily_trades=self._max_daily_trades,
+                opens_today=self.get_daily_opens(),
+            )
+            return RiskDecision(action=RiskAction.HOLD)
+
+        # ── Per-symbol exposure check ────────────────────────────────
+        if self._is_symbol_exposure_exceeded(symbol, portfolio, close):
+            logger.info(
+                "risk.symbol_exposure_exceeded",
+                symbol=symbol,
+                action="short_open",
+                max_symbol_exposure_usdt=str(self._max_symbol_exposure_usdt),
+            )
+            return RiskDecision(action=RiskAction.HOLD)
+
+        size = self._calculate_initial_size(portfolio, close)
+        if size <= 0:
+            return RiskDecision(action=RiskAction.HOLD)
+
+        # Inverted hard stop: entry × (1 + hard_stop_pct) — above entry
+        hard_stop = self._compute_short_hard_stop(close)
+
+        # Inverted trailing stop: entry + (ATR × multiplier) — above entry
+        trailing_stop = self._compute_short_trailing_stop(close, market_data)
+
+        self._increment_daily_opens()
+        return RiskDecision(
+            action=RiskAction.OPEN,
+            symbol=symbol,
+            side=PositionSide.SHORT,
+            size=size,
+            price=close,
+            hard_stop_price=hard_stop,
+            trailing_stop_price=trailing_stop,
+        )
+
+    def _compute_short_hard_stop(self, entry_price: Decimal) -> Decimal:
+        """Short hard stop: entry_price × (1 + hard_stop_pct) — above entry."""
+        return (entry_price * (1 + self._hard_stop_pct)).quantize(
+            Decimal("0.00000001"), rounding=ROUND_HALF_UP
+        )
+
+    def _compute_short_trailing_stop(
+        self,
+        lowest_close: Decimal,
+        market_data: MarketData,
+    ) -> Decimal:
+        """Short trailing stop: lowest_close + (ATR × multiplier) — above entry."""
+        try:
+            atr_series = market_data.get_indicator("atr")
+            atr_value = Decimal(str(atr_series.iloc[-1]))
+            if atr_value != atr_value:  # NaN check
+                return Decimal("0")
+            return (
+                lowest_close + self._trailing_atr_mult * atr_value
+            ).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
+        except (KeyError, IndexError):
+            return Decimal("0")
 
     # ── Private: scale-in sizing ─────────────────────────────────────
 

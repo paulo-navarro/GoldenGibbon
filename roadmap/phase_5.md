@@ -93,21 +93,21 @@ shorts:
 > **Prerequisite for:** tick loop integration (5.11).
 > Depends on: 5.1, 5.2.
 
-- [ ] **5.3.1** In `evaluate()`, add a branch: if `signal == Signal.SHORT` and `shorts.enabled == False` → return `RiskDecision(action=HOLD)` immediately (kill switch gate)
-- [ ] **5.3.2** In `evaluate()`, add a branch: if `signal == Signal.SHORT` and no existing short position → call new `_evaluate_short_open()`
-- [ ] **5.3.3** In `evaluate()`, add a branch: if `signal == Signal.SHORT` and short position already exists → return `RiskDecision(action=HOLD)` (no scale-in for shorts)
-- [ ] **5.3.4** Implement `_evaluate_short_open()`:
+- [x] **5.3.1** In `evaluate()`, add a branch: if `signal == Signal.SHORT` and `shorts.enabled == False` → return `RiskDecision(action=HOLD)` immediately (kill switch gate)
+- [x] **5.3.2** In `evaluate()`, add a branch: if `signal == Signal.SHORT` and no existing short position → call new `_evaluate_short_open()`
+- [x] **5.3.3** In `evaluate()`, add a branch: if `signal == Signal.SHORT` and short position already exists → return `RiskDecision(action=HOLD)` (no scale-in for shorts)
+- [x] **5.3.4** Implement `_evaluate_short_open()`:
   - Size: `position_size_pct` × `available_capital` / `current_price` (same formula as longs)
   - Hard stop (inverted): `entry_price × (1 + hard_stop_pct)`
   - Trailing stop initial value (inverted): `entry_price + (ATR × trailing_stop_atr_multiplier)`
   - Apply same daily trade cap and per-symbol exposure checks as `_evaluate_open()`
   - Return `RiskDecision(action=OPEN, side=SHORT, size=..., hard_stop_price=..., trailing_stop_price=...)`
-- [ ] **5.3.5** In `check_stops()`, detect `position.side == SHORT` and apply inverted logic:
+- [x] **5.3.5** In `check_stops()`, detect `position.side == SHORT` and apply inverted logic:
   - Hard stop fires when `close > hard_stop_price` (instead of `close < hard_stop_price`)
   - Trailing: ratchet `lowest_close = min(lowest_close, current_close)` (instead of `max`); recalculate `trailing_stop = lowest_close + (ATR × multiplier)`; fires when `close > trailing_stop_price`
   - Break-even ratchet (inverted): profit_pct for shorts = `(entry_price - close) / entry_price`; ratchet hard stop **downward** (not upward) — `new_stop = entry_price × (1 - lockin_stop_pct)` at `+4%`
   - The ratcheted hard stop for shorts only moves **down**, never up: `min(position.hard_stop_price, new_stop)`
-- [ ] **5.3.6** `SELL_FULL` and `SELL_HALF` signals with an open short → route to `RiskAction.CLOSE` / `RiskAction.REDUCE` as already done for longs (no change needed — `decision.side` is read from the position, not the signal)
+- [x] **5.3.6** `SELL_FULL` and `SELL_HALF` signals with an open short → route to `RiskAction.CLOSE` / `RiskAction.REDUCE` as already done for longs (no change needed — `decision.side` is read from the position, not the signal)
 
 ---
 
