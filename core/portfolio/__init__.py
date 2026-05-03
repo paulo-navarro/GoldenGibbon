@@ -19,6 +19,7 @@ from core.models import (
     Portfolio,
     PortfolioSnapshot,
     Position,
+    PositionSide,
     Trade,
 )
 
@@ -88,6 +89,7 @@ class PortfolioManager:
         hard_stop_price: Decimal = Decimal("0"),
         trailing_stop_price: Decimal = Decimal("0"),
         strategy: str = "smart_hodler",
+        side: PositionSide = PositionSide.LONG,
     ) -> Position:
         """
         Open a new position, deducting cost + fee from balance.
@@ -126,10 +128,12 @@ class PortfolioManager:
         position = Position(
             symbol=symbol,
             strategy=strategy,
+            side=side,
             size=size,
             entry_price=entry_price,
             entry_time=entry_time,
             highest_close=entry_price,
+            lowest_close=entry_price if side == PositionSide.SHORT else None,
             trailing_stop_price=trailing_stop_price,
             hard_stop_price=hard_stop_price,
         )
@@ -306,17 +310,29 @@ class PortfolioManager:
                 f"quantizes to zero — nothing to sell"
             )
 
-        proceeds = sold_size * exit_price
-        fee = self._apply_fee(proceeds)
-        net_proceeds = proceeds - fee
-
-        # PnL (accounts for buy-side fee embedded in entry cost
-        # and sell-side fee deducted here)
         entry_cost = sold_size * position.entry_price
-        buy_fee = self._apply_fee(entry_cost)
-        pnl_usdt = net_proceeds - (entry_cost + buy_fee)
+
+        if position.side == PositionSide.SHORT:
+            # Short: profit when exit_price < entry_price.
+            # On close we buy back — fee applies to buyback cost.
+            buyback_cost = sold_size * exit_price
+            buyback_fee = self._apply_fee(buyback_cost)
+            entry_fee = self._apply_fee(entry_cost)
+            pnl_usdt = (entry_cost - entry_fee) - (buyback_cost + buyback_fee)
+            collateral = entry_cost + entry_fee  # reserved on open
+            balance_credit = collateral + pnl_usdt
+        else:
+            # Long: profit when exit_price > entry_price.
+            proceeds = sold_size * exit_price
+            fee = self._apply_fee(proceeds)
+            net_proceeds = proceeds - fee
+            buy_fee = self._apply_fee(entry_cost)
+            pnl_usdt = net_proceeds - (entry_cost + buy_fee)
+            balance_credit = net_proceeds
+
+        denominator = entry_cost + self._apply_fee(entry_cost)
         pnl_percent = (
-            (pnl_usdt / (entry_cost + buy_fee)) * 100
+            (pnl_usdt / denominator) * 100
         ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
         duration = int((exit_time - position.entry_time).total_seconds() / 60)
@@ -335,7 +351,7 @@ class PortfolioManager:
             exit_reason=exit_reason,
         )
 
-        self._portfolio.usdt_balance += net_proceeds
+        self._portfolio.usdt_balance += balance_credit
         self._portfolio.total_pnl += pnl_usdt
         self._portfolio.trade_history.append(trade)
 
@@ -406,6 +422,7 @@ class PortfolioManager:
         self,
         symbol: str,
         highest_close: Optional[Decimal] = None,
+        lowest_close: Optional[Decimal] = None,
         trailing_stop_price: Optional[Decimal] = None,
         hard_stop_price: Optional[Decimal] = None,
     ) -> Position:
@@ -427,6 +444,8 @@ class PortfolioManager:
         updates: Dict[str, Decimal] = {}
         if highest_close is not None:
             updates["highest_close"] = highest_close
+        if lowest_close is not None:
+            updates["lowest_close"] = lowest_close
         if trailing_stop_price is not None:
             updates["trailing_stop_price"] = trailing_stop_price
         if hard_stop_price is not None:

@@ -29,6 +29,7 @@ from core.models import (
     OrderStatus,
     OrderType,
     Position,
+    PositionSide,
     RiskAction,
     RiskDecision,
     Trade,
@@ -134,8 +135,11 @@ class PaperExecutor:
         decision: RiskDecision,
         timestamp: datetime,
     ) -> ExecutionResult:
-        """OPEN → buy at slippage-adjusted price, open new position."""
-        fill_price = self._apply_slippage(decision.price, OrderSide.BUY)
+        """OPEN → fill at slippage-adjusted price, open new position."""
+        order_side = (
+            OrderSide.SELL if decision.side == PositionSide.SHORT else OrderSide.BUY
+        )
+        fill_price = self._apply_slippage(decision.price, order_side)
 
         position = self._pm.open_position(
             symbol=decision.symbol,
@@ -145,11 +149,13 @@ class PaperExecutor:
             hard_stop_price=decision.hard_stop_price or Decimal("0"),
             trailing_stop_price=decision.trailing_stop_price or Decimal("0"),
             strategy=self._strategy,
+            side=decision.side,
         )
 
         logger.info(
             "execution.open",
             symbol=decision.symbol,
+            side=decision.side.value,
             size=str(decision.size),
             fill_price=str(fill_price),
             slippage=str(self._slippage),
@@ -157,7 +163,7 @@ class PaperExecutor:
 
         order = self._build_order(
             decision=decision,
-            side=OrderSide.BUY,
+            side=order_side,
             fill_price=fill_price,
             timestamp=timestamp,
         )
@@ -200,8 +206,12 @@ class PaperExecutor:
         decision: RiskDecision,
         timestamp: datetime,
     ) -> ExecutionResult:
-        """CLOSE → sell all at slippage-adjusted price."""
-        fill_price = self._apply_slippage(decision.price, OrderSide.SELL)
+        """CLOSE → exit all at slippage-adjusted price."""
+        position = self._pm.get_position(decision.symbol)
+        order_side = (
+            OrderSide.BUY if position.side == PositionSide.SHORT else OrderSide.SELL
+        )
+        fill_price = self._apply_slippage(decision.price, order_side)
 
         trade = self._pm.close_position(
             symbol=decision.symbol,
@@ -223,7 +233,7 @@ class PaperExecutor:
 
         order = self._build_order(
             decision=decision,
-            side=OrderSide.SELL,
+            side=order_side,
             fill_price=fill_price,
             timestamp=timestamp,
         )
@@ -234,8 +244,12 @@ class PaperExecutor:
         decision: RiskDecision,
         timestamp: datetime,
     ) -> ExecutionResult:
-        """REDUCE → sell fraction at slippage-adjusted price."""
-        fill_price = self._apply_slippage(decision.price, OrderSide.SELL)
+        """REDUCE → partial exit at slippage-adjusted price."""
+        position = self._pm.get_position(decision.symbol)
+        order_side = (
+            OrderSide.BUY if position.side == PositionSide.SHORT else OrderSide.SELL
+        )
+        fill_price = self._apply_slippage(decision.price, order_side)
 
         trade = self._pm.reduce_position(
             symbol=decision.symbol,
@@ -257,7 +271,7 @@ class PaperExecutor:
 
         order = self._build_order(
             decision=decision,
-            side=OrderSide.SELL,
+            side=order_side,
             fill_price=fill_price,
             timestamp=timestamp,
         )

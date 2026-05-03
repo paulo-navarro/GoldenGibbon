@@ -116,10 +116,10 @@ shorts:
 > **Prerequisite for:** executors (5.5, 5.6).
 > Depends on: 5.1.
 
-- [ ] **5.4.1** Update `open_position()` to accept `side: PositionSide = PositionSide.LONG` parameter; pass it when constructing the `Position` object
-- [ ] **5.4.2** For `side=SHORT`, initialise `lowest_close = entry_price` (and `highest_close = entry_price` stays for completeness)
-- [ ] **5.4.3** Update `close_position()` PnL calculation: if `position.side == SHORT`, use `pnl_per_unit = entry_price - exit_price`; update `usdt_balance` accordingly
-- [ ] **5.4.4** Update `reduce_position()` PnL calculation: same inversion for partial covers
+- [x] **5.4.1** Update `open_position()` to accept `side: PositionSide = PositionSide.LONG` parameter; pass it when constructing the `Position` object
+- [x] **5.4.2** For `side=SHORT`, initialise `lowest_close = entry_price` (and `highest_close = entry_price` stays for completeness)
+- [x] **5.4.3** Update `close_position()` PnL calculation: if `position.side == SHORT`, use `pnl_per_unit = entry_price - exit_price`; update `usdt_balance` accordingly
+- [x] **5.4.4** Update `reduce_position()` PnL calculation: same inversion for partial covers
 
 ---
 
@@ -127,10 +127,10 @@ shorts:
 
 > Depends on: 5.1, 5.4.
 
-- [ ] **5.5.1** In `_execute_open()`: if `decision.side == SHORT`, apply sell slippage (`price × (1 - slippage_pct)` — shorting at slightly lower price, adverse); call `pm.open_position(..., side=SHORT)`
-- [ ] **5.5.2** In `_execute_close()`: if `position.side == SHORT`, apply buy slippage (`price × (1 + slippage_pct)` — buying back at slightly higher price, adverse); the rest of the close flow is unchanged
-- [ ] **5.5.3** In `_execute_reduce()`: same buy-slippage inversion for partial covers on short positions
-- [ ] **5.5.4** Ensure `OrderSide` in the resulting `Order` record is set correctly: `SELL` for short open, `BUY` for short close/reduce
+- [x] **5.5.1** In `_execute_open()`: if `decision.side == SHORT`, apply sell slippage (`price × (1 - slippage_pct)` — shorting at slightly lower price, adverse); call `pm.open_position(..., side=SHORT)`
+- [x] **5.5.2** In `_execute_close()`: if `position.side == SHORT`, apply buy slippage (`price × (1 + slippage_pct)` — buying back at slightly higher price, adverse); the rest of the close flow is unchanged
+- [x] **5.5.3** In `_execute_reduce()`: same buy-slippage inversion for partial covers on short positions
+- [x] **5.5.4** Ensure `OrderSide` in the resulting `Order` record is set correctly: `SELL` for short open, `BUY` for short close/reduce
 
 ---
 

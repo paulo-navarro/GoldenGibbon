@@ -28,6 +28,7 @@ from core.models import (
     OrderSide,
     OrderStatus,
     OrderType,
+    PositionSide,
     RiskAction,
     RiskDecision,
 )
@@ -618,3 +619,191 @@ class TestExecutionEvents:
         data = pub.publish.call_args[0][2]
         # avg_fill_price should match the result's order
         assert data["avg_fill_price"] == str(result.order.avg_fill_price)
+
+
+# ── Short position support (Phase 5.5 / 5.10) ───────────────────────────────
+
+
+def _open_short_decision(
+    symbol: str = "BTCUSDT",
+    size: Decimal = Decimal("0.1"),
+    price: Decimal = Decimal("50000"),
+) -> RiskDecision:
+    return RiskDecision(
+        action=RiskAction.OPEN,
+        symbol=symbol,
+        side=PositionSide.SHORT,
+        size=size,
+        price=price,
+        hard_stop_price=Decimal("52500"),  # above entry (5% stop)
+        trailing_stop_price=Decimal("51500"),  # above entry
+    )
+
+
+def _close_short_decision(
+    symbol: str = "BTCUSDT",
+    size: Decimal = Decimal("0.1"),
+    price: Decimal = Decimal("48000"),
+) -> RiskDecision:
+    return RiskDecision(
+        action=RiskAction.CLOSE,
+        symbol=symbol,
+        size=size,
+        price=price,
+        exit_reason=ExitReason.EMA_CROSS,
+    )
+
+
+class TestExecuteOpenShort:
+    """5.10.1 — OPEN with side=SHORT."""
+
+    def test_sell_slippage_applied(self):
+        """Short open fill price = price × (1 - slippage)."""
+        ex = _executor()
+        result = ex.execute(_open_short_decision(price=Decimal("50000")), T0)
+        # 50000 × (1 - 0.001) = 49950
+        expected = Decimal("49950.00000000")
+        assert result.order.avg_fill_price == expected
+
+    def test_position_created_with_short_side(self):
+        ex = _executor()
+        result = ex.execute(_open_short_decision(), T0)
+        assert result.position.side == PositionSide.SHORT
+
+    def test_position_entry_price_includes_slippage(self):
+        ex = _executor()
+        result = ex.execute(_open_short_decision(price=Decimal("50000")), T0)
+        assert result.position.entry_price == Decimal("49950.00000000")
+
+    def test_order_side_is_sell(self):
+        """Short open → OrderSide.SELL."""
+        ex = _executor()
+        result = ex.execute(_open_short_decision(), T0)
+        assert result.order.side == OrderSide.SELL
+
+    def test_stops_passed_correctly(self):
+        ex = _executor()
+        result = ex.execute(_open_short_decision(), T0)
+        assert result.position.hard_stop_price == Decimal("52500")
+        assert result.position.trailing_stop_price == Decimal("51500")
+
+
+class TestExecuteCloseShort:
+    """5.10.2 / 5.10.3 — CLOSE on short position."""
+
+    def _setup(self, entry_price=Decimal("50000"), exit_price=Decimal("48000")):
+        pm = _pm()
+        ex = _executor(pm=pm)
+        ex.execute(_open_short_decision(price=entry_price), T0)
+        close = _close_short_decision(price=exit_price)
+        result = ex.execute(close, T1)
+        return result, pm
+
+    def test_buy_slippage_applied(self):
+        """Short close fill price = price × (1 + slippage)."""
+        result, _ = self._setup(exit_price=Decimal("48000"))
+        # 48000 × 1.001 = 48048
+        expected = Decimal("48048.00000000")
+        assert result.order.avg_fill_price == expected
+
+    def test_order_side_is_buy(self):
+        """Short close → OrderSide.BUY."""
+        result, _ = self._setup()
+        assert result.order.side == OrderSide.BUY
+
+    def test_pnl_positive_when_price_fell(self):
+        """Profit when exit price < entry price."""
+        result, _ = self._setup(entry_price=Decimal("50000"), exit_price=Decimal("48000"))
+        assert result.trade.pnl_usdt > 0
+
+    def test_pnl_negative_when_price_rose(self):
+        """Loss when exit price > entry price."""
+        result, _ = self._setup(entry_price=Decimal("50000"), exit_price=Decimal("52000"))
+        assert result.trade.pnl_usdt < 0
+
+    def test_position_removed(self):
+        """Position is fully closed."""
+        _, pm = self._setup()
+        assert not pm.has_position("BTCUSDT")
+
+
+class TestExecuteReduceShort:
+    """5.10.4 — REDUCE on short position."""
+
+    def _setup(self):
+        pm = _pm()
+        ex = _executor(pm=pm)
+        ex.execute(_open_short_decision(price=Decimal("50000"), size=Decimal("0.10")), T0)
+        reduce = RiskDecision(
+            action=RiskAction.REDUCE,
+            symbol="BTCUSDT",
+            size=Decimal("0.10"),
+            price=Decimal("48000"),
+            exit_reason=ExitReason.MOMENTUM_FADE,
+            sell_fraction=Decimal("0.5"),
+        )
+        result = ex.execute(reduce, T1)
+        return result, pm
+
+    def test_buy_slippage_applied(self):
+        """Short reduce fill price = price × (1 + slippage)."""
+        result, _ = self._setup()
+        expected = Decimal("48048.00000000")  # 48000 × 1.001
+        assert result.order.avg_fill_price == expected
+
+    def test_order_side_is_buy(self):
+        """Short reduce → OrderSide.BUY."""
+        result, _ = self._setup()
+        assert result.order.side == OrderSide.BUY
+
+    def test_partial_pnl_positive(self):
+        """Partial cover has positive PnL when price fell."""
+        result, _ = self._setup()
+        assert result.trade.pnl_usdt > 0
+
+    def test_remaining_position_size(self):
+        """Half the position remains after 50% reduce."""
+        _, pm = self._setup()
+        pos = pm.get_position("BTCUSDT")
+        assert pos.size == Decimal("0.05")
+        assert pos.side == PositionSide.SHORT
+
+
+class TestShortOrderSideCorrectness:
+    """5.10.5 — OrderSide is set correctly for all short operations."""
+
+    @pytest.mark.parametrize(
+        "action,expected_side",
+        [
+            ("open", OrderSide.SELL),
+            ("close", OrderSide.BUY),
+            ("reduce", OrderSide.BUY),
+        ],
+    )
+    def test_order_side(self, action, expected_side):
+        pm = _pm()
+        ex = _executor(pm=pm)
+
+        # Open short position first
+        ex.execute(_open_short_decision(price=Decimal("50000")), T0)
+
+        if action == "open":
+            # Check the last open result
+            pm2 = _pm()
+            ex2 = _executor(pm=pm2)
+            result = ex2.execute(_open_short_decision(price=Decimal("50000")), T0)
+        elif action == "close":
+            result = ex.execute(_close_short_decision(price=Decimal("48000")), T1)
+        else:  # reduce
+            reduce = RiskDecision(
+                action=RiskAction.REDUCE,
+                symbol="BTCUSDT",
+                size=Decimal("0.1"),
+                price=Decimal("48000"),
+                exit_reason=ExitReason.MOMENTUM_FADE,
+                sell_fraction=Decimal("0.5"),
+            )
+            result = ex.execute(reduce, T1)
+
+        assert result.order.side == expected_side
+

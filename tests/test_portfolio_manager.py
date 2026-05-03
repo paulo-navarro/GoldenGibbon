@@ -949,3 +949,208 @@ class TestPortfolioEvents:
         assert pub.publish_model.call_count == 2
         # publish: BALANCE_UPDATED × 2 (open + close)
         assert pub.publish.call_count == 2
+
+
+# ── Short Position Support ───────────────────────────────────────────────────
+
+
+class TestOpenPositionShort:
+    """Opening short positions (5.4.1 + 5.4.2)."""
+
+    @patch("core.portfolio.get_publisher")
+    def test_open_short_sets_side_and_lowest_close(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        from core.models import PositionSide
+
+        pm = PortfolioManager(initial_capital=Decimal("10000"))
+        pos = pm.open_position(
+            symbol="BTCUSDT",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            entry_time=T0,
+            hard_stop_price=Decimal("52500"),
+            trailing_stop_price=Decimal("51500"),
+            side=PositionSide.SHORT,
+        )
+        assert pos.side == PositionSide.SHORT
+        assert pos.lowest_close == Decimal("50000")
+        assert pos.highest_close == Decimal("50000")
+
+    @patch("core.portfolio.get_publisher")
+    def test_open_short_deducts_collateral(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        from core.models import PositionSide
+
+        pm = PortfolioManager(initial_capital=Decimal("10000"))
+        pm.open_position(
+            symbol="BTCUSDT",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            entry_time=T0,
+            side=PositionSide.SHORT,
+        )
+        # cost = 0.1 * 50000 = 5000; fee = 5000 * 0.001 = 5
+        expected_balance = Decimal("10000") - Decimal("5000") - Decimal("5")
+        assert pm.portfolio.usdt_balance == expected_balance
+
+    @patch("core.portfolio.get_publisher")
+    def test_open_long_default_side(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        from core.models import PositionSide
+
+        pm = PortfolioManager(initial_capital=Decimal("10000"))
+        pos = pm.open_position(
+            symbol="BTCUSDT",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            entry_time=T0,
+        )
+        assert pos.side == PositionSide.LONG
+        assert pos.lowest_close is None
+
+
+class TestClosePositionShort:
+    """Closing short positions — PnL inversion (5.4.3)."""
+
+    @patch("core.portfolio.get_publisher")
+    def test_close_short_profitable(self, mock_pub):
+        """Short entry=50000, exit=45000 → profit."""
+        mock_pub.return_value = MagicMock()
+        from core.models import PositionSide
+
+        pm = PortfolioManager(initial_capital=Decimal("10000"))
+        pm.open_position(
+            symbol="BTCUSDT",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            entry_time=T0,
+            side=PositionSide.SHORT,
+        )
+        trade = pm.close_position(
+            symbol="BTCUSDT",
+            exit_price=Decimal("45000"),
+            exit_time=T1,
+            exit_reason=ExitReason.EMA_CROSS,
+        )
+        # entry_cost = 0.1 * 50000 = 5000
+        # entry_fee = 5000 * 0.001 = 5
+        # buyback_cost = 0.1 * 45000 = 4500
+        # buyback_fee = 4500 * 0.001 = 4.5
+        # pnl = (5000 - 5) - (4500 + 4.5) = 4995 - 4504.5 = 490.5
+        assert trade.pnl_usdt == Decimal("490.50000000")
+        assert trade.pnl_usdt > 0
+
+    @patch("core.portfolio.get_publisher")
+    def test_close_short_losing(self, mock_pub):
+        """Short entry=50000, exit=55000 → loss."""
+        mock_pub.return_value = MagicMock()
+        from core.models import PositionSide
+
+        pm = PortfolioManager(initial_capital=Decimal("10000"))
+        pm.open_position(
+            symbol="BTCUSDT",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            entry_time=T0,
+            side=PositionSide.SHORT,
+        )
+        trade = pm.close_position(
+            symbol="BTCUSDT",
+            exit_price=Decimal("55000"),
+            exit_time=T1,
+            exit_reason=ExitReason.HARD_STOP,
+        )
+        # entry_cost = 5000; entry_fee = 5
+        # buyback_cost = 5500; buyback_fee = 5.5
+        # pnl = (5000 - 5) - (5500 + 5.5) = 4995 - 5505.5 = -510.5
+        assert trade.pnl_usdt == Decimal("-510.50000000")
+        assert trade.pnl_usdt < 0
+
+    @patch("core.portfolio.get_publisher")
+    def test_close_short_balance_round_trip(self, mock_pub):
+        """Close short at same price: balance = initial - fees only."""
+        mock_pub.return_value = MagicMock()
+        from core.models import PositionSide
+
+        pm = PortfolioManager(initial_capital=Decimal("10000"))
+        pm.open_position(
+            symbol="BTCUSDT",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            entry_time=T0,
+            side=PositionSide.SHORT,
+        )
+        pm.close_position(
+            symbol="BTCUSDT",
+            exit_price=Decimal("50000"),
+            exit_time=T1,
+            exit_reason=ExitReason.MANUAL,
+        )
+        # Two fees: entry 5 + exit 5 = 10 total
+        expected = Decimal("10000") - Decimal("5") - Decimal("5")
+        assert pm.portfolio.usdt_balance == expected
+
+
+class TestReducePositionShort:
+    """Partial cover of short positions (5.4.4)."""
+
+    @patch("core.portfolio.get_publisher")
+    def test_reduce_short_half(self, mock_pub):
+        """Reduce short by 50%, verify PnL on sold portion."""
+        mock_pub.return_value = MagicMock()
+        from core.models import PositionSide
+
+        pm = PortfolioManager(initial_capital=Decimal("10000"))
+        pm.open_position(
+            symbol="BTCUSDT",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            entry_time=T0,
+            side=PositionSide.SHORT,
+        )
+        trade = pm.reduce_position(
+            symbol="BTCUSDT",
+            sell_fraction=Decimal("0.5"),
+            exit_price=Decimal("45000"),
+            exit_time=T1,
+            exit_reason=ExitReason.MOMENTUM_FADE,
+        )
+        # sold 0.05 BTC
+        # entry_cost = 0.05 * 50000 = 2500
+        # entry_fee = 2500 * 0.001 = 2.5
+        # buyback_cost = 0.05 * 45000 = 2250
+        # buyback_fee = 2250 * 0.001 = 2.25
+        # pnl = (2500 - 2.5) - (2250 + 2.25) = 2497.5 - 2252.25 = 245.25
+        assert trade.size == Decimal("0.05000000")
+        assert trade.pnl_usdt == Decimal("245.25000000")
+
+        # Remaining position still exists
+        pos = pm.get_position("BTCUSDT")
+        assert pos is not None
+        assert pos.size == Decimal("0.05000000")
+        assert pos.side == PositionSide.SHORT
+
+
+class TestUpdateStopsShort:
+    """update_stops() with lowest_close parameter."""
+
+    @patch("core.portfolio.get_publisher")
+    def test_update_lowest_close(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        from core.models import PositionSide
+
+        pm = PortfolioManager(initial_capital=Decimal("10000"))
+        pm.open_position(
+            symbol="BTCUSDT",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            entry_time=T0,
+            side=PositionSide.SHORT,
+        )
+        updated = pm.update_stops(
+            symbol="BTCUSDT",
+            lowest_close=Decimal("48000"),
+            trailing_stop_price=Decimal("49500"),
+        )
+        assert updated.lowest_close == Decimal("48000")
+        assert updated.trailing_stop_price == Decimal("49500")
