@@ -143,7 +143,17 @@ def _recover_state(
                     buy_signal_candles=state_rec.consecutive_buy_candles,
                 )
 
-            # 2. Restore open position ─────────────────────────────────
+            # 2a. Restore USDT balance and PnL (regardless of position)
+            if state_rec is not None:
+                data = state_rec.state_data or {}
+                saved_balance = data.get("usdt_balance")
+                if saved_balance is not None:
+                    pm._portfolio.usdt_balance = Decimal(str(saved_balance))
+                saved_total_pnl = data.get("total_pnl")
+                if saved_total_pnl is not None:
+                    pm._portfolio.total_pnl = Decimal(str(saved_total_pnl))
+
+            # 2b. Restore open position ────────────────────────────────
             pos_rec = (
                 session.query(PositionRecord)
                 .filter_by(symbol=symbol, strategy=strategy_name)
@@ -151,15 +161,6 @@ def _recover_state(
             )
             if pos_rec is not None:
                 position = orm_to_position(pos_rec)
-                # Restore USDT balance from state_data
-                if state_rec is not None:
-                    data = state_rec.state_data or {}
-                    saved_balance = data.get("usdt_balance")
-                    if saved_balance is not None:
-                        pm._portfolio.usdt_balance = Decimal(str(saved_balance))
-                    saved_total_pnl = data.get("total_pnl")
-                    if saved_total_pnl is not None:
-                        pm._portfolio.total_pnl = Decimal(str(saved_total_pnl))
 
                 # Inject position directly into PM without deducting cost
                 # (cost was already deducted when originally opened).

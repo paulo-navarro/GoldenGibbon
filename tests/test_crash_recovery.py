@@ -227,6 +227,15 @@ class TestStrategyStateRecovery:
 
         assert pm.portfolio.usdt_balance == Decimal("8500")
 
+    def test_restores_usdt_balance_when_flat(self):
+        _seed_state_record(state="flat")
+
+        pm = _make_pm("10000")
+        _recover_state(STRATEGY, SYMBOL, _make_strategy(), pm, _make_risk_engine())
+
+        assert pm.portfolio.usdt_balance == Decimal("8500")
+        assert pm.portfolio.total_pnl == Decimal("-1500")
+
 
 # ── Position recovery ──────────────────────────────────────────────────────
 
