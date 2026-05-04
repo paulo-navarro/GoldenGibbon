@@ -139,11 +139,11 @@ shorts:
 > Depends on: 5.1, 5.4.
 > **This task touches real money — implement and test in paper mode first (5.5), then port to Binance.**
 
-- [ ] **5.6.1** In `_execute_open()`: if `decision.side == SHORT`, route to Binance Margin endpoint `POST /sapi/v1/margin/order` with `side=SELL`, `sideEffectType=MARGIN_BUY`; read `margin_type` from config (`"cross"` → `isIsolated=FALSE`)
-- [ ] **5.6.2** In `_execute_close()` / `_execute_reduce()`: if `position.side == SHORT`, use `POST /sapi/v1/margin/order` with `side=BUY`, `sideEffectType=AUTO_REPAY`
-- [ ] **5.6.3** For exchange-side stop orders on shorts: use `POST /sapi/v1/margin/order` with `side=BUY`, `type=STOP_LOSS_LIMIT`, `stopPrice=hard_stop_price`
-- [ ] **5.6.4** Handle `shorts.enabled == False` gate: if disabled, raise `RuntimeError` before placing any margin order (defence-in-depth, should never reach here but belt-and-suspenders)
-- [ ] **5.6.5** Error handling: map Binance margin-specific error codes (`-3045`, `-3021`, insufficient margin, etc.) to actionable log messages
+- [x] **5.6.1** In `_execute_open()`: if `decision.side == SHORT`, route to Binance Margin endpoint `POST /sapi/v1/margin/order` with `side=SELL`, `sideEffectType=MARGIN_BUY`; read `margin_type` from config (`"cross"` → `isIsolated=FALSE`)
+- [x] **5.6.2** In `_execute_close()` / `_execute_reduce()`: if `position.side == SHORT`, use `POST /sapi/v1/margin/order` with `side=BUY`, `sideEffectType=AUTO_REPAY`
+- [x] **5.6.3** For exchange-side stop orders on shorts: use `POST /sapi/v1/margin/order` with `side=BUY`, `type=STOP_LOSS_LIMIT`, `stopPrice=hard_stop_price`
+- [x] **5.6.4** Handle `shorts.enabled == False` gate: if disabled, raise `RuntimeError` before placing any margin order (defence-in-depth, should never reach here but belt-and-suspenders)
+- [x] **5.6.5** Error handling: map Binance margin-specific error codes (`-3045`, `-3021`, insufficient margin, etc.) to actionable log messages
 
 ---
 
@@ -153,16 +153,16 @@ shorts:
 > Depends on: 5.1 (for `Signal.SHORT`, `BearGuardConditions`, `StrategyState`).
 > Reference implementation: [strategy_bear_guard.md](strategy_bear_guard.md), [core/strategies/smart_hodler.py](../core/strategies/smart_hodler.py)
 
-- [ ] **5.7.1** Create `core/strategies/bear_guard.py` with `BearGuard(Strategy)` class; property `name` returns `"bear_guard"`
-- [ ] **5.7.2** Implement `decide()` with full entry logic (all 7 conditions from [§ 1](strategy_bear_guard.md#11-bear-trend-detection-primary--15m)); only emit `Signal.SHORT` from `FLAT` state
-- [ ] **5.7.3** Implement full-cover exit logic: golden cross (EMA50 > EMA200) OR N consecutive closes above EMA200; emit `Signal.SELL_FULL` → enter `COOLDOWN`
-- [ ] **5.7.4** Implement partial-cover exit logic: 1H RSI > 70 AND ADX falling; emit `Signal.SELL_HALF` → transition to `REDUCED`; only from `POSITION` (not `REDUCED`)
-- [ ] **5.7.5** Implement cooldown countdown (reuse pattern from `SmartHodler._enter_cooldown()`)
-- [ ] **5.7.6** Implement session filter (reuse `is_in_dead_zone` from `core/strategies/session_filter.py`)
-- [ ] **5.7.7** Populate `self._conditions` (type `BearGuardConditions`) on every call for UI/debug visibility
-- [ ] **5.7.8** Implement NaN guard (return `Signal.HOLD` if any required indicator value is NaN)
-- [ ] **5.7.9** Implement missing-secondary-data guard (return `Signal.HOLD` if `market_data.has_secondary == False`)
-- [ ] **5.7.10** Verify auto-discovery: run `get_registry()` and confirm `"bear_guard"` appears — no manual edit to `registry.py` needed
+- [x] **5.7.1** Create `core/strategies/bear_guard.py` with `BearGuard(Strategy)` class; property `name` returns `"bear_guard"`
+- [x] **5.7.2** Implement `decide()` with full entry logic (all 7 conditions from [§ 1](strategy_bear_guard.md#11-bear-trend-detection-primary--15m)); only emit `Signal.SHORT` from `FLAT` state
+- [x] **5.7.3** Implement full-cover exit logic: golden cross (EMA50 > EMA200) OR N consecutive closes above EMA200; emit `Signal.SELL_FULL` → `FLAT` (no cooldown on profit exits per spec)
+- [x] **5.7.4** Implement partial-cover exit logic: 1H RSI > 70 AND ADX falling; emit `Signal.SELL_HALF` → transition to `REDUCED`; only from `POSITION` (not `REDUCED`)
+- [x] **5.7.5** Implement cooldown countdown (reuse pattern from `SmartHodler._enter_cooldown()`)
+- [x] **5.7.6** Implement session filter (reuse `is_in_dead_zone` from `core/strategies/session_filter.py`)
+- [x] **5.7.7** Populate `self._conditions` (type `BearGuardConditions`) on every call for UI/debug visibility
+- [x] **5.7.8** Implement NaN guard (return `Signal.HOLD` if any required indicator value is NaN)
+- [x] **5.7.9** Implement missing-secondary-data guard (return `Signal.HOLD` if `market_data.has_secondary == False`)
+- [x] **5.7.10** Verify auto-discovery: run `get_registry()` and confirm `"bear_guard"` appears — no manual edit to `registry.py` needed
 
 ---
 

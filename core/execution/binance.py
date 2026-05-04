@@ -42,6 +42,7 @@ from core.models import (
     OrderSide,
     OrderStatus,
     OrderType,
+    PositionSide,
     RiskAction,
     RiskDecision,
     TimeInForce,
@@ -63,6 +64,12 @@ _PERMANENT_CODES = frozenset({
     -2011,  # Unknown order (cancel non-existent)
     -1116,  # Invalid order type
     -1117,  # Invalid side
+    # Margin-specific errors
+    -3003,  # Margin account does not exist
+    -3005,  # Transfer out amount exceeds max
+    -3007,  # Insufficient margin balance
+    -3021,  # Margin account not active
+    -3045,  # System doesn't have enough asset to borrow
 })
 
 # Retryable errors — transient, worth retrying
@@ -305,6 +312,199 @@ class BinanceExecutor:
 
         return None
 
+    # ── Private: margin helpers (Phase 5.6) ──────────────────────────────
+
+    @staticmethod
+    def _assert_shorts_enabled() -> None:
+        """Defence-in-depth gate — raises if shorts are globally disabled."""
+        from core.config import get_settings
+
+        if not get_settings().shorts.enabled:
+            raise RuntimeError(
+                "Short selling is disabled (shorts.enabled=False). "
+                "This code path should not have been reached."
+            )
+
+    def _get_margin_type(self) -> str:
+        """Read margin_type from BearGuard config ('cross' or 'isolated')."""
+        from core.config import get_settings
+
+        return get_settings().strategies.bear_guard.margin_type
+
+    def _place_margin_order(
+        self,
+        decision: RiskDecision,
+        side: OrderSide,
+        side_effect_type: str,
+    ) -> Optional[Order]:
+        """
+        Place an order on Binance Margin and wait for fill.
+
+        Args:
+            decision: Risk decision with symbol, size, price.
+            side: BUY or SELL.
+            side_effect_type: "MARGIN_BUY" (borrow+sell) or "AUTO_REPAY" (buy+repay).
+
+        Returns a filled Order on success, or an Order with REJECTED status
+        on failure. Returns None only on unexpected errors.
+        """
+        symbol = decision.symbol
+        qty = self._format_quantity(symbol, decision.size)
+
+        if qty <= 0:
+            logger.error("binance.margin_zero_quantity", symbol=symbol)
+            return None
+
+        margin_type = self._get_margin_type()
+        is_isolated = "TRUE" if margin_type == "isolated" else "FALSE"
+
+        params: Dict[str, Any] = {
+            "symbol": symbol,
+            "side": side.value.upper(),
+            "type": "MARKET",
+            "quantity": str(qty),
+            "sideEffectType": side_effect_type,
+            "isIsolated": is_isolated,
+        }
+
+        # Publish ORDER_CREATED event
+        publisher = get_publisher()
+        pending_order = Order(
+            symbol=symbol,
+            side=side,
+            order_type=OrderType.MARKET,
+            amount=qty,
+            price=decision.price,
+            status=OrderStatus.PENDING,
+        )
+        publisher.publish_model(
+            EventChannel.EXECUTION, EventType.ORDER_CREATED, pending_order
+        )
+
+        try:
+            response = with_retry(
+                fn=lambda: self._signed_request(
+                    "POST", "/sapi/v1/margin/order", params
+                ),
+                config=self._retry_config,
+                retryable=(requests.ConnectionError, requests.Timeout),
+                label=f"binance.place_margin_order({symbol})",
+            )
+        except BinanceAPIError as exc:
+            logger.error(
+                "binance.margin_order_rejected",
+                symbol=symbol,
+                code=exc.code,
+                msg=exc.msg,
+                side_effect=side_effect_type,
+            )
+            return Order(
+                symbol=symbol,
+                side=side,
+                order_type=OrderType.MARKET,
+                amount=qty,
+                price=decision.price,
+                status=OrderStatus.REJECTED,
+                reject_reason=exc.msg,
+                exchange_status=str(exc.code),
+            )
+        except RetryExhausted as exc:
+            logger.error(
+                "binance.margin_order_retry_exhausted",
+                symbol=symbol,
+                error=str(exc.last_error),
+            )
+            return Order(
+                symbol=symbol,
+                side=side,
+                order_type=OrderType.MARKET,
+                amount=qty,
+                price=decision.price,
+                status=OrderStatus.REJECTED,
+                reject_reason=f"Retry exhausted: {exc.last_error}",
+            )
+        except Exception:
+            logger.exception(
+                "binance.margin_order_unexpected_error", symbol=symbol
+            )
+            return None
+
+        # Parse the fill response (same format as spot)
+        return self._parse_fill_response(
+            response=response,
+            decision=decision,
+            side=side,
+            order_type=OrderType.MARKET,
+            qty=qty,
+            time_in_force=None,
+        )
+
+    def _place_margin_stop_order(
+        self,
+        symbol: str,
+        quantity: Decimal,
+        stop_price: Decimal,
+        slippage_pct: Decimal = Decimal("0.005"),
+    ) -> Optional[str]:
+        """Place a margin stop-loss order for a short position (BUY side)."""
+        qty = self._format_quantity(symbol, quantity)
+        if qty <= 0:
+            logger.error("binance.margin_stop_zero_qty", symbol=symbol)
+            return None
+
+        formatted_stop = self._format_price(symbol, stop_price)
+        # For shorts, stop is ABOVE entry — limit gives room above the stop
+        limit_price = self._format_price(
+            symbol, stop_price * (1 + slippage_pct),
+        )
+
+        margin_type = self._get_margin_type()
+        is_isolated = "TRUE" if margin_type == "isolated" else "FALSE"
+
+        params: Dict[str, Any] = {
+            "symbol": symbol,
+            "side": "BUY",
+            "type": "STOP_LOSS_LIMIT",
+            "quantity": str(qty),
+            "stopPrice": str(formatted_stop),
+            "price": str(limit_price),
+            "timeInForce": "GTC",
+            "sideEffectType": "AUTO_REPAY",
+            "isIsolated": is_isolated,
+        }
+
+        try:
+            response = with_retry(
+                fn=lambda: self._signed_request(
+                    "POST", "/sapi/v1/margin/order", params
+                ),
+                config=self._retry_config,
+                retryable=(requests.ConnectionError, requests.Timeout),
+                label=f"binance.place_margin_stop({symbol})",
+            )
+        except (BinanceAPIError, RetryExhausted) as exc:
+            logger.error(
+                "binance.margin_stop_order_failed",
+                symbol=symbol,
+                stop_price=str(formatted_stop),
+                error=str(exc),
+            )
+            return None
+        except Exception:
+            logger.exception("binance.margin_stop_unexpected", symbol=symbol)
+            return None
+
+        order_id = str(response["orderId"])
+        logger.info(
+            "binance.margin_stop_placed",
+            symbol=symbol,
+            stop_price=str(formatted_stop),
+            limit_price=str(limit_price),
+            quantity=str(qty),
+            order_id=order_id,
+        )
+        return order_id
+
     # ── Private: buy-side ────────────────────────────────────────────────
 
     def _execute_open(
@@ -312,12 +512,22 @@ class BinanceExecutor:
         decision: RiskDecision,
         timestamp: datetime,
     ) -> Optional[ExecutionResult]:
-        """OPEN -> buy, open new position."""
-        order = self._place_and_fill(decision, OrderSide.BUY)
+        """OPEN -> place order and open new position."""
+        is_short = decision.side == PositionSide.SHORT
+
+        if is_short:
+            self._assert_shorts_enabled()
+            order = self._place_margin_order(
+                decision, OrderSide.SELL, "MARGIN_BUY"
+            )
+        else:
+            order = self._place_and_fill(decision, OrderSide.BUY)
+
         if order is None or order.status != OrderStatus.FILLED:
             logger.error(
                 "binance.open_failed",
                 symbol=decision.symbol,
+                side=decision.side.value,
                 size=str(decision.size),
                 order_status=order.status.value if order else "no_order",
                 reject_reason=order.reject_reason if order else "unknown",
@@ -335,21 +545,29 @@ class BinanceExecutor:
             hard_stop_price=decision.hard_stop_price or Decimal("0"),
             trailing_stop_price=decision.trailing_stop_price or Decimal("0"),
             strategy=self._strategy,
+            side=decision.side,
         )
 
         logger.info(
             "binance.open",
             symbol=decision.symbol,
+            side=decision.side.value,
             size=str(filled_size),
             fill_price=str(fill_price),
             exchange_order_id=order.exchange_order_id,
         )
 
         if self._exchange_stops_enabled and decision.hard_stop_price:
-            stop_order_id = self._place_stop_order(
-                decision.symbol, filled_size,
-                decision.hard_stop_price, self._stop_slippage,
-            )
+            if is_short:
+                stop_order_id = self._place_margin_stop_order(
+                    decision.symbol, filled_size,
+                    decision.hard_stop_price, self._stop_slippage,
+                )
+            else:
+                stop_order_id = self._place_stop_order(
+                    decision.symbol, filled_size,
+                    decision.hard_stop_price, self._stop_slippage,
+                )
             if stop_order_id:
                 self._pm.update_stop_order_id(decision.symbol, stop_order_id)
 
@@ -411,72 +629,78 @@ class BinanceExecutor:
         decision: RiskDecision,
         timestamp: datetime,
     ) -> Optional[ExecutionResult]:
-        """CLOSE -> sell entire position."""
-        real_balance = self._get_available_balance(decision.symbol)
+        """CLOSE -> exit entire position (spot sell for longs, margin buy for shorts)."""
+        pos = self._pm.get_position(decision.symbol)
+        is_short = pos is not None and pos.side == PositionSide.SHORT
 
-        # If free balance is 0 but we have an exchange stop order, the balance
-        # is locked by that stop. Cancel it first to unlock the asset.
-        if real_balance is not None and real_balance <= Decimal("0"):
-            pos = self._pm.get_position(decision.symbol)
-            if pos and pos.exchange_stop_order_id:
-                logger.info(
-                    "binance.close_cancel_stop_to_unlock",
-                    symbol=decision.symbol,
-                    order_id=pos.exchange_stop_order_id,
-                )
-                self._cancel_stop_order(decision.symbol, pos.exchange_stop_order_id)
-                self._pm.update_stop_order_id(decision.symbol, None)
-                # Re-query balance after cancel
-                real_balance = self._get_available_balance(decision.symbol)
-
-        if real_balance is not None and real_balance < decision.size:
-            logger.warning(
-                "binance.close_clamped_to_real_balance",
-                symbol=decision.symbol,
-                requested=str(decision.size),
-                available=str(real_balance),
+        if is_short:
+            # Short close: margin BUY with AUTO_REPAY — no spot balance needed
+            order = self._place_margin_order(
+                decision, OrderSide.BUY, "AUTO_REPAY"
             )
-            decision = decision.model_copy(update={"size": real_balance})
+        else:
+            # Long close: spot SELL with balance clamping
+            real_balance = self._get_available_balance(decision.symbol)
 
-        formatted_qty = self._format_quantity(decision.symbol, decision.size)
-        if formatted_qty <= 0:
-            if real_balance is not None and real_balance > Decimal("0"):
-                formatted_real = self._format_quantity(decision.symbol, real_balance)
-                if formatted_real > Decimal("0"):
-                    # Exchange has a sellable qty — sell the real balance
-                    logger.warning(
-                        "binance.dust_close_avoided",
+            # If free balance is 0 but we have an exchange stop order, the balance
+            # is locked by that stop. Cancel it first to unlock the asset.
+            if real_balance is not None and real_balance <= Decimal("0"):
+                if pos and pos.exchange_stop_order_id:
+                    logger.info(
+                        "binance.close_cancel_stop_to_unlock",
+                        symbol=decision.symbol,
+                        order_id=pos.exchange_stop_order_id,
+                    )
+                    self._cancel_stop_order(decision.symbol, pos.exchange_stop_order_id)
+                    self._pm.update_stop_order_id(decision.symbol, None)
+                    # Re-query balance after cancel
+                    real_balance = self._get_available_balance(decision.symbol)
+
+            if real_balance is not None and real_balance < decision.size:
+                logger.warning(
+                    "binance.close_clamped_to_real_balance",
+                    symbol=decision.symbol,
+                    requested=str(decision.size),
+                    available=str(real_balance),
+                )
+                decision = decision.model_copy(update={"size": real_balance})
+
+            formatted_qty = self._format_quantity(decision.symbol, decision.size)
+            if formatted_qty <= 0:
+                if real_balance is not None and real_balance > Decimal("0"):
+                    formatted_real = self._format_quantity(decision.symbol, real_balance)
+                    if formatted_real > Decimal("0"):
+                        logger.warning(
+                            "binance.dust_close_avoided",
+                            symbol=decision.symbol,
+                            pm_size=str(decision.size),
+                            real_balance=str(real_balance),
+                        )
+                        decision = decision.model_copy(update={"size": real_balance})
+                    else:
+                        logger.info(
+                            "binance.dust_close",
+                            symbol=decision.symbol,
+                            real_balance=str(real_balance),
+                        )
+                        return self._local_dust_close(decision, timestamp, is_short)
+                elif real_balance is None:
+                    logger.error(
+                        "binance.close_aborted_balance_unknown",
                         symbol=decision.symbol,
                         pm_size=str(decision.size),
-                        real_balance=str(real_balance),
                     )
-                    decision = decision.model_copy(update={"size": real_balance})
+                    return None
                 else:
-                    # Exchange balance is truly dust (below minQty)
-                    logger.info(
-                        "binance.dust_close",
+                    logger.warning(
+                        "binance.dust_close_exchange_zero",
                         symbol=decision.symbol,
-                        real_balance=str(real_balance),
+                        pm_size=str(decision.size),
                     )
-                    return self._local_dust_close(decision, timestamp)
-            elif real_balance is None:
-                # Cannot query exchange — refuse to close to avoid phantom
-                logger.error(
-                    "binance.close_aborted_balance_unknown",
-                    symbol=decision.symbol,
-                    pm_size=str(decision.size),
-                )
-                return None
-            else:
-                # Exchange has 0 — local cleanup only
-                logger.warning(
-                    "binance.dust_close_exchange_zero",
-                    symbol=decision.symbol,
-                    pm_size=str(decision.size),
-                )
-                return self._local_dust_close(decision, timestamp)
+                    return self._local_dust_close(decision, timestamp, is_short)
 
-        order = self._place_and_fill(decision, OrderSide.SELL)
+            order = self._place_and_fill(decision, OrderSide.SELL)
+
         if order is None or order.status != OrderStatus.FILLED:
             logger.error(
                 "binance.close_failed",
@@ -487,9 +711,7 @@ class BinanceExecutor:
             )
             return None
 
-        # Cancel the exchange stop order only AFTER the sell is confirmed.
-        # If cancelled before and the sell fails, the position would be
-        # left unprotected (no stop, no exit).
+        # Cancel the exchange stop order only AFTER the close is confirmed.
         if self._exchange_stops_enabled:
             pos = self._pm.get_position(decision.symbol)
             if pos and pos.exchange_stop_order_id:
@@ -518,6 +740,7 @@ class BinanceExecutor:
 
     def _local_dust_close(
         self, decision: RiskDecision, timestamp: datetime,
+        is_short: bool = False,
     ) -> ExecutionResult:
         """Close position locally without exchange order (true dust only)."""
         trade = self._pm.close_position(
@@ -527,9 +750,10 @@ class BinanceExecutor:
             exit_reason=decision.exit_reason or ExitReason.MANUAL,
             strategy=self._strategy,
         )
+        order_side = OrderSide.BUY if is_short else OrderSide.SELL
         dust_order = Order(
             symbol=decision.symbol,
-            side=OrderSide.SELL,
+            side=order_side,
             order_type=OrderType.MARKET,
             amount=decision.size,
             price=decision.price,
@@ -544,9 +768,11 @@ class BinanceExecutor:
         decision: RiskDecision,
         timestamp: datetime,
     ) -> Optional[ExecutionResult]:
-        """REDUCE -> sell fraction of position."""
+        """REDUCE -> partial exit (spot sell for longs, margin buy for shorts)."""
+        pos = self._pm.get_position(decision.symbol)
+        is_short = pos is not None and pos.side == PositionSide.SHORT
+
         if self._exchange_stops_enabled:
-            pos = self._pm.get_position(decision.symbol)
             if pos and pos.exchange_stop_order_id:
                 self._cancel_stop_order(decision.symbol, pos.exchange_stop_order_id)
                 self._pm.update_stop_order_id(decision.symbol, None)
@@ -557,17 +783,25 @@ class BinanceExecutor:
         sell_qty = decision.size * sell_fraction
         decision = decision.model_copy(update={"size": sell_qty})
 
-        real_balance = self._get_available_balance(decision.symbol)
-        if real_balance is not None and real_balance < decision.size:
-            logger.warning(
-                "binance.reduce_clamped_to_real_balance",
-                symbol=decision.symbol,
-                requested=str(decision.size),
-                available=str(real_balance),
+        if is_short:
+            # Short reduce: margin BUY with AUTO_REPAY — no spot balance needed
+            order = self._place_margin_order(
+                decision, OrderSide.BUY, "AUTO_REPAY"
             )
-            decision = decision.model_copy(update={"size": real_balance})
+        else:
+            # Long reduce: spot SELL with balance clamping
+            real_balance = self._get_available_balance(decision.symbol)
+            if real_balance is not None and real_balance < decision.size:
+                logger.warning(
+                    "binance.reduce_clamped_to_real_balance",
+                    symbol=decision.symbol,
+                    requested=str(decision.size),
+                    available=str(real_balance),
+                )
+                decision = decision.model_copy(update={"size": real_balance})
 
-        order = self._place_and_fill(decision, OrderSide.SELL)
+            order = self._place_and_fill(decision, OrderSide.SELL)
+
         if order is None or order.status != OrderStatus.FILLED:
             logger.error(
                 "binance.reduce_failed",
@@ -600,10 +834,16 @@ class BinanceExecutor:
         if self._exchange_stops_enabled:
             remaining = self._pm.get_position(decision.symbol)
             if remaining and remaining.hard_stop_price > 0:
-                new_stop_id = self._place_stop_order(
-                    decision.symbol, remaining.size,
-                    remaining.hard_stop_price, self._stop_slippage,
-                )
+                if is_short:
+                    new_stop_id = self._place_margin_stop_order(
+                        decision.symbol, remaining.size,
+                        remaining.hard_stop_price, self._stop_slippage,
+                    )
+                else:
+                    new_stop_id = self._place_stop_order(
+                        decision.symbol, remaining.size,
+                        remaining.hard_stop_price, self._stop_slippage,
+                    )
                 if new_stop_id:
                     self._pm.update_stop_order_id(decision.symbol, new_stop_id)
 
