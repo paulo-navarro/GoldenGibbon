@@ -7,6 +7,7 @@ YAML files are no longer used.
 """
 
 import os
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 import structlog
@@ -66,6 +67,22 @@ class ShortConfig(BaseModel):
     """Global short-selling configuration (kill switch)."""
 
     enabled: bool = Field(default=False, description="Master switch — set True to enable short entries")
+
+
+# ── Reconciliation Configuration ──────────────────────────────────────────────
+
+class ReconciliationConfig(BaseModel):
+    """Runtime-tunable reconciliation parameters (namespace ``reconciliation``)."""
+
+    enabled: bool = Field(default=True, description="Master switch for reconciliation task")
+    interval_minutes: int = Field(default=2, ge=1, le=60, description="Beat interval in minutes (requires worker restart)")
+    auto_repair: bool = Field(default=True, description="Auto-repair mismatches (positions, balances)")
+    force_close_orphans: bool = Field(default=True, description="Force-close stale positions not on exchange")
+    recover_untracked: bool = Field(default=True, description="Reconstruct positions found on exchange but missing locally")
+    balance_drift_threshold: Decimal = Field(default=Decimal("0.01"), ge=0, description="USDT balance mismatch tolerance")
+    size_mismatch_threshold: Decimal = Field(default=Decimal("0.00000100"), ge=0, description="Asset qty mismatch tolerance")
+    recovery_age_seconds: int = Field(default=120, ge=30, le=600, description="Seconds before a pending order is considered stale")
+    lost_age_seconds: int = Field(default=300, ge=60, le=1800, description="Seconds before a pending order without ID is marked lost")
 
 
 # ── Strategy Configuration ────────────────────────────────────────────────────
@@ -512,6 +529,7 @@ NAMESPACE_MODELS: Dict[str, type] = {
     "regime": RegimeConfig,
     "system": SystemConfig,
     "shorts": ShortConfig,
+    "reconciliation": ReconciliationConfig,
 }
 
 
@@ -536,6 +554,7 @@ class Settings(BaseModel):
     alerting: AlertingConfig = Field(default_factory=AlertingConfig)
     regime: RegimeConfig = Field(default_factory=RegimeConfig)
     system: SystemConfig = Field(default_factory=SystemConfig)
+    reconciliation: ReconciliationConfig = Field(default_factory=ReconciliationConfig)
 
 
     @classmethod

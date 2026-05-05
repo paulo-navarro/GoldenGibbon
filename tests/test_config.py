@@ -426,3 +426,66 @@ class TestBearGuardConfig:
         assert settings.shorts.enabled is False
         assert settings.strategies.bear_guard.hard_stop_pct == 0.05
         assert settings.strategies.bear_guard.margin_type == "cross"
+
+
+# ── Reconciliation Config Tests ───────────────────────────────────────────────
+
+class TestReconciliationConfig:
+    """Tests for ReconciliationConfig (runtime reconciliation settings)."""
+
+    def test_default_values(self):
+        from decimal import Decimal
+
+        from core.config import ReconciliationConfig
+
+        config = ReconciliationConfig()
+        assert config.enabled is True
+        assert config.interval_minutes == 2
+        assert config.auto_repair is True
+        assert config.force_close_orphans is True
+        assert config.recover_untracked is True
+        assert config.balance_drift_threshold == Decimal("0.01")
+        assert config.size_mismatch_threshold == Decimal("0.00000100")
+        assert config.recovery_age_seconds == 120
+        assert config.lost_age_seconds == 300
+
+    def test_custom_overrides(self):
+        from decimal import Decimal
+
+        from core.config import ReconciliationConfig
+
+        config = ReconciliationConfig(
+            enabled=False,
+            interval_minutes=5,
+            auto_repair=False,
+            balance_drift_threshold=Decimal("1.0"),
+            recovery_age_seconds=60,
+        )
+        assert config.enabled is False
+        assert config.interval_minutes == 5
+        assert config.auto_repair is False
+        assert config.balance_drift_threshold == Decimal("1.0")
+        assert config.recovery_age_seconds == 60
+
+    def test_validation_bounds(self):
+        from core.config import ReconciliationConfig
+
+        with pytest.raises(ValidationError):
+            ReconciliationConfig(interval_minutes=0)
+
+        with pytest.raises(ValidationError):
+            ReconciliationConfig(recovery_age_seconds=10)
+
+        with pytest.raises(ValidationError):
+            ReconciliationConfig(lost_age_seconds=5)
+
+    def test_settings_exposes_reconciliation(self):
+        settings = Settings(symbols=[])
+        assert settings.reconciliation.enabled is True
+        assert settings.reconciliation.interval_minutes == 2
+
+    def test_in_namespace_models(self):
+        from core.config import NAMESPACE_MODELS, ReconciliationConfig
+
+        assert "reconciliation" in NAMESPACE_MODELS
+        assert NAMESPACE_MODELS["reconciliation"] is ReconciliationConfig

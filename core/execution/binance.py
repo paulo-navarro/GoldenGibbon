@@ -34,6 +34,8 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from core.events import EventChannel, EventType, get_publisher
+from core.execution._actions import _ActionsMixin
+from core.execution._orders import _OrdersMixin
 from core.execution.retry import RetryConfig, RetryExhausted, with_retry
 from core.models import (
     ExecutionResult,
@@ -96,7 +98,7 @@ class BinanceAPIError(Exception):
         return self.code in _PERMANENT_CODES
 
 
-class BinanceExecutor:
+class BinanceExecutor(_OrdersMixin, _ActionsMixin):
     """
     Real executor for live trading on Binance.
 
@@ -122,6 +124,7 @@ class BinanceExecutor:
         retry_config: Optional[RetryConfig] = None,
         exchange_stop_orders_enabled: bool = False,
         stop_limit_slippage_pct: float = 0.005,
+        session_factory=None,
     ) -> None:
         self._strategy = strategy_name
         self._pm = portfolio_manager
@@ -132,6 +135,7 @@ class BinanceExecutor:
         self._order_timeout = order_timeout
         self._exchange_stops_enabled = exchange_stop_orders_enabled
         self._stop_slippage = Decimal(str(stop_limit_slippage_pct))
+        self._session_factory = session_factory
         self._retry_config = retry_config or RetryConfig(
             max_attempts=3,
             base_delay=1.0,
@@ -258,1115 +262,118 @@ class BinanceExecutor:
             )
 
         return result
-
-    # ── Public: exchange stop sync ──────────────────────────────────────
-
-    def check_exchange_stop(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """
-        Check if the exchange-side stop order for *symbol* has been filled.
-
-        Returns a dict with ``status`` and ``fill_price`` if filled,
-        ``None`` if no stop order exists, feature is off, or status is NEW.
-        """
-        if not self._exchange_stops_enabled:
-            return None
-
-        pos = self._pm.get_position(symbol)
-        if pos is None or not pos.exchange_stop_order_id:
-            return None
-
-        info = self._check_stop_order_status(symbol, pos.exchange_stop_order_id)
-        if info is None:
-            return None
-
-        status = info.get("status", "")
-
-        if status == "FILLED":
-            fill_price = Decimal(info.get("price", "0"))
-            if "fills" in info and info["fills"]:
-                total_qty = sum(Decimal(f["qty"]) for f in info["fills"])
-                total_cost = sum(Decimal(f["qty"]) * Decimal(f["price"]) for f in info["fills"])
-                if total_qty > 0:
-                    fill_price = total_cost / total_qty
-            elif info.get("cummulativeQuoteQty") and info.get("executedQty"):
-                exec_qty = Decimal(info["executedQty"])
-                if exec_qty > 0:
-                    fill_price = Decimal(info["cummulativeQuoteQty"]) / exec_qty
-
-            logger.info(
-                "binance.exchange_stop_filled",
-                symbol=symbol,
-                order_id=pos.exchange_stop_order_id,
-                fill_price=str(fill_price),
-            )
-            return {"status": "FILLED", "fill_price": fill_price}
-
-        if status in ("CANCELED", "EXPIRED", "UNKNOWN"):
-            logger.warning(
-                "binance.exchange_stop_gone",
-                symbol=symbol,
-                order_id=pos.exchange_stop_order_id,
-                status=status,
-            )
-            self._pm.update_stop_order_id(symbol, None)
-
-        return None
-
-    # ── Private: margin helpers (Phase 5.6) ──────────────────────────────
+    # ── Write-ahead order persistence (Phase 6.3) ────────────────────────
 
     @staticmethod
-    def _assert_shorts_enabled() -> None:
-        """Defence-in-depth gate — raises if shorts are globally disabled."""
-        from core.config import get_settings
+    def _derive_intent(action: RiskAction, side: PositionSide) -> str:
+        """Map (RiskAction, PositionSide) to an OrderIntent string."""
+        if action == RiskAction.OPEN:
+            return "open_long" if side == PositionSide.LONG else "open_short"
+        elif action == RiskAction.CLOSE:
+            return "close_long" if side == PositionSide.LONG else "close_short"
+        elif action == RiskAction.SCALE_IN:
+            return "scale_in"
+        elif action == RiskAction.REDUCE:
+            return "reduce"
+        return "open_long"
 
-        if not get_settings().shorts.enabled:
-            raise RuntimeError(
-                "Short selling is disabled (shorts.enabled=False). "
-                "This code path should not have been reached."
-            )
-
-    def _get_margin_type(self) -> str:
-        """Read margin_type from BearGuard config ('cross' or 'isolated')."""
-        from core.config import get_settings
-
-        return get_settings().strategies.bear_guard.margin_type
-
-    def _place_margin_order(
-        self,
-        decision: RiskDecision,
-        side: OrderSide,
-        side_effect_type: str,
-    ) -> Optional[Order]:
-        """
-        Place an order on Binance Margin and wait for fill.
-
-        Args:
-            decision: Risk decision with symbol, size, price.
-            side: BUY or SELL.
-            side_effect_type: "MARGIN_BUY" (borrow+sell) or "AUTO_REPAY" (buy+repay).
-
-        Returns a filled Order on success, or an Order with REJECTED status
-        on failure. Returns None only on unexpected errors.
-        """
-        symbol = decision.symbol
-        qty = self._format_quantity(symbol, decision.size)
-
-        if qty <= 0:
-            logger.error("binance.margin_zero_quantity", symbol=symbol)
-            return None
-
-        margin_type = self._get_margin_type()
-        is_isolated = "TRUE" if margin_type == "isolated" else "FALSE"
-
-        params: Dict[str, Any] = {
-            "symbol": symbol,
-            "side": side.value.upper(),
-            "type": "MARKET",
-            "quantity": str(qty),
-            "sideEffectType": side_effect_type,
-            "isIsolated": is_isolated,
-        }
-
-        # Publish ORDER_CREATED event
-        publisher = get_publisher()
-        pending_order = Order(
-            symbol=symbol,
-            side=side,
-            order_type=OrderType.MARKET,
-            amount=qty,
-            price=decision.price,
-            status=OrderStatus.PENDING,
-        )
-        publisher.publish_model(
-            EventChannel.EXECUTION, EventType.ORDER_CREATED, pending_order
-        )
-
-        try:
-            response = with_retry(
-                fn=lambda: self._signed_request(
-                    "POST", "/sapi/v1/margin/order", params
-                ),
-                config=self._retry_config,
-                retryable=(requests.ConnectionError, requests.Timeout),
-                label=f"binance.place_margin_order({symbol})",
-            )
-        except BinanceAPIError as exc:
-            logger.error(
-                "binance.margin_order_rejected",
-                symbol=symbol,
-                code=exc.code,
-                msg=exc.msg,
-                side_effect=side_effect_type,
-            )
-            return Order(
-                symbol=symbol,
-                side=side,
-                order_type=OrderType.MARKET,
-                amount=qty,
-                price=decision.price,
-                status=OrderStatus.REJECTED,
-                reject_reason=exc.msg,
-                exchange_status=str(exc.code),
-            )
-        except RetryExhausted as exc:
-            logger.error(
-                "binance.margin_order_retry_exhausted",
-                symbol=symbol,
-                error=str(exc.last_error),
-            )
-            return Order(
-                symbol=symbol,
-                side=side,
-                order_type=OrderType.MARKET,
-                amount=qty,
-                price=decision.price,
-                status=OrderStatus.REJECTED,
-                reject_reason=f"Retry exhausted: {exc.last_error}",
-            )
-        except Exception:
-            logger.exception(
-                "binance.margin_order_unexpected_error", symbol=symbol
-            )
-            return None
-
-        # Parse the fill response (same format as spot)
-        return self._parse_fill_response(
-            response=response,
-            decision=decision,
-            side=side,
-            order_type=OrderType.MARKET,
-            qty=qty,
-            time_in_force=None,
-        )
-
-    def _place_margin_stop_order(
+    def _write_ahead_order(
         self,
         symbol: str,
-        quantity: Decimal,
-        stop_price: Decimal,
-        slippage_pct: Decimal = Decimal("0.005"),
-    ) -> Optional[str]:
-        """Place a margin stop-loss order for a short position (BUY side)."""
-        qty = self._format_quantity(symbol, quantity)
-        if qty <= 0:
-            logger.error("binance.margin_stop_zero_qty", symbol=symbol)
-            return None
-
-        formatted_stop = self._format_price(symbol, stop_price)
-        # For shorts, stop is ABOVE entry — limit gives room above the stop
-        limit_price = self._format_price(
-            symbol, stop_price * (1 + slippage_pct),
-        )
-
-        margin_type = self._get_margin_type()
-        is_isolated = "TRUE" if margin_type == "isolated" else "FALSE"
-
-        params: Dict[str, Any] = {
-            "symbol": symbol,
-            "side": "BUY",
-            "type": "STOP_LOSS_LIMIT",
-            "quantity": str(qty),
-            "stopPrice": str(formatted_stop),
-            "price": str(limit_price),
-            "timeInForce": "GTC",
-            "sideEffectType": "AUTO_REPAY",
-            "isIsolated": is_isolated,
-        }
-
-        try:
-            response = with_retry(
-                fn=lambda: self._signed_request(
-                    "POST", "/sapi/v1/margin/order", params
-                ),
-                config=self._retry_config,
-                retryable=(requests.ConnectionError, requests.Timeout),
-                label=f"binance.place_margin_stop({symbol})",
-            )
-        except (BinanceAPIError, RetryExhausted) as exc:
-            logger.error(
-                "binance.margin_stop_order_failed",
-                symbol=symbol,
-                stop_price=str(formatted_stop),
-                error=str(exc),
-            )
-            return None
-        except Exception:
-            logger.exception("binance.margin_stop_unexpected", symbol=symbol)
-            return None
-
-        order_id = str(response["orderId"])
-        logger.info(
-            "binance.margin_stop_placed",
-            symbol=symbol,
-            stop_price=str(formatted_stop),
-            limit_price=str(limit_price),
-            quantity=str(qty),
-            order_id=order_id,
-        )
-        return order_id
-
-    # ── Private: buy-side ────────────────────────────────────────────────
-
-    def _execute_open(
-        self,
-        decision: RiskDecision,
-        timestamp: datetime,
-    ) -> Optional[ExecutionResult]:
-        """OPEN -> place order and open new position."""
-        is_short = decision.side == PositionSide.SHORT
-
-        if is_short:
-            self._assert_shorts_enabled()
-            order = self._place_margin_order(
-                decision, OrderSide.SELL, "MARGIN_BUY"
-            )
-        else:
-            order = self._place_and_fill(decision, OrderSide.BUY)
-
-        if order is None or order.status != OrderStatus.FILLED:
-            logger.error(
-                "binance.open_failed",
-                symbol=decision.symbol,
-                side=decision.side.value,
-                size=str(decision.size),
-                order_status=order.status.value if order else "no_order",
-                reject_reason=order.reject_reason if order else "unknown",
-            )
-            return None
-
-        fill_price = order.avg_fill_price or decision.price
-        filled_size = order.filled_amount
-
-        position = self._pm.open_position(
-            symbol=decision.symbol,
-            size=filled_size,
-            entry_price=fill_price,
-            entry_time=timestamp,
-            hard_stop_price=decision.hard_stop_price or Decimal("0"),
-            trailing_stop_price=decision.trailing_stop_price or Decimal("0"),
-            strategy=self._strategy,
-            side=decision.side,
-        )
-
-        logger.info(
-            "binance.open",
-            symbol=decision.symbol,
-            side=decision.side.value,
-            size=str(filled_size),
-            fill_price=str(fill_price),
-            exchange_order_id=order.exchange_order_id,
-        )
-
-        if self._exchange_stops_enabled and decision.hard_stop_price:
-            if is_short:
-                stop_order_id = self._place_margin_stop_order(
-                    decision.symbol, filled_size,
-                    decision.hard_stop_price, self._stop_slippage,
-                )
-            else:
-                stop_order_id = self._place_stop_order(
-                    decision.symbol, filled_size,
-                    decision.hard_stop_price, self._stop_slippage,
-                )
-            if stop_order_id:
-                self._pm.update_stop_order_id(decision.symbol, stop_order_id)
-
-        return ExecutionResult(order=order, position=position)
-
-    def _execute_scale_in(
-        self,
-        decision: RiskDecision,
-        timestamp: datetime,
-    ) -> Optional[ExecutionResult]:
-        """SCALE_IN -> buy, add to position."""
-        order = self._place_and_fill(decision, OrderSide.BUY)
-        if order is None or order.status != OrderStatus.FILLED:
-            logger.error(
-                "binance.scale_in_failed",
-                symbol=decision.symbol,
-                size=str(decision.size),
-                order_status=order.status.value if order else "no_order",
-                reject_reason=order.reject_reason if order else "unknown",
-            )
-            return None
-
-        fill_price = order.avg_fill_price or decision.price
-        filled_size = order.filled_amount
-
-        position = self._pm.scale_in(
-            symbol=decision.symbol,
-            additional_size=filled_size,
-            price=fill_price,
-            time=timestamp,
-        )
-
-        logger.info(
-            "binance.scale_in",
-            symbol=decision.symbol,
-            size=str(filled_size),
-            fill_price=str(fill_price),
-        )
-
-        if self._exchange_stops_enabled:
-            old_stop_id = self._pm.get_position(decision.symbol)
-            if old_stop_id and old_stop_id.exchange_stop_order_id:
-                self._cancel_stop_order(decision.symbol, old_stop_id.exchange_stop_order_id)
-            stop_price = position.hard_stop_price
-            if stop_price and stop_price > 0:
-                new_stop_id = self._place_stop_order(
-                    decision.symbol, position.size,
-                    stop_price, self._stop_slippage,
-                )
-                if new_stop_id:
-                    self._pm.update_stop_order_id(decision.symbol, new_stop_id)
-
-        return ExecutionResult(order=order, position=position)
-
-    # ── Private: sell-side ───────────────────────────────────────────────
-
-    def _execute_close(
-        self,
-        decision: RiskDecision,
-        timestamp: datetime,
-    ) -> Optional[ExecutionResult]:
-        """CLOSE -> exit entire position (spot sell for longs, margin buy for shorts)."""
-        pos = self._pm.get_position(decision.symbol)
-        is_short = pos is not None and pos.side == PositionSide.SHORT
-
-        if is_short:
-            # Short close: margin BUY with AUTO_REPAY — no spot balance needed
-            order = self._place_margin_order(
-                decision, OrderSide.BUY, "AUTO_REPAY"
-            )
-        else:
-            # Long close: spot SELL with balance clamping
-            real_balance = self._get_available_balance(decision.symbol)
-
-            # If free balance is 0 but we have an exchange stop order, the balance
-            # is locked by that stop. Cancel it first to unlock the asset.
-            if real_balance is not None and real_balance <= Decimal("0"):
-                if pos and pos.exchange_stop_order_id:
-                    logger.info(
-                        "binance.close_cancel_stop_to_unlock",
-                        symbol=decision.symbol,
-                        order_id=pos.exchange_stop_order_id,
-                    )
-                    self._cancel_stop_order(decision.symbol, pos.exchange_stop_order_id)
-                    self._pm.update_stop_order_id(decision.symbol, None)
-                    # Re-query balance after cancel
-                    real_balance = self._get_available_balance(decision.symbol)
-
-            if real_balance is not None and real_balance < decision.size:
-                logger.warning(
-                    "binance.close_clamped_to_real_balance",
-                    symbol=decision.symbol,
-                    requested=str(decision.size),
-                    available=str(real_balance),
-                )
-                decision = decision.model_copy(update={"size": real_balance})
-
-            formatted_qty = self._format_quantity(decision.symbol, decision.size)
-            if formatted_qty <= 0:
-                if real_balance is not None and real_balance > Decimal("0"):
-                    formatted_real = self._format_quantity(decision.symbol, real_balance)
-                    if formatted_real > Decimal("0"):
-                        logger.warning(
-                            "binance.dust_close_avoided",
-                            symbol=decision.symbol,
-                            pm_size=str(decision.size),
-                            real_balance=str(real_balance),
-                        )
-                        decision = decision.model_copy(update={"size": real_balance})
-                    else:
-                        logger.info(
-                            "binance.dust_close",
-                            symbol=decision.symbol,
-                            real_balance=str(real_balance),
-                        )
-                        return self._local_dust_close(decision, timestamp, is_short)
-                elif real_balance is None:
-                    logger.error(
-                        "binance.close_aborted_balance_unknown",
-                        symbol=decision.symbol,
-                        pm_size=str(decision.size),
-                    )
-                    return None
-                else:
-                    logger.warning(
-                        "binance.dust_close_exchange_zero",
-                        symbol=decision.symbol,
-                        pm_size=str(decision.size),
-                    )
-                    return self._local_dust_close(decision, timestamp, is_short)
-
-            order = self._place_and_fill(decision, OrderSide.SELL)
-
-        if order is None or order.status != OrderStatus.FILLED:
-            logger.error(
-                "binance.close_failed",
-                symbol=decision.symbol,
-                size=str(decision.size),
-                order_status=order.status.value if order else "no_order",
-                reject_reason=order.reject_reason if order else "unknown",
-            )
-            return None
-
-        # Cancel the exchange stop order only AFTER the close is confirmed.
-        if self._exchange_stops_enabled:
-            pos = self._pm.get_position(decision.symbol)
-            if pos and pos.exchange_stop_order_id:
-                self._cancel_stop_order(decision.symbol, pos.exchange_stop_order_id)
-                self._pm.update_stop_order_id(decision.symbol, None)
-
-        fill_price = order.avg_fill_price or decision.price
-
-        trade = self._pm.close_position(
-            symbol=decision.symbol,
-            exit_price=fill_price,
-            exit_time=timestamp,
-            exit_reason=decision.exit_reason or ExitReason.MANUAL,
-            strategy=self._strategy,
-        )
-
-        logger.info(
-            "binance.close",
-            symbol=decision.symbol,
-            size=str(trade.size),
-            fill_price=str(fill_price),
-            pnl_usdt=str(trade.pnl_usdt),
-        )
-
-        return ExecutionResult(order=order, trade=trade)
-
-    def _local_dust_close(
-        self, decision: RiskDecision, timestamp: datetime,
-        is_short: bool = False,
-    ) -> ExecutionResult:
-        """Close position locally without exchange order (true dust only)."""
-        trade = self._pm.close_position(
-            symbol=decision.symbol,
-            exit_price=decision.price,
-            exit_time=timestamp,
-            exit_reason=decision.exit_reason or ExitReason.MANUAL,
-            strategy=self._strategy,
-        )
-        order_side = OrderSide.BUY if is_short else OrderSide.SELL
-        dust_order = Order(
-            symbol=decision.symbol,
-            side=order_side,
-            order_type=OrderType.MARKET,
-            amount=decision.size,
-            price=decision.price,
-            status=OrderStatus.FILLED,
-            avg_fill_price=decision.price,
-            filled_amount=decision.size,
-        )
-        return ExecutionResult(order=dust_order, trade=trade)
-
-    def _execute_reduce(
-        self,
-        decision: RiskDecision,
-        timestamp: datetime,
-    ) -> Optional[ExecutionResult]:
-        """REDUCE -> partial exit (spot sell for longs, margin buy for shorts)."""
-        pos = self._pm.get_position(decision.symbol)
-        is_short = pos is not None and pos.side == PositionSide.SHORT
-
-        if self._exchange_stops_enabled:
-            if pos and pos.exchange_stop_order_id:
-                self._cancel_stop_order(decision.symbol, pos.exchange_stop_order_id)
-                self._pm.update_stop_order_id(decision.symbol, None)
-
-        # decision.size is the FULL position size from the risk engine.
-        # Compute the actual sell quantity using sell_fraction.
-        sell_fraction = decision.sell_fraction or Decimal("0.5")
-        sell_qty = decision.size * sell_fraction
-        decision = decision.model_copy(update={"size": sell_qty})
-
-        if is_short:
-            # Short reduce: margin BUY with AUTO_REPAY — no spot balance needed
-            order = self._place_margin_order(
-                decision, OrderSide.BUY, "AUTO_REPAY"
-            )
-        else:
-            # Long reduce: spot SELL with balance clamping
-            real_balance = self._get_available_balance(decision.symbol)
-            if real_balance is not None and real_balance < decision.size:
-                logger.warning(
-                    "binance.reduce_clamped_to_real_balance",
-                    symbol=decision.symbol,
-                    requested=str(decision.size),
-                    available=str(real_balance),
-                )
-                decision = decision.model_copy(update={"size": real_balance})
-
-            order = self._place_and_fill(decision, OrderSide.SELL)
-
-        if order is None or order.status != OrderStatus.FILLED:
-            logger.error(
-                "binance.reduce_failed",
-                symbol=decision.symbol,
-                size=str(decision.size),
-                order_status=order.status.value if order else "no_order",
-                reject_reason=order.reject_reason if order else "unknown",
-            )
-            return None
-
-        fill_price = order.avg_fill_price or decision.price
-
-        trade = self._pm.reduce_position(
-            symbol=decision.symbol,
-            sell_fraction=decision.sell_fraction or Decimal("0.5"),
-            exit_price=fill_price,
-            exit_time=timestamp,
-            exit_reason=decision.exit_reason or ExitReason.MOMENTUM_FADE,
-            strategy=self._strategy,
-        )
-
-        logger.info(
-            "binance.reduce",
-            symbol=decision.symbol,
-            size=str(trade.size),
-            fill_price=str(fill_price),
-            sell_fraction=str(decision.sell_fraction),
-        )
-
-        if self._exchange_stops_enabled:
-            remaining = self._pm.get_position(decision.symbol)
-            if remaining and remaining.hard_stop_price > 0:
-                if is_short:
-                    new_stop_id = self._place_margin_stop_order(
-                        decision.symbol, remaining.size,
-                        remaining.hard_stop_price, self._stop_slippage,
-                    )
-                else:
-                    new_stop_id = self._place_stop_order(
-                        decision.symbol, remaining.size,
-                        remaining.hard_stop_price, self._stop_slippage,
-                    )
-                if new_stop_id:
-                    self._pm.update_stop_order_id(decision.symbol, new_stop_id)
-
-        return ExecutionResult(order=order, trade=trade)
-
-    # ── Private: exchange stop orders ──────────────────────────────────────
-
-    def _place_stop_order(
-        self,
-        symbol: str,
-        quantity: Decimal,
-        stop_price: Decimal,
-        slippage_pct: Decimal = Decimal("0.005"),
-    ) -> Optional[str]:
-        qty = self._format_quantity(symbol, quantity)
-        if qty <= 0:
-            logger.error("binance.stop_order_zero_qty", symbol=symbol)
-            return None
-
-        formatted_stop = self._format_price(symbol, stop_price)
-        limit_price = self._format_price(
-            symbol, stop_price * (1 - slippage_pct),
-        )
-
-        params: Dict[str, Any] = {
-            "symbol": symbol,
-            "side": "SELL",
-            "type": "STOP_LOSS_LIMIT",
-            "quantity": str(qty),
-            "stopPrice": str(formatted_stop),
-            "price": str(limit_price),
-            "timeInForce": "GTC",
-        }
-
-        try:
-            response = with_retry(
-                fn=lambda: self._signed_request("POST", "/api/v3/order", params),
-                config=self._retry_config,
-                retryable=(requests.ConnectionError, requests.Timeout),
-                label=f"binance.place_stop_order({symbol})",
-            )
-        except (BinanceAPIError, RetryExhausted) as exc:
-            logger.error(
-                "binance.stop_order_failed",
-                symbol=symbol,
-                stop_price=str(formatted_stop),
-                error=str(exc),
-            )
-            return None
-        except Exception as exc:
-            logger.exception("binance.stop_order_unexpected", symbol=symbol)
-            return None
-
-        order_id = str(response["orderId"])
-        logger.info(
-            "binance.stop_order_placed",
-            symbol=symbol,
-            stop_price=str(formatted_stop),
-            limit_price=str(limit_price),
-            quantity=str(qty),
-            order_id=order_id,
-        )
-        return order_id
-
-    def _cancel_stop_order(self, symbol: str, order_id: str) -> bool:
-        try:
-            self._signed_request(
-                "DELETE", "/api/v3/order",
-                {"symbol": symbol, "orderId": order_id},
-            )
-            logger.info(
-                "binance.stop_order_cancelled",
-                symbol=symbol,
-                order_id=order_id,
-            )
-            return True
-        except BinanceAPIError as exc:
-            if exc.code == -2011:
-                logger.info(
-                    "binance.stop_order_already_gone",
-                    symbol=symbol,
-                    order_id=order_id,
-                )
-                return True
-            logger.error(
-                "binance.stop_order_cancel_failed",
-                symbol=symbol,
-                order_id=order_id,
-                code=exc.code,
-                msg=exc.msg,
-            )
-            return False
-        except Exception:
-            logger.exception(
-                "binance.stop_order_cancel_unexpected",
-                symbol=symbol,
-                order_id=order_id,
-            )
-            return False
-
-    def _check_stop_order_status(
-        self, symbol: str, order_id: str,
-    ) -> Optional[Dict[str, Any]]:
-        try:
-            return self._signed_request(
-                "GET", "/api/v3/order",
-                {"symbol": symbol, "orderId": order_id},
-            )
-        except BinanceAPIError as exc:
-            if exc.code == -2011:
-                return {"status": "UNKNOWN", "orderId": order_id}
-            logger.error(
-                "binance.stop_order_status_failed",
-                symbol=symbol,
-                order_id=order_id,
-                code=exc.code,
-                msg=exc.msg,
-            )
-            return None
-        except Exception:
-            logger.exception(
-                "binance.stop_order_status_unexpected",
-                symbol=symbol,
-                order_id=order_id,
-            )
-            return None
-
-    # ── Private: balance helper ───────────────────────────────────────────
-
-    def _get_available_balance(self, symbol: str) -> Optional[Decimal]:
-        """Query Binance for the free balance of the base asset in *symbol* (e.g. 'HBAR' from 'HBARUSDT')."""
-        base_asset = symbol.replace("USDT", "")
-        try:
-            info = self.get_account_info()
-            bal = info["balances"].get(base_asset, {})
-            return bal.get("free", Decimal("0"))
-        except Exception as exc:
-            logger.warning("binance.balance_query_failed", symbol=symbol, error=str(exc))
-            return None
-
-    # ── Private: order placement + fill ──────────────────────────────────
-
-    def _place_and_fill(
-        self,
-        decision: RiskDecision,
-        side: OrderSide,
-        order_type: OrderType = OrderType.MARKET,
-        limit_price: Optional[Decimal] = None,
-        time_in_force: Optional[TimeInForce] = None,
-    ) -> Optional[Order]:
+        side: str,
+        order_type: str,
+        amount: Decimal,
+        price: Optional[Decimal],
+        intent: str,
+        trading_mode: str = "live",
+    ) -> Optional[int]:
         """
-        Place an order on Binance and wait for fill.
+        Create a PENDING OrderRecord in the DB before calling the exchange.
 
-        Returns a filled Order on success, or an Order with REJECTED/
-        CANCELLED status on failure. Returns None only on unexpected errors.
+        Returns the DB record id on success, or None if session_factory is
+        not configured (e.g. paper mode, tests without DB).
         """
-        symbol = decision.symbol
-        qty = self._format_quantity(symbol, decision.size)
-
-        if qty <= 0:
-            logger.error("binance.zero_quantity_after_format", symbol=symbol)
+        if self._session_factory is None:
             return None
 
-        # Build order params
-        params: Dict[str, Any] = {
-            "symbol": symbol,
-            "side": side.value.upper(),
-            "type": order_type.value.upper(),
-            "quantity": str(qty),
-        }
+        from db.models import OrderRecord
 
-        if order_type == OrderType.LIMIT:
-            tif = time_in_force or TimeInForce.GTC
-            price = self._format_price(symbol, limit_price or decision.price)
-            params["timeInForce"] = tif.value
-            params["price"] = str(price)
-
-        # Publish ORDER_CREATED event
-        publisher = get_publisher()
-        pending_order = Order(
-            symbol=symbol,
-            side=side,
-            order_type=order_type,
-            amount=qty,
-            price=decision.price,
-            status=OrderStatus.PENDING,
-            limit_price=limit_price,
-            time_in_force=time_in_force if order_type == OrderType.LIMIT else None,
-        )
-        publisher.publish_model(
-            EventChannel.EXECUTION, EventType.ORDER_CREATED, pending_order
-        )
-
-        # Place the order with retry
         try:
-            response = with_retry(
-                fn=lambda: self._signed_request("POST", "/api/v3/order", params),
-                config=self._retry_config,
-                retryable=(requests.ConnectionError, requests.Timeout),
-                label=f"binance.place_order({symbol})",
-            )
-        except BinanceAPIError as exc:
-            logger.error(
-                "binance.order_rejected",
-                symbol=symbol,
-                code=exc.code,
-                msg=exc.msg,
-            )
-            return Order(
-                symbol=symbol,
-                side=side,
-                order_type=order_type,
-                amount=qty,
-                price=decision.price,
-                status=OrderStatus.REJECTED,
-                reject_reason=exc.msg,
-                exchange_status=str(exc.code),
-            )
-        except RetryExhausted as exc:
-            logger.error(
-                "binance.order_retry_exhausted",
-                symbol=symbol,
-                error=str(exc.last_error),
-            )
-            return Order(
-                symbol=symbol,
-                side=side,
-                order_type=order_type,
-                amount=qty,
-                price=decision.price,
-                status=OrderStatus.REJECTED,
-                reject_reason=f"Retry exhausted: {exc.last_error}",
-            )
-        except Exception as exc:
-            logger.exception(
-                "binance.order_unexpected_error",
-                symbol=symbol,
-            )
-            return None
-
-        # Parse Binance response
-        exchange_order_id = str(response["orderId"])
-        exchange_status = response.get("status", "")
-
-        # MARKET orders are filled immediately in the response
-        if order_type == OrderType.MARKET:
-            return self._parse_fill_response(
-                response, decision, side, order_type, qty, time_in_force
-            )
-
-        # LIMIT orders may need polling
-        if exchange_status == "FILLED":
-            return self._parse_fill_response(
-                response, decision, side, order_type, qty, time_in_force
-            )
-
-        # Poll for fill
-        return self._poll_until_terminal(
-            symbol=symbol,
-            exchange_order_id=exchange_order_id,
-            decision=decision,
-            side=side,
-            order_type=order_type,
-            qty=qty,
-            time_in_force=time_in_force,
-        )
-
-    def _poll_until_terminal(
-        self,
-        symbol: str,
-        exchange_order_id: str,
-        decision: RiskDecision,
-        side: OrderSide,
-        order_type: OrderType,
-        qty: Decimal,
-        time_in_force: Optional[TimeInForce],
-    ) -> Order:
-        """
-        Poll ``GET /api/v3/order`` until the order reaches a terminal state
-        or the timeout expires (at which point we cancel it).
-        """
-        deadline = _time.monotonic() + self._order_timeout
-        poll_interval = 1.0
-
-        while _time.monotonic() < deadline:
-            _time.sleep(poll_interval)
-
-            try:
-                response = self._signed_request(
-                    "GET",
-                    "/api/v3/order",
-                    {"symbol": symbol, "orderId": exchange_order_id},
-                )
-            except Exception:
-                logger.warning(
-                    "binance.poll_error",
-                    symbol=symbol,
-                    exchange_order_id=exchange_order_id,
-                )
-                continue
-
-            status = response.get("status", "")
-
-            if status == "FILLED":
-                return self._parse_fill_response(
-                    response, decision, side, order_type, qty, time_in_force
-                )
-            elif status in ("CANCELED", "REJECTED", "EXPIRED"):
-                return Order(
+            with self._session_factory() as session:
+                record = OrderRecord(
                     symbol=symbol,
                     side=side,
                     order_type=order_type,
-                    amount=qty,
-                    price=decision.price,
-                    status=OrderStatus.CANCELLED if status == "CANCELED" else OrderStatus.REJECTED,
-                    exchange_order_id=exchange_order_id,
-                    exchange_status=status,
-                    reject_reason=f"Exchange status: {status}",
-                    time_in_force=time_in_force,
+                    amount=amount,
+                    price=price,
+                    status="pending",
+                    filled_amount=Decimal("0"),
+                    intent=intent,
+                    reconciliation_status="pending_sync",
+                    trading_mode=trading_mode,
                 )
-
-        # Timeout — cancel the order
-        logger.warning(
-            "binance.order_timeout_cancelling",
-            symbol=symbol,
-            exchange_order_id=exchange_order_id,
-        )
-        self._cancel_order(symbol, exchange_order_id)
-
-        return Order(
-            symbol=symbol,
-            side=side,
-            order_type=order_type,
-            amount=qty,
-            price=decision.price,
-            status=OrderStatus.CANCELLED,
-            exchange_order_id=exchange_order_id,
-            exchange_status="TIMEOUT_CANCELLED",
-            reject_reason=f"Order not filled within {self._order_timeout}s",
-            time_in_force=time_in_force,
-        )
-
-    # ── Private: response parsing ────────────────────────────────────────
-
-    def _parse_fill_response(
-        self,
-        response: Dict[str, Any],
-        decision: RiskDecision,
-        side: OrderSide,
-        order_type: OrderType,
-        qty: Decimal,
-        time_in_force: Optional[TimeInForce],
-    ) -> Order:
-        """Parse a Binance order response with fills into an Order model."""
-        exchange_order_id = str(response["orderId"])
-
-        # Compute weighted average fill price and total fees from fills array
-        base_asset = decision.symbol.replace("USDT", "")
-        fills = response.get("fills", [])
-        if fills:
-            avg_price, total_qty, total_fee, base_commission = self._aggregate_fills(
-                fills, base_asset=base_asset,
-            )
-            if side == OrderSide.BUY and base_commission > 0:
-                total_qty -= base_commission
-        else:
-            # Fallback: use cumulativeQuoteQty / executedQty
-            exec_qty = Decimal(response.get("executedQty", str(qty)))
-            cum_quote = Decimal(response.get("cumulativeQuoteQty", "0"))
-            avg_price = (cum_quote / exec_qty) if exec_qty > 0 else decision.price
-            total_qty = exec_qty
-            total_fee = Decimal("0")
-
-        # Compute slippage vs reference price
-        slippage_pct = Decimal("0")
-        if decision.price > 0:
-            slippage_pct = (
-                abs(avg_price - decision.price) / decision.price * 100
-            ).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
-
-        now = datetime.now(timezone.utc)
-
-        return Order(
-            symbol=decision.symbol,
-            side=side,
-            order_type=order_type,
-            amount=qty,
-            price=decision.price,
-            status=OrderStatus.FILLED,
-            filled_amount=total_qty,
-            avg_fill_price=avg_price,
-            slippage_percent=slippage_pct,
-            fee_usdt=total_fee,
-            exchange_order_id=exchange_order_id,
-            exchange_status=response.get("status", "FILLED"),
-            time_in_force=time_in_force if order_type == OrderType.LIMIT else None,
-            limit_price=Decimal(response["price"]) if order_type == OrderType.LIMIT and response.get("price") else None,
-            created_at=now,
-            updated_at=now,
-            filled_at=now,
-        )
-
-    @staticmethod
-    def _aggregate_fills(
-        fills: List[Dict[str, str]],
-        base_asset: str = "",
-    ) -> Tuple[Decimal, Decimal, Decimal, Decimal]:
-        """
-        Aggregate fills array into (avg_price, total_qty, total_fee_usdt, base_commission).
-
-        ``base_commission`` is the total commission paid in the base asset
-        (e.g. INJ for INJUSDT).  For BUY orders this must be subtracted
-        from ``total_qty`` to get the net received amount.
-
-        Each fill: {"price": "...", "qty": "...", "commission": "...",
-                     "commissionAsset": "..."}
-        """
-        total_cost = Decimal("0")
-        total_qty = Decimal("0")
-        total_fee = Decimal("0")
-        base_commission = Decimal("0")
-
-        for fill in fills:
-            price = Decimal(fill["price"])
-            qty = Decimal(fill["qty"])
-            commission = Decimal(fill["commission"])
-            commission_asset = fill.get("commissionAsset", "")
-
-            total_cost += price * qty
-            total_qty += qty
-
-            if commission_asset == base_asset:
-                base_commission += commission
-                total_fee += commission * price
-            elif commission_asset in ("USDT", "BUSD", "FDUSD"):
-                total_fee += commission
-            else:
-                total_fee += commission * price
-
-        avg_price = (total_cost / total_qty) if total_qty > 0 else Decimal("0")
-        return avg_price, total_qty, total_fee, base_commission
-
-    # ── Private: quantity / price formatting ─────────────────────────────
-
-    def _format_quantity(self, symbol: str, qty: Decimal) -> Decimal:
-        """
-        Round quantity down to the exchange's LOT_SIZE step.
-
-        If no filters are cached for this symbol, returns qty rounded to
-        8 decimal places (safe default).
-        """
-        filters = self._filters.get(symbol)
-        if not filters or "lot_step" not in filters:
-            return qty.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
-
-        step = filters["lot_step"]
-        # Round down to nearest step: floor(qty / step) * step
-        formatted = (qty / step).to_integral_value(rounding=ROUND_DOWN) * step
-
-        # Enforce min/max
-        lot_min = filters.get("lot_min", Decimal("0"))
-        lot_max = filters.get("lot_max", Decimal("99999999"))
-
-        if formatted < lot_min:
-            logger.warning(
-                "binance.qty_below_min",
-                symbol=symbol,
-                qty=str(formatted),
-                min_qty=str(lot_min),
-            )
-            return Decimal("0")
-
-        if formatted > lot_max:
-            formatted = lot_max
-
-        return formatted
-
-    def _format_price(self, symbol: str, price: Decimal) -> Decimal:
-        """Round price to the exchange's PRICE_FILTER tick size."""
-        filters = self._filters.get(symbol)
-        if not filters or "price_step" not in filters:
-            return price.quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
-
-        step = filters["price_step"]
-        return (price / step).to_integral_value(rounding=ROUND_HALF_UP) * step
-
-    # ── Private: cancel order ────────────────────────────────────────────
-
-    def _cancel_order(self, symbol: str, order_id: str) -> None:
-        """Best-effort cancel of an open order."""
-        try:
-            self._signed_request(
-                "DELETE",
-                "/api/v3/order",
-                {"symbol": symbol, "orderId": order_id},
-            )
-            logger.info(
-                "binance.order_cancelled",
-                symbol=symbol,
-                order_id=order_id,
-            )
-        except BinanceAPIError as exc:
-            if exc.code == -2011:
-                # Unknown order — already cancelled or filled
-                logger.info(
-                    "binance.cancel_already_gone",
-                    symbol=symbol,
-                    order_id=order_id,
-                )
-            else:
-                logger.error(
-                    "binance.cancel_failed",
-                    symbol=symbol,
-                    order_id=order_id,
-                    code=exc.code,
-                    msg=exc.msg,
-                )
+                session.add(record)
+                session.flush()
+                record_id = record.id
+            return record_id
         except Exception:
-            logger.exception(
-                "binance.cancel_unexpected_error",
+            logger.critical(
+                "write_ahead_order_failed",
                 symbol=symbol,
-                order_id=order_id,
+                side=side,
+                intent=intent,
+                exc_info=True,
             )
+            return None
+
+    def _update_order_record(
+        self,
+        record_id: Optional[int],
+        *,
+        status: Optional[str] = None,
+        exchange_order_id: Optional[str] = None,
+        filled_amount: Optional[Decimal] = None,
+        avg_fill_price: Optional[Decimal] = None,
+        fee_usdt: Optional[Decimal] = None,
+        slippage_percent: Optional[Decimal] = None,
+        reject_reason: Optional[str] = None,
+        exchange_status: Optional[str] = None,
+        reconciliation_status: Optional[str] = None,
+    ) -> None:
+        """Update an existing OrderRecord after exchange response."""
+        if record_id is None or self._session_factory is None:
+            return
+
+        from datetime import datetime as _dt, timezone as _tz
+        from db.models import OrderRecord
+
+        with self._session_factory() as session:
+            record = session.get(OrderRecord, record_id)
+            if record is None:
+                return
+            if status is not None:
+                record.status = status
+            if exchange_order_id is not None:
+                record.exchange_order_id = exchange_order_id
+            if filled_amount is not None:
+                record.filled_amount = filled_amount
+            if avg_fill_price is not None:
+                record.avg_fill_price = avg_fill_price
+            if fee_usdt is not None:
+                record.fee_usdt = fee_usdt
+            if slippage_percent is not None:
+                record.slippage_percent = slippage_percent
+            if reject_reason is not None:
+                record.reject_reason = reject_reason
+            if exchange_status is not None:
+                record.exchange_status = exchange_status
+            if reconciliation_status is not None:
+                record.reconciliation_status = reconciliation_status
+            if status == "filled":
+                record.filled_at = _dt.now(_tz.utc)
+                record.reconciliation_status = "synced"
+            elif status == "rejected":
+                record.reconciliation_status = "synced"
 
     # ── Public: account query (task 4.8) ──────────────────────────────────
 
@@ -1423,6 +430,213 @@ class BinanceExecutor:
             logger.warning("get_ticker_prices: failed", error=str(exc))
 
         return prices
+
+    # ── Public: exchange order queries (phase 6.1) ──────────────────────
+
+    @staticmethod
+    def _parse_order_response(raw: dict) -> dict:
+        """Normalize a Binance order object — convert numeric strings to Decimal."""
+        return {
+            "orderId": raw["orderId"],
+            "symbol": raw["symbol"],
+            "side": raw["side"],
+            "type": raw["type"],
+            "status": raw["status"],
+            "timeInForce": raw.get("timeInForce", ""),
+            "origQty": Decimal(raw["origQty"]),
+            "executedQty": Decimal(raw["executedQty"]),
+            "cumulativeQuoteQty": Decimal(raw.get("cumulativeQuoteQty", "0")),
+            "price": Decimal(raw["price"]),
+            "stopPrice": Decimal(raw.get("stopPrice", "0")),
+            "time": raw["time"],
+            "updateTime": raw["updateTime"],
+        }
+
+    def get_open_orders(self, symbol: str | None = None) -> list[dict]:
+        """
+        Fetch all open orders on the spot account via ``GET /api/v3/openOrders``.
+
+        Args:
+            symbol: If provided, filter to a single trading pair (e.g. ``"BTCUSDT"``).
+                    If *None*, returns open orders for all symbols.
+
+        Returns a list of dicts, each containing::
+
+            {
+                "orderId": int,
+                "symbol": str,
+                "side": str,          # "BUY" | "SELL"
+                "type": str,          # "LIMIT" | "STOP_LOSS_LIMIT" | ...
+                "status": str,        # "NEW" | "PARTIALLY_FILLED"
+                "timeInForce": str,
+                "origQty": Decimal,
+                "executedQty": Decimal,
+                "cumulativeQuoteQty": Decimal,
+                "price": Decimal,
+                "stopPrice": Decimal,
+                "time": int,          # ms timestamp
+                "updateTime": int,
+            }
+
+        Raises :class:`BinanceAPIError` on API errors.
+        """
+        params: Dict[str, Any] = {}
+        if symbol is not None:
+            params["symbol"] = symbol
+
+        data = self._signed_request("GET", "/api/v3/openOrders", params or None)
+        return [self._parse_order_response(item) for item in data]
+
+    def get_all_orders(
+        self,
+        symbol: str,
+        start_time: int | None = None,
+        limit: int = 500,
+    ) -> list[dict]:
+        """
+        Fetch order history for a symbol via ``GET /api/v3/allOrders``.
+
+        Used by fill recovery to find orders placed near a crash window.
+
+        Args:
+            symbol: Trading pair (required by Binance).
+            start_time: Only return orders placed after this timestamp (ms).
+            limit: Max number of results (capped at 1000 by Binance).
+
+        Returns a list of dicts with the same shape as :meth:`get_open_orders`.
+
+        Raises :class:`BinanceAPIError` on API errors.
+        """
+        params: Dict[str, Any] = {"symbol": symbol, "limit": min(limit, 1000)}
+        if start_time is not None:
+            params["startTime"] = start_time
+
+        data = self._signed_request("GET", "/api/v3/allOrders", params)
+        return [self._parse_order_response(item) for item in data]
+
+    @staticmethod
+    def _parse_trade_response(raw: dict) -> dict:
+        """Normalize a Binance trade object — convert numeric strings to Decimal."""
+        return {
+            "id": raw["id"],
+            "orderId": raw["orderId"],
+            "symbol": raw["symbol"],
+            "side": raw.get("side", ""),
+            "price": Decimal(raw["price"]),
+            "qty": Decimal(raw["qty"]),
+            "commission": Decimal(raw["commission"]),
+            "commissionAsset": raw["commissionAsset"],
+            "time": raw["time"],
+        }
+
+    def get_my_trades(
+        self,
+        symbol: str,
+        start_time: int | None = None,
+        limit: int = 500,
+    ) -> list[dict]:
+        """
+        Fetch executed trades for a symbol via ``GET /api/v3/myTrades``.
+
+        Used by position reconciliation to reconstruct entry prices.
+
+        Args:
+            symbol: Trading pair (required by Binance).
+            start_time: Only return trades after this timestamp (ms).
+            limit: Max number of results (capped at 1000 by Binance).
+
+        Returns a list of dicts, each containing::
+
+            {
+                "id": int,
+                "orderId": int,
+                "symbol": str,
+                "side": str,
+                "price": Decimal,
+                "qty": Decimal,
+                "commission": Decimal,
+                "commissionAsset": str,
+                "time": int,
+            }
+
+        Raises :class:`BinanceAPIError` on API errors.
+        """
+        params: Dict[str, Any] = {"symbol": symbol, "limit": min(limit, 1000)}
+        if start_time is not None:
+            params["startTime"] = start_time
+
+        data = self._signed_request("GET", "/api/v3/myTrades", params)
+        return [self._parse_trade_response(item) for item in data]
+
+    def get_margin_open_orders(self, symbol: str | None = None) -> list[dict]:
+        """
+        Fetch all open orders on the margin account via ``GET /sapi/v1/margin/openOrders``.
+
+        Same interface and return shape as :meth:`get_open_orders` but for
+        the margin account.
+
+        Raises :class:`BinanceAPIError` on API errors.
+        """
+        params: Dict[str, Any] = {}
+        if symbol is not None:
+            params["symbol"] = symbol
+
+        data = self._signed_request("GET", "/sapi/v1/margin/openOrders", params or None)
+        return [self._parse_order_response(item) for item in data]
+
+    def get_order_status(self, symbol: str, order_id: int) -> dict:
+        """
+        Query the status of a specific order via ``GET /api/v3/order``.
+
+        Args:
+            symbol: Trading pair.
+            order_id: The exchange order ID to look up.
+
+        Returns a single dict with the same shape as :meth:`get_open_orders`
+        entries.
+
+        Raises :class:`BinanceAPIError` on API errors.
+        """
+        params: Dict[str, Any] = {"symbol": symbol, "orderId": order_id}
+        data = self._signed_request("GET", "/api/v3/order", params)
+        return self._parse_order_response(data)
+
+    def cancel_order(self, symbol: str, order_id: int) -> dict:
+        """
+        Cancel an open order via ``DELETE /api/v3/order``.
+
+        Returns the final order status as a dict (same shape as
+        :meth:`get_order_status`).
+
+        If the order was already filled or cancelled, returns gracefully
+        with the known terminal status instead of raising.
+
+        Raises :class:`BinanceAPIError` only for unexpected errors.
+        """
+        params: Dict[str, Any] = {"symbol": symbol, "orderId": order_id}
+        try:
+            data = self._signed_request("DELETE", "/api/v3/order", params)
+            return self._parse_order_response(data)
+        except BinanceAPIError as exc:
+            if exc.code in (-2011, -2013):
+                # -2011: Unknown order (already cancelled/filled)
+                # -2013: Order does not exist
+                return {
+                    "orderId": order_id,
+                    "symbol": symbol,
+                    "side": "",
+                    "type": "",
+                    "status": "CANCELED",
+                    "timeInForce": "",
+                    "origQty": Decimal("0"),
+                    "executedQty": Decimal("0"),
+                    "cumulativeQuoteQty": Decimal("0"),
+                    "price": Decimal("0"),
+                    "stopPrice": Decimal("0"),
+                    "time": 0,
+                    "updateTime": 0,
+                }
+            raise
 
     # ── Private: signed HTTP requests ────────────────────────────────────
 
@@ -1503,6 +717,8 @@ class BinanceExecutor:
             max_delay=30.0,
         )
 
+        from db import get_session
+
         executor = cls(
             strategy_name=strategy_name,
             portfolio_manager=portfolio_manager,
@@ -1514,6 +730,7 @@ class BinanceExecutor:
             retry_config=retry_cfg,
             exchange_stop_orders_enabled=execution.exchange_stop_orders_enabled,
             stop_limit_slippage_pct=execution.stop_limit_slippage_pct,
+            session_factory=get_session,
         )
 
         return executor

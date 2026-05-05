@@ -84,7 +84,7 @@ class TestBeatSchedule:
         from core.celery_app import app
 
         assert "fetch-candles-15m" in app.conf.beat_schedule
-        assert "reconciliation-15m" in app.conf.beat_schedule
+        assert "reconciliation-2m" in app.conf.beat_schedule
         assert "heartbeat-60s" in app.conf.beat_schedule
 
     def test_fetch_candles_schedule(self):
@@ -101,12 +101,65 @@ class TestBeatSchedule:
     def test_reconciliation_schedule(self):
         from core.celery_app import app
 
-        entry = app.conf.beat_schedule["reconciliation-15m"]
+        entry = app.conf.beat_schedule["reconciliation-2m"]
         assert entry["task"] == "core.tasks.run_reconciliation"
+        assert entry["schedule"] == 120.0
 
-        schedule = entry["schedule"]
-        assert isinstance(schedule, crontab)
-        assert schedule.minute == {5, 20, 35, 50}
+
+# ── Startup Recovery ─────────────────────────────────────────────────────────
+
+
+class TestStartupRecovery:
+    """Verify _reconcile_on_startup runs fill recovery synchronously."""
+
+    def test_calls_fill_recovery_before_async_reconciliation(self):
+        """Startup handler runs _recover_pending_orders synchronously."""
+        from unittest.mock import MagicMock, patch
+
+        from core.celery_app import _reconcile_on_startup
+
+        with (
+            patch("core.config.get_settings") as mock_get_settings,
+            patch("core.tasks._reconciliation._recover_pending_orders") as mock_recover,
+            patch("core.tasks._reconciliation._recover_pending_orders_without_id") as mock_lost,
+            patch("core.execution.binance.BinanceExecutor.from_settings") as mock_exec,
+            patch("core.tasks.run_reconciliation") as mock_task,
+        ):
+            mock_settings = MagicMock()
+            mock_settings.live_trading.reconcile_on_startup = True
+            mock_settings.live_trading.enabled = True
+            mock_settings.reconciliation.recovery_age_seconds = 120
+            mock_settings.reconciliation.lost_age_seconds = 300
+            mock_get_settings.return_value = mock_settings
+
+            mock_recover.return_value = {"status": "ok", "recovered": 0}
+            mock_lost.return_value = {"status": "ok", "matched": 0, "lost": 0}
+
+            _reconcile_on_startup()
+
+            # Fill recovery called synchronously
+            assert mock_recover.call_count == 1
+            assert mock_lost.call_count == 1
+            # Full reconciliation enqueued async
+            mock_task.delay.assert_called_once()
+
+    def test_skipped_when_disabled(self):
+        """When reconcile_on_startup=False, nothing runs."""
+        from unittest.mock import MagicMock, patch
+
+        from core.celery_app import _reconcile_on_startup
+
+        with (
+            patch("core.config.get_settings") as mock_get_settings,
+            patch("core.tasks.run_reconciliation") as mock_task,
+        ):
+            mock_settings = MagicMock()
+            mock_settings.live_trading.reconcile_on_startup = False
+            mock_get_settings.return_value = mock_settings
+
+            _reconcile_on_startup()
+
+            mock_task.delay.assert_not_called()
 
 
 # ── Task stubs ───────────────────────────────────────────────────────────────

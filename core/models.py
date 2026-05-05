@@ -79,6 +79,27 @@ class ExitReason(str, Enum):
     MANUAL = "manual"                          # Manual intervention
     TIME_STOP = "time_stop"                    # Mean Reversion: 16-candle timeout
     MIDDLE_BB = "middle_bb"                    # Mean Reversion: partial exit at middle BB
+    RECONCILIATION_FORCE_CLOSE = "reconciliation_force_close"  # Force-closed by reconciliation
+
+
+class OrderIntent(str, Enum):
+    """What the GG intended when placing an order — used for fill recovery."""
+    OPEN_LONG = "open_long"
+    CLOSE_LONG = "close_long"
+    OPEN_SHORT = "open_short"
+    CLOSE_SHORT = "close_short"
+    STOP_LOSS = "stop_loss"
+    SCALE_IN = "scale_in"
+    REDUCE = "reduce"
+
+
+class ReconciliationStatus(str, Enum):
+    """Reconciliation state of an order record against the exchange."""
+    PENDING_SYNC = "pending_sync"
+    SYNCED = "synced"
+    ORPHAN = "orphan"
+    RECOVERED = "recovered"
+    LOST = "lost"
 
 
 class RiskAction(str, Enum):

@@ -233,6 +233,9 @@ def _reconcile_with_exchange(
     session,  # noqa: ANN001 – SQLAlchemy Session
     executor,  # noqa: ANN001 – BinanceExecutor
     symbols: list[str],
+    *,
+    balance_tolerance: Decimal = _EXCHANGE_BALANCE_TOLERANCE,
+    position_tolerance: Decimal = _EXCHANGE_POSITION_TOLERANCE,
 ) -> Dict[str, Any]:
     """
     Compare local DB state against Binance account balances.
@@ -276,6 +279,7 @@ def _reconcile_with_exchange(
         return {
             "status": "error",
             "checks": [{"check": "exchange_account", "result": "error", "detail": str(exc)}],
+            "repairs": [],
             "exchange_balances": {},
         }
 
@@ -290,11 +294,12 @@ def _reconcile_with_exchange(
         local_usdt_total += Decimal(str(data.get("usdt_balance", 0)))
 
     exchange_usdt = Decimal("0")
-    if "USDT" in exchange_balances:
-        exchange_usdt = exchange_balances["USDT"]["free"] + exchange_balances["USDT"]["locked"]
+    usdt_data = exchange_balances.get("USDT", {})
+    if usdt_data:
+        exchange_usdt = usdt_data.get("free", Decimal("0")) + usdt_data.get("locked", Decimal("0"))
 
     usdt_delta = abs(local_usdt_total - exchange_usdt)
-    if usdt_delta <= _EXCHANGE_BALANCE_TOLERANCE:
+    if usdt_delta <= balance_tolerance:
         checks.append({"check": "exchange_usdt", "result": "ok"})
     else:
         has_mismatch = True
@@ -315,6 +320,12 @@ def _reconcile_with_exchange(
 
     # ── Check E: Position sizes ──────────────────────────────────────
     repairs: list[str] = []
+
+    # Fetch current prices for PnL calculations (best-effort)
+    try:
+        ticker_prices = executor.get_ticker_prices()
+    except Exception:
+        ticker_prices = {}
 
     for symbol in symbols:
         # Derive base asset: BTCUSDT → BTC, ETHUSDT → ETH
@@ -337,19 +348,53 @@ def _reconcile_with_exchange(
             )
 
         size_delta = abs(local_size - exchange_size)
-        if size_delta <= _EXCHANGE_POSITION_TOLERANCE:
+        if size_delta <= position_tolerance:
             checks.append({
                 "check": f"exchange_position_{symbol}",
                 "result": "ok",
             })
-        elif pos_recs and exchange_size <= _EXCHANGE_POSITION_TOLERANCE:
+        elif pos_recs and exchange_size <= position_tolerance:
             # Exchange has zero/dust but local DB has open position(s).
             # The sell was executed on Binance but the local state was
-            # never cleaned up.  Auto-repair: delete stale positions
-            # and reset strategy state to FLAT.
+            # never cleaned up.  Auto-repair: delete stale positions,
+            # create emergency TradeRecord, and reset state to FLAT.
+            from datetime import datetime, timezone
+            from db.models import TradeRecord
+
             has_mismatch = True
+            now = datetime.now(timezone.utc)
+            current_price = ticker_prices.get(symbol, None)
+
             for rec in pos_recs:
                 strategy = rec.strategy
+
+                # Create emergency TradeRecord so PnL is not lost
+                exit_price = current_price if current_price else rec.entry_price
+                pnl = (exit_price - rec.entry_price) * rec.size
+                pnl_percent = (
+                    (pnl / (rec.entry_price * rec.size)) * 100
+                    if rec.entry_price * rec.size > 0
+                    else Decimal("0")
+                )
+                duration_minutes = int((now - rec.entry_time).total_seconds() / 60)
+
+                trade_rec = TradeRecord(
+                    symbol=symbol,
+                    strategy=strategy,
+                    side=rec.side or "long",
+                    entry_price=rec.entry_price,
+                    exit_price=exit_price,
+                    size=rec.size,
+                    entry_time=rec.entry_time,
+                    exit_time=now,
+                    pnl_usdt=pnl,
+                    pnl_percent=pnl_percent,
+                    duration_minutes=duration_minutes,
+                    exit_reason="reconciliation_force_close",
+                    trading_mode="live",
+                )
+                session.add(trade_rec)
+
                 session.delete(rec)
 
                 state_rec = (
@@ -361,13 +406,17 @@ def _reconcile_with_exchange(
                     old_state = state_rec.state
                     state_rec.state = "flat"
                     if state_rec.state_data:
-                        state_rec.state_data = {
-                            **state_rec.state_data,
-                            "cooldown_remaining": 0,
-                        }
+                        state_data = dict(state_rec.state_data)
+                        balance = Decimal(str(state_data.get("usdt_balance", "0")))
+                        proceeds = exit_price * rec.size
+                        total_pnl = Decimal(str(state_data.get("total_pnl", "0")))
+                        state_data["usdt_balance"] = str(balance + proceeds)
+                        state_data["total_pnl"] = str(total_pnl + pnl)
+                        state_data["cooldown_remaining"] = 0
+                        state_rec.state_data = state_data
                     repairs.append(
-                        f"reset {strategy}:{symbol} from {old_state} to flat "
-                        f"(exchange has zero balance)"
+                        f"force-closed {strategy}:{symbol} from {old_state} to flat "
+                        f"(exchange has zero balance, PnL={pnl:.2f} USDT)"
                     )
 
                 # Evict in-memory cache so next tick rebuilds from corrected DB
@@ -376,11 +425,12 @@ def _reconcile_with_exchange(
                     del _worker_state[_tick_key]
 
                 logger.warning(
-                    "reconcile_exchange: auto-repaired stale position",
+                    "reconcile_exchange: force-closed stale position",
                     symbol=symbol,
                     strategy=strategy,
                     local_size=str(rec.size),
                     exchange_size=str(exchange_size),
+                    pnl=str(pnl),
                 )
 
             checks.append({
@@ -388,54 +438,217 @@ def _reconcile_with_exchange(
                 "result": "repaired",
                 "detail": (
                     f"local_size={local_size} vs exchange_size={exchange_size} "
-                    f"— deleted {len(pos_recs)} stale position(s), reset state to flat"
+                    f"— force-closed {len(pos_recs)} stale position(s), "
+                    f"created TradeRecord(s), reset state to flat"
                 ),
             })
-        elif not pos_recs and exchange_size > _EXCHANGE_POSITION_TOLERANCE:
-            # Exchange has asset but NO local position — real money untracked
-            has_mismatch = True
-            checks.append({
-                "check": f"exchange_position_{symbol}",
-                "result": "critical",
-                "detail": (
-                    f"Exchange has {exchange_size} {base_asset} "
-                    f"but NO local position record. Manual intervention required."
-                ),
-            })
-            logger.critical(
-                "reconcile_exchange: UNTRACKED ASSET on exchange",
-                symbol=symbol,
-                exchange_size=str(exchange_size),
-            )
+
+            # Publish repair event
             from core.events import EventChannel, EventType, get_publisher
             publisher = get_publisher()
             publisher.publish(
                 EventChannel.SYSTEM,
-                EventType.RECONCILIATION_MISMATCH,
+                EventType.RECONCILIATION_REPAIRED,
                 {
-                    "severity": "critical",
-                    "source": "exchange_untracked_asset",
+                    "repair_type": "position_force_closed",
                     "symbol": symbol,
-                    "exchange_size": str(exchange_size),
+                    "positions_closed": len(pos_recs),
+                    "local_size": str(local_size),
                 },
             )
-        else:
+
+        elif not pos_recs and exchange_size > position_tolerance:
+            # Exchange has asset but NO local position — attempt reconstruction
+            from datetime import datetime, timezone
+
             has_mismatch = True
+            reconstructed = False
+
+            try:
+                trades = executor.get_my_trades(symbol, limit=50)
+            except Exception as exc:
+                logger.error(
+                    "reconcile_exchange: failed to fetch trades for reconstruction",
+                    symbol=symbol,
+                    error=str(exc),
+                )
+                trades = []
+
+            if trades:
+                # Aggregate net position from recent trades
+                net_qty = Decimal("0")
+                buy_cost = Decimal("0")
+                buy_qty = Decimal("0")
+
+                for t in trades:
+                    qty = Decimal(str(t.get("qty", "0")))
+                    price = Decimal(str(t.get("price", "0")))
+                    if t.get("side") == "BUY":
+                        net_qty += qty
+                        buy_cost += qty * price
+                        buy_qty += qty
+                    else:
+                        net_qty -= qty
+
+                # Only reconstruct if net qty matches exchange balance (within tolerance)
+                if net_qty > 0 and abs(net_qty - exchange_size) / exchange_size <= Decimal("0.05"):
+                    avg_entry_price = buy_cost / buy_qty if buy_qty > 0 else Decimal("0")
+                    # Use the timestamp of the earliest unmatched buy
+                    entry_time_ms = trades[-1].get("time", 0)
+                    for t in trades:
+                        if t.get("side") == "BUY":
+                            entry_time_ms = t["time"]
+                            break
+                    entry_time = datetime.fromtimestamp(entry_time_ms / 1000, tz=timezone.utc)
+
+                    # Determine strategy — use first non-flat strategy state for this symbol
+                    state_rec = (
+                        session.query(StrategyStateRecord)
+                        .filter_by(symbol=symbol)
+                        .first()
+                    )
+                    strategy_name = state_rec.strategy if state_rec else "smart_hodler"
+
+                    # Create PositionRecord
+                    new_pos = PositionRecord(
+                        symbol=symbol,
+                        strategy=strategy_name,
+                        side="long",
+                        size=exchange_size,
+                        entry_price=avg_entry_price,
+                        entry_time=entry_time,
+                        highest_close=avg_entry_price,
+                        trailing_stop_price=avg_entry_price * Decimal("0.95"),
+                        hard_stop_price=avg_entry_price * Decimal("0.97"),
+                        scale_in_count=0,
+                        buy_signal_candles=0,
+                    )
+                    session.add(new_pos)
+
+                    # Update strategy state
+                    if state_rec is not None:
+                        state_rec.state = "position"
+                        if state_rec.state_data:
+                            state_data = dict(state_rec.state_data)
+                            balance = Decimal(str(state_data.get("usdt_balance", "0")))
+                            cost = exchange_size * avg_entry_price
+                            state_data["usdt_balance"] = str(balance - cost)
+                            state_rec.state_data = state_data
+
+                    repairs.append(
+                        f"reconstructed {strategy_name}:{symbol} position "
+                        f"(size={exchange_size}, entry={avg_entry_price:.4f}) from exchange trades"
+                    )
+                    reconstructed = True
+
+                    logger.warning(
+                        "reconcile_exchange: reconstructed position from trades",
+                        symbol=symbol,
+                        strategy=strategy_name,
+                        size=str(exchange_size),
+                        entry_price=str(avg_entry_price),
+                    )
+
+                    from core.events import EventChannel, EventType, get_publisher
+                    publisher = get_publisher()
+                    publisher.publish(
+                        EventChannel.SYSTEM,
+                        EventType.RECONCILIATION_REPAIRED,
+                        {
+                            "repair_type": "position_reconstructed",
+                            "symbol": symbol,
+                            "size": str(exchange_size),
+                            "entry_price": str(avg_entry_price),
+                        },
+                    )
+
+            if not reconstructed:
+                # Could not auto-reconstruct — leave as critical alert
+                checks.append({
+                    "check": f"exchange_position_{symbol}",
+                    "result": "critical",
+                    "detail": (
+                        f"Exchange has {exchange_size} {base_asset} "
+                        f"but NO local position record. Could not reconstruct from trade history."
+                    ),
+                })
+                logger.critical(
+                    "reconcile_exchange: UNTRACKED ASSET on exchange",
+                    symbol=symbol,
+                    exchange_size=str(exchange_size),
+                )
+                from core.events import EventChannel, EventType, get_publisher
+                publisher = get_publisher()
+                publisher.publish(
+                    EventChannel.SYSTEM,
+                    EventType.RECONCILIATION_MISMATCH,
+                    {
+                        "severity": "critical",
+                        "source": "exchange_untracked_asset",
+                        "symbol": symbol,
+                        "exchange_size": str(exchange_size),
+                    },
+                )
+            else:
+                checks.append({
+                    "check": f"exchange_position_{symbol}",
+                    "result": "repaired",
+                    "detail": (
+                        f"Reconstructed position for {symbol} "
+                        f"(exchange_size={exchange_size}) from trade history"
+                    ),
+                })
+
+        else:
+            # Size mismatch — both sides have a position but sizes differ
+            # Auto-repair: trust exchange, adjust local to match
+            has_mismatch = True
+
+            # Find the primary position record and adjust its size
+            if pos_recs:
+                # Adjust the largest position record
+                largest_rec = max(pos_recs, key=lambda r: r.size)
+                old_size = largest_rec.size
+                adjustment = exchange_size - local_size
+                largest_rec.size = largest_rec.size + adjustment
+
+                repairs.append(
+                    f"adjusted {largest_rec.strategy}:{symbol} size "
+                    f"from {old_size} to {largest_rec.size} "
+                    f"(exchange={exchange_size}, delta={adjustment})"
+                )
+
+                logger.warning(
+                    "reconcile_exchange: auto-repaired size mismatch",
+                    symbol=symbol,
+                    strategy=largest_rec.strategy,
+                    old_size=str(old_size),
+                    new_size=str(largest_rec.size),
+                    exchange_size=str(exchange_size),
+                )
+
+                from core.events import EventChannel, EventType, get_publisher
+                publisher = get_publisher()
+                publisher.publish(
+                    EventChannel.SYSTEM,
+                    EventType.RECONCILIATION_REPAIRED,
+                    {
+                        "repair_type": "size_adjusted",
+                        "symbol": symbol,
+                        "old_size": str(old_size),
+                        "new_size": str(largest_rec.size),
+                        "exchange_size": str(exchange_size),
+                    },
+                )
+
             checks.append({
                 "check": f"exchange_position_{symbol}",
-                "result": "warning",
+                "result": "repaired",
                 "detail": (
-                    f"local_size={local_size} vs "
-                    f"exchange_size={exchange_size} (delta={size_delta})"
+                    f"local_size={local_size} → {exchange_size} "
+                    f"(adjusted to match exchange)"
                 ),
             })
-            logger.warning(
-                "reconcile_exchange: position size mismatch",
-                symbol=symbol,
-                local=str(local_size),
-                exchange=str(exchange_size),
-                delta=str(size_delta),
-            )
 
     return {
         "status": "mismatch" if has_mismatch else "ok",
@@ -488,8 +701,9 @@ def sync_exchange_balances(self) -> Dict[str, Any]:  # noqa: ANN001
         balances = account["balances"]
 
         exchange_usdt = Decimal("0")
-        if "USDT" in balances:
-            exchange_usdt = balances["USDT"]["free"] + balances["USDT"]["locked"]
+        usdt_data = balances.get("USDT", {})
+        if usdt_data:
+            exchange_usdt = usdt_data.get("free", Decimal("0")) + usdt_data.get("locked", Decimal("0"))
 
         # Fetch live prices for open positions to calculate real equity
         with get_session() as session:
@@ -546,7 +760,8 @@ def sync_exchange_balances(self) -> Dict[str, Any]:  # noqa: ANN001
             usdt_drift = exchange_usdt - local_usdt_total
 
             repaired = False
-            if abs(usdt_drift) > _EXCHANGE_BALANCE_TOLERANCE and state_recs:
+            bal_threshold = settings.reconciliation.balance_drift_threshold
+            if abs(usdt_drift) > bal_threshold and state_recs:
                 # Distribute the drift proportionally across strategy states
                 if local_usdt_total > 0:
                     for rec in state_recs:
@@ -601,6 +816,759 @@ def sync_exchange_balances(self) -> Dict[str, Any]:  # noqa: ANN001
         return {"status": "error", "error": str(exc)}
 
 
+# ── Open order sync (phase 6.4) ──────────────────────────────────────────────
+
+
+def _sync_open_orders(
+    session,  # noqa: ANN001 – SQLAlchemy Session
+    executor,  # noqa: ANN001 – BinanceExecutor
+) -> Dict[str, Any]:
+    """
+    Sync exchange open orders with local OrderRecord ledger.
+
+    For each open order on the exchange:
+    - If a matching OrderRecord exists → update reconciled_at, mark synced.
+    - If no match → create an OrderRecord with reconciliation_status='orphan'.
+
+    Returns summary dict with orphans_found and orders_synced counts.
+    """
+    from datetime import datetime, timezone
+
+    from db.models import OrderRecord
+
+    try:
+        open_orders = executor.get_open_orders()
+    except Exception as exc:
+        logger.error("sync_open_orders: failed to fetch", error=str(exc))
+        return {"status": "error", "error": str(exc)}
+
+    now = datetime.now(timezone.utc)
+    orders_synced = 0
+    orphans_found = 0
+
+    for order in open_orders:
+        exchange_order_id = str(order["orderId"])
+
+        existing = (
+            session.query(OrderRecord)
+            .filter_by(exchange_order_id=exchange_order_id)
+            .first()
+        )
+
+        if existing is not None:
+            # Known order — update reconciled_at and exchange status
+            existing.reconciled_at = now
+            existing.reconciliation_status = "synced"
+            existing.exchange_status = order.get("status", existing.exchange_status)
+            orders_synced += 1
+        else:
+            # Orphan — order on exchange with no local record
+            orphan = OrderRecord(
+                symbol=order["symbol"],
+                side=order["side"].lower(),
+                order_type=order["type"].lower()[:10],
+                amount=order["origQty"],
+                price=order.get("price"),
+                status=order.get("status", "NEW").lower(),
+                filled_amount=order.get("executedQty", 0),
+                exchange_order_id=exchange_order_id,
+                exchange_status=order.get("status", "NEW"),
+                reconciliation_status="orphan",
+                reconciled_at=now,
+                trading_mode="live",
+            )
+            session.add(orphan)
+            orphans_found += 1
+            logger.warning(
+                "sync_open_orders: orphan detected",
+                symbol=order["symbol"],
+                order_id=exchange_order_id,
+                side=order["side"],
+                type=order["type"],
+            )
+
+    return {
+        "status": "ok",
+        "orders_synced": orders_synced,
+        "orphans_found": orphans_found,
+    }
+
+
+def _check_pending_stop_orders(
+    session,  # noqa: ANN001 – SQLAlchemy Session
+    executor,  # noqa: ANN001 – BinanceExecutor
+) -> Dict[str, Any]:
+    """
+    Check status of pending stop orders against the exchange.
+
+    Queries OrderRecords with intent='stop_loss' and status='pending',
+    then verifies their current state on Binance:
+    - FILLED → update exchange_status (fill recovery in 6.5 will pick it up)
+    - CANCELED/EXPIRED → update to cancelled locally
+    - NEW → still open, just update reconciled_at
+    """
+    from datetime import datetime, timezone
+
+    from core.execution.binance import BinanceAPIError
+    from db.models import OrderRecord
+
+    pending_stops = (
+        session.query(OrderRecord)
+        .filter_by(intent="stop_loss", status="pending")
+        .filter(OrderRecord.exchange_order_id.isnot(None))
+        .all()
+    )
+
+    now = datetime.now(timezone.utc)
+    filled_stops = 0
+    cancelled_stops = 0
+    expired_stops = 0
+
+    for record in pending_stops:
+        try:
+            exchange_data = executor.get_order_status(
+                record.symbol, int(record.exchange_order_id)
+            )
+        except BinanceAPIError as exc:
+            if exc.code == -2013:
+                # Order does not exist on exchange — mark as expired
+                record.status = "cancelled"
+                record.exchange_status = "EXPIRED"
+                record.reconciliation_status = "synced"
+                record.reconciled_at = now
+                expired_stops += 1
+                logger.warning(
+                    "check_pending_stops: order not found on exchange",
+                    symbol=record.symbol,
+                    order_id=record.exchange_order_id,
+                )
+                continue
+            logger.error(
+                "check_pending_stops: API error",
+                symbol=record.symbol,
+                order_id=record.exchange_order_id,
+                error=str(exc),
+            )
+            continue
+        except Exception as exc:
+            logger.error(
+                "check_pending_stops: unexpected error",
+                symbol=record.symbol,
+                order_id=record.exchange_order_id,
+                error=str(exc),
+            )
+            continue
+
+        exchange_status = exchange_data.get("status", "")
+        record.reconciled_at = now
+
+        if exchange_status == "FILLED":
+            # Stop was triggered — mark for fill recovery
+            record.exchange_status = "FILLED"
+            record.reconciliation_status = "pending_sync"
+            filled_stops += 1
+            logger.info(
+                "check_pending_stops: stop order filled on exchange",
+                symbol=record.symbol,
+                order_id=record.exchange_order_id,
+            )
+        elif exchange_status in ("CANCELED", "EXPIRED", "REJECTED"):
+            record.status = "cancelled"
+            record.exchange_status = exchange_status
+            record.reconciliation_status = "synced"
+            cancelled_stops += 1
+        elif exchange_status in ("NEW", "PARTIALLY_FILLED"):
+            # Still open — no action needed
+            record.reconciliation_status = "synced"
+        else:
+            record.exchange_status = exchange_status
+
+    return {
+        "status": "ok",
+        "pending_stops_checked": len(pending_stops),
+        "filled_stops": filled_stops,
+        "cancelled_stops": cancelled_stops,
+        "expired_stops": expired_stops,
+    }
+
+
+def _cancel_orphan_stop_orders(
+    session,  # noqa: ANN001 – SQLAlchemy Session
+    executor,  # noqa: ANN001 – BinanceExecutor
+    open_orders: list[dict],
+) -> Dict[str, Any]:
+    """
+    Cancel stop-loss orders on the exchange that have no corresponding position.
+
+    Takes the already-fetched open_orders list (from _sync_open_orders context)
+    and checks if each STOP_LOSS_LIMIT order has a matching PositionRecord.
+    If not, cancels it on the exchange.
+    """
+    from db.models import PositionRecord
+
+    stop_orders = [
+        o for o in open_orders
+        if o.get("type") in ("STOP_LOSS_LIMIT", "STOP_LOSS")
+    ]
+
+    cancelled = 0
+
+    for order in stop_orders:
+        symbol = order["symbol"]
+        order_id = order["orderId"]
+
+        # Check if any position exists for this symbol
+        has_position = (
+            session.query(PositionRecord)
+            .filter_by(symbol=symbol)
+            .first()
+        ) is not None
+
+        if has_position:
+            continue
+
+        # No position — cancel the orphan stop
+        try:
+            executor.cancel_order(symbol, int(order_id))
+            cancelled += 1
+            logger.warning(
+                "cancel_orphan_stops: cancelled stop without position",
+                symbol=symbol,
+                order_id=str(order_id),
+            )
+        except Exception as exc:
+            logger.error(
+                "cancel_orphan_stops: cancel failed",
+                symbol=symbol,
+                order_id=str(order_id),
+                error=str(exc),
+            )
+
+    return {
+        "status": "ok",
+        "stop_orders_checked": len(stop_orders),
+        "orphan_stops_cancelled": cancelled,
+    }
+
+
+# ── Fill Recovery (phase 6.5) ────────────────────────────────────────────────
+
+_RECOVERY_AGE_SECONDS = 120  # 2 minutes before considering an order stale
+_LOST_AGE_SECONDS = 300      # 5 minutes before marking an order as lost
+_TIME_MATCH_TOLERANCE_MS = 30_000  # ±30 seconds for timestamp matching
+
+
+def _apply_fill_recovery(
+    session,  # noqa: ANN001 – SQLAlchemy Session
+    order_record,  # noqa: ANN001 – OrderRecord
+    exchange_data: dict,
+) -> str:
+    """
+    Apply fill recovery for a single order that was FILLED on exchange.
+
+    Updates the OrderRecord, then reconstructs the missed state change
+    (PositionRecord, TradeRecord, StrategyStateRecord) based on intent.
+
+    Returns a short description of what was recovered.
+    """
+    from datetime import datetime, timedelta, timezone
+    from decimal import Decimal
+
+    from db.models import OrderRecord, PositionRecord, StrategyStateRecord, TradeRecord
+
+    now = datetime.now(timezone.utc)
+    symbol = order_record.symbol
+    intent = order_record.intent
+
+    # ── Update OrderRecord with exchange fill data ────────────────────
+    filled_qty = Decimal(str(exchange_data.get("executedQty", order_record.amount)))
+    avg_price = Decimal(str(exchange_data.get("price", "0")))
+    # Prefer cummulativeQuoteQty / executedQty for avg price if available
+    cum_quote = exchange_data.get("cummulativeQuoteQty")
+    if cum_quote and filled_qty > 0:
+        avg_price = Decimal(str(cum_quote)) / filled_qty
+
+    order_record.status = "filled"
+    order_record.filled_amount = float(filled_qty)
+    order_record.avg_fill_price = float(avg_price)
+    order_record.exchange_status = exchange_data.get("status", "FILLED")
+    order_record.reconciliation_status = "recovered"
+    order_record.reconciled_at = now
+
+    # ── Determine strategy for this symbol ────────────────────────────
+    state_rec = (
+        session.query(StrategyStateRecord)
+        .filter_by(symbol=symbol)
+        .first()
+    )
+    strategy_name = state_rec.strategy if state_rec else "unknown"
+
+    # ── Route by intent ───────────────────────────────────────────────
+    if intent in ("open_long", "open_short"):
+        # Idempotency: check if position already exists
+        existing_pos = (
+            session.query(PositionRecord)
+            .filter_by(symbol=symbol, strategy=strategy_name)
+            .first()
+        )
+        if existing_pos is not None:
+            logger.info(
+                "fill_recovery: position already exists, skipping open",
+                symbol=symbol,
+                intent=intent,
+            )
+            return f"open skipped (position exists): {symbol}"
+
+        # Create PositionRecord
+        side = "long" if intent == "open_long" else "short"
+        cost = filled_qty * avg_price
+        fee = Decimal(str(order_record.fee_usdt or 0))
+
+        new_pos = PositionRecord(
+            symbol=symbol,
+            strategy=strategy_name,
+            side=side,
+            size=filled_qty,
+            entry_price=avg_price,
+            entry_time=now,
+            highest_close=avg_price,
+            trailing_stop_price=avg_price * Decimal("0.95"),
+            hard_stop_price=avg_price * Decimal("0.97"),
+            scale_in_count=0,
+            buy_signal_candles=0,
+        )
+        session.add(new_pos)
+
+        # Update strategy state
+        if state_rec is not None:
+            state_rec.state = "position"
+            state_data = dict(state_rec.state_data or {})
+            balance = Decimal(state_data.get("usdt_balance", "0"))
+            state_data["usdt_balance"] = str(balance - cost - fee)
+            state_rec.state_data = state_data
+            state_rec.updated_at = now
+
+        return f"opened {side}: {symbol} @ {avg_price}"
+
+    elif intent in ("close_long", "close_short", "stop_loss"):
+        # Idempotency: check if trade already exists for this fill
+        existing_pos = (
+            session.query(PositionRecord)
+            .filter_by(symbol=symbol, strategy=strategy_name)
+            .first()
+        )
+
+        if existing_pos is None:
+            logger.info(
+                "fill_recovery: no position to close, skipping",
+                symbol=symbol,
+                intent=intent,
+            )
+            return f"close skipped (no position): {symbol}"
+
+        # Calculate PnL
+        entry_price = existing_pos.entry_price
+        size = existing_pos.size
+        fee = Decimal(str(order_record.fee_usdt or 0))
+        side = existing_pos.side
+
+        if side == "long":
+            pnl = (avg_price - entry_price) * size - fee
+        else:
+            pnl = (entry_price - avg_price) * size - fee
+
+        pnl_percent = (pnl / (entry_price * size)) * 100 if entry_price * size > 0 else Decimal("0")
+        duration_minutes = int((now - existing_pos.entry_time).total_seconds() / 60)
+
+        # Determine exit_reason
+        if intent == "stop_loss":
+            exit_reason = "trailing_stop"
+        else:
+            exit_reason = "manual"
+
+        # Create TradeRecord — idempotency check
+        existing_trade = (
+            session.query(TradeRecord)
+            .filter_by(symbol=symbol, strategy=strategy_name)
+            .filter(TradeRecord.exit_time >= now - timedelta(seconds=60))
+            .first()
+        )
+        if existing_trade is None:
+            trade_rec = TradeRecord(
+                symbol=symbol,
+                strategy=strategy_name,
+                side=side,
+                entry_price=entry_price,
+                exit_price=avg_price,
+                size=size,
+                entry_time=existing_pos.entry_time,
+                exit_time=now,
+                pnl_usdt=pnl,
+                pnl_percent=pnl_percent,
+                duration_minutes=duration_minutes,
+                exit_reason=exit_reason,
+                trading_mode="live",
+            )
+            session.add(trade_rec)
+
+        # Delete position
+        session.delete(existing_pos)
+
+        # Update strategy state
+        if state_rec is not None:
+            proceeds = avg_price * size - fee
+            state_rec.state = "flat"
+            state_data = dict(state_rec.state_data or {})
+            balance = Decimal(state_data.get("usdt_balance", "0"))
+            total_pnl = Decimal(state_data.get("total_pnl", "0"))
+            state_data["usdt_balance"] = str(balance + proceeds)
+            state_data["total_pnl"] = str(total_pnl + pnl)
+            state_rec.state_data = state_data
+            state_rec.updated_at = now
+
+        return f"closed {side}: {symbol} @ {avg_price} (PnL: {pnl:.2f})"
+
+    elif intent == "scale_in":
+        # Update existing position with weighted average
+        existing_pos = (
+            session.query(PositionRecord)
+            .filter_by(symbol=symbol, strategy=strategy_name)
+            .first()
+        )
+        if existing_pos is None:
+            logger.warning(
+                "fill_recovery: no position for scale_in, treating as open",
+                symbol=symbol,
+            )
+            # Fallback: create position
+            new_pos = PositionRecord(
+                symbol=symbol,
+                strategy=strategy_name,
+                side="long",
+                size=filled_qty,
+                entry_price=avg_price,
+                entry_time=now,
+                highest_close=avg_price,
+                trailing_stop_price=avg_price * Decimal("0.95"),
+                hard_stop_price=avg_price * Decimal("0.97"),
+                scale_in_count=1,
+                buy_signal_candles=0,
+            )
+            session.add(new_pos)
+            return f"scale_in (new position): {symbol} @ {avg_price}"
+
+        # Weighted average entry price
+        old_cost = existing_pos.entry_price * existing_pos.size
+        new_cost = avg_price * filled_qty
+        total_size = existing_pos.size + filled_qty
+        existing_pos.entry_price = (old_cost + new_cost) / total_size
+        existing_pos.size = total_size
+        existing_pos.scale_in_count = (existing_pos.scale_in_count or 0) + 1
+
+        # Deduct cost from balance
+        fee = Decimal(str(order_record.fee_usdt or 0))
+        cost = filled_qty * avg_price
+        if state_rec is not None:
+            state_data = dict(state_rec.state_data or {})
+            balance = Decimal(state_data.get("usdt_balance", "0"))
+            state_data["usdt_balance"] = str(balance - cost - fee)
+            state_rec.state_data = state_data
+            state_rec.updated_at = now
+
+        return f"scale_in: {symbol} +{filled_qty} @ {avg_price}"
+
+    elif intent == "reduce":
+        existing_pos = (
+            session.query(PositionRecord)
+            .filter_by(symbol=symbol, strategy=strategy_name)
+            .first()
+        )
+        if existing_pos is None:
+            logger.info(
+                "fill_recovery: no position for reduce, skipping",
+                symbol=symbol,
+            )
+            return f"reduce skipped (no position): {symbol}"
+
+        entry_price = existing_pos.entry_price
+        side = existing_pos.side
+        fee = Decimal(str(order_record.fee_usdt or 0))
+
+        if side == "long":
+            pnl = (avg_price - entry_price) * filled_qty - fee
+        else:
+            pnl = (entry_price - avg_price) * filled_qty - fee
+
+        pnl_percent = (pnl / (entry_price * filled_qty)) * 100 if entry_price * filled_qty > 0 else Decimal("0")
+        duration_minutes = int((now - existing_pos.entry_time).total_seconds() / 60)
+
+        # Create TradeRecord for the partial exit
+        trade_rec = TradeRecord(
+            symbol=symbol,
+            strategy=strategy_name,
+            side=side,
+            entry_price=entry_price,
+            exit_price=avg_price,
+            size=filled_qty,
+            entry_time=existing_pos.entry_time,
+            exit_time=now,
+            pnl_usdt=pnl,
+            pnl_percent=pnl_percent,
+            duration_minutes=duration_minutes,
+            exit_reason="momentum_fade",
+            trading_mode="live",
+        )
+        session.add(trade_rec)
+
+        # Update position
+        remaining = existing_pos.size - filled_qty
+        if remaining <= 0:
+            session.delete(existing_pos)
+            if state_rec is not None:
+                state_rec.state = "flat"
+        else:
+            existing_pos.size = remaining
+
+        # Credit proceeds
+        proceeds = avg_price * filled_qty - fee
+        if state_rec is not None:
+            state_data = dict(state_rec.state_data or {})
+            balance = Decimal(state_data.get("usdt_balance", "0"))
+            total_pnl = Decimal(state_data.get("total_pnl", "0"))
+            state_data["usdt_balance"] = str(balance + proceeds)
+            state_data["total_pnl"] = str(total_pnl + pnl)
+            state_rec.state_data = state_data
+            state_rec.updated_at = now
+
+        return f"reduce: {symbol} -{filled_qty} @ {avg_price} (PnL: {pnl:.2f})"
+
+    else:
+        # Unknown intent — just mark as recovered, no state change
+        logger.warning(
+            "fill_recovery: unknown intent, no state reconstruction",
+            symbol=symbol,
+            intent=intent,
+        )
+        return f"unknown intent ({intent}): {symbol}"
+
+
+def _recover_pending_orders(
+    session,  # noqa: ANN001 – SQLAlchemy Session
+    executor,  # noqa: ANN001 – BinanceExecutor
+    *,
+    recovery_age_seconds: int = _RECOVERY_AGE_SECONDS,
+) -> Dict[str, Any]:
+    """
+    Recover fills for pending orders that have an exchange_order_id.
+
+    Queries stale pending orders (>2 min old), checks exchange status,
+    and applies fill recovery for FILLED orders.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from core.execution.binance import BinanceAPIError
+    from db.models import OrderRecord
+
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=recovery_age_seconds)
+
+    pending_orders = (
+        session.query(OrderRecord)
+        .filter_by(status="pending")
+        .filter(OrderRecord.exchange_order_id.isnot(None))
+        .filter(OrderRecord.created_at < cutoff)
+        .all()
+    )
+
+    recovered = 0
+    cancelled = 0
+    still_open = 0
+
+    for record in pending_orders:
+        try:
+            exchange_data = executor.get_order_status(
+                record.symbol, int(record.exchange_order_id)
+            )
+        except BinanceAPIError as exc:
+            if exc.code == -2013:
+                # Order doesn't exist on exchange — mark as lost
+                record.status = "cancelled"
+                record.exchange_status = "NOT_FOUND"
+                record.reconciliation_status = "lost"
+                record.reconciled_at = datetime.now(timezone.utc)
+                cancelled += 1
+                logger.warning(
+                    "recover_pending: order not found on exchange",
+                    symbol=record.symbol,
+                    order_id=record.exchange_order_id,
+                )
+                continue
+            logger.error(
+                "recover_pending: API error",
+                symbol=record.symbol,
+                order_id=record.exchange_order_id,
+                error=str(exc),
+            )
+            continue
+        except Exception as exc:
+            logger.error(
+                "recover_pending: unexpected error",
+                symbol=record.symbol,
+                order_id=record.exchange_order_id,
+                error=str(exc),
+            )
+            continue
+
+        exchange_status = exchange_data.get("status", "")
+
+        if exchange_status == "FILLED":
+            description = _apply_fill_recovery(session, record, exchange_data)
+            recovered += 1
+            logger.info(
+                "recover_pending: fill recovered",
+                symbol=record.symbol,
+                order_id=record.exchange_order_id,
+                description=description,
+            )
+        elif exchange_status in ("CANCELED", "EXPIRED", "REJECTED"):
+            record.status = "cancelled"
+            record.exchange_status = exchange_status
+            record.reconciliation_status = "synced"
+            record.reconciled_at = datetime.now(timezone.utc)
+            cancelled += 1
+        elif exchange_status in ("NEW", "PARTIALLY_FILLED"):
+            # Still open on exchange — leave for next cycle
+            still_open += 1
+        else:
+            record.exchange_status = exchange_status
+
+    return {
+        "status": "ok",
+        "orders_checked": len(pending_orders),
+        "recovered": recovered,
+        "cancelled": cancelled,
+        "still_open": still_open,
+    }
+
+
+def _recover_pending_orders_without_id(
+    session,  # noqa: ANN001 – SQLAlchemy Session
+    executor,  # noqa: ANN001 – BinanceExecutor
+    *,
+    lost_age_seconds: int = _LOST_AGE_SECONDS,
+) -> Dict[str, Any]:
+    """
+    Recover orders that crashed before receiving exchange response.
+
+    These have exchange_order_id=NULL. Attempts to match them against
+    exchange order history by (symbol, side, qty, timestamp ±30s).
+    """
+    from datetime import datetime, timedelta, timezone
+    from decimal import Decimal
+
+    from db.models import OrderRecord
+
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=lost_age_seconds)
+
+    orphan_orders = (
+        session.query(OrderRecord)
+        .filter_by(status="pending")
+        .filter(OrderRecord.exchange_order_id.is_(None))
+        .filter(OrderRecord.created_at < cutoff)
+        .all()
+    )
+
+    matched = 0
+    lost = 0
+
+    for record in orphan_orders:
+        # Query exchange for recent orders on this symbol
+        start_time_ms = int(record.created_at.timestamp() * 1000) - _TIME_MATCH_TOLERANCE_MS
+        try:
+            exchange_orders = executor.get_all_orders(
+                record.symbol, start_time=start_time_ms, limit=100,
+            )
+        except Exception as exc:
+            logger.error(
+                "recover_without_id: failed to query exchange",
+                symbol=record.symbol,
+                error=str(exc),
+            )
+            continue
+
+        # Try to match by side + qty + timestamp
+        order_side = record.side.upper()
+        order_qty = Decimal(str(record.amount))
+        order_time_ms = int(record.created_at.timestamp() * 1000)
+
+        match_found = None
+        for ex_order in exchange_orders:
+            if ex_order.get("side") != order_side:
+                continue
+            ex_qty = Decimal(str(ex_order.get("origQty", "0")))
+            # Qty within 1% tolerance
+            if order_qty > 0 and abs(ex_qty - order_qty) / order_qty > Decimal("0.01"):
+                continue
+            # Timestamp within tolerance
+            ex_time = ex_order.get("time", 0)
+            if abs(ex_time - order_time_ms) > _TIME_MATCH_TOLERANCE_MS:
+                continue
+            # Check it's not already claimed by another OrderRecord
+            ex_id = str(ex_order["orderId"])
+            existing = (
+                session.query(OrderRecord)
+                .filter_by(exchange_order_id=ex_id)
+                .first()
+            )
+            if existing is not None:
+                continue
+            match_found = ex_order
+            break
+
+        if match_found is not None:
+            # Associate the exchange_order_id and process
+            record.exchange_order_id = str(match_found["orderId"])
+            exchange_status = match_found.get("status", "")
+
+            if exchange_status == "FILLED":
+                _apply_fill_recovery(session, record, match_found)
+            elif exchange_status in ("CANCELED", "EXPIRED", "REJECTED"):
+                record.status = "cancelled"
+                record.exchange_status = exchange_status
+                record.reconciliation_status = "synced"
+                record.reconciled_at = datetime.now(timezone.utc)
+            elif exchange_status in ("NEW", "PARTIALLY_FILLED"):
+                record.reconciliation_status = "synced"
+                record.reconciled_at = datetime.now(timezone.utc)
+            else:
+                record.exchange_status = exchange_status
+
+            matched += 1
+            logger.info(
+                "recover_without_id: matched to exchange order",
+                symbol=record.symbol,
+                exchange_order_id=record.exchange_order_id,
+                exchange_status=exchange_status,
+            )
+        else:
+            # No match found — order likely never reached exchange
+            record.status = "cancelled"
+            record.reconciliation_status = "lost"
+            record.reconciled_at = datetime.now(timezone.utc)
+            lost += 1
+            logger.warning(
+                "recover_without_id: no match, marking as lost",
+                symbol=record.symbol,
+                created_at=str(record.created_at),
+            )
+
+    return {
+        "status": "ok",
+        "orders_checked": len(orphan_orders),
+        "matched": matched,
+        "lost": lost,
+    }
+
+
 # ── run_reconciliation (task 3.9) ────────────────────────────────────────────
 
 
@@ -633,6 +1601,11 @@ def run_reconciliation(self) -> Dict[str, Any]:  # noqa: ANN001
     from db import get_session
 
     settings = get_settings()
+
+    if not settings.reconciliation.enabled:
+        logger.info("run_reconciliation: disabled via config")
+        return {"status": "disabled", "pairs_checked": 0, "mismatches": 0, "repairs": 0, "details": []}
+
     publisher = get_publisher()
     registry = _get_strategy_registry()
 
@@ -706,8 +1679,13 @@ def run_reconciliation(self) -> Dict[str, Any]:  # noqa: ANN001
                     "error": str(exc),
                 })
 
-    # ── Exchange reconciliation (task 4.8) ────────────────────────────
+    # ── Exchange reconciliation (6.5 → 6.4 → 6.6) ─────────────────────
     exchange_result: Dict[str, Any] | None = None
+    sync_result: Dict[str, Any] | None = None
+    stop_result: Dict[str, Any] | None = None
+    orphan_stop_result: Dict[str, Any] | None = None
+    recovery_result: Dict[str, Any] | None = None
+    lost_result: Dict[str, Any] | None = None
     if settings.live_trading.enabled:
         try:
             from core.execution.binance import BinanceExecutor
@@ -720,10 +1698,66 @@ def run_reconciliation(self) -> Dict[str, Any]:  # noqa: ANN001
                 portfolio_manager=_PM(initial_capital=Decimal("1")),
             )
             tracked_symbols = [s.symbol for s in settings.enabled_symbols]
+            recon_cfg = settings.reconciliation
 
+            # ── Phase 6.5: Fill Recovery ──────────────────────────────────
+            # Recovery runs FIRST so stale PENDING orders (including filled
+            # stops) are resolved before open-order sync re-checks them.
+            with get_session() as session:
+                recovery_result = _recover_pending_orders(
+                    session, executor,
+                    recovery_age_seconds=recon_cfg.recovery_age_seconds,
+                )
+
+            with get_session() as session:
+                lost_result = _recover_pending_orders_without_id(
+                    session, executor,
+                    lost_age_seconds=recon_cfg.lost_age_seconds,
+                )
+
+            logger.info(
+                "reconcile: fill recovery done",
+                recovery=recovery_result,
+                lost=lost_result,
+            )
+
+            # ── Phase 6.4: Open order sync ────────────────────────────────
+            with get_session() as session:
+                sync_result = _sync_open_orders(session, executor)
+
+            with get_session() as session:
+                stop_result = _check_pending_stop_orders(session, executor)
+
+            # Cancel orphan stops (needs fresh open orders list)
+            try:
+                open_orders_list = executor.get_open_orders()
+            except Exception:
+                open_orders_list = []
+            if open_orders_list:
+                with get_session() as session:
+                    orphan_stop_result = _cancel_orphan_stop_orders(
+                        session, executor, open_orders_list,
+                    )
+            else:
+                orphan_stop_result = {
+                    "status": "ok",
+                    "stop_orders_checked": 0,
+                    "orphan_stops_cancelled": 0,
+                }
+
+            logger.info(
+                "reconcile: open order sync done",
+                sync=sync_result,
+                stops=stop_result,
+                orphan_stops=orphan_stop_result,
+            )
+
+            # ── Phase 6.6: Position reconciliation v2 ────────────────────
             with get_session() as session:
                 exchange_result = _reconcile_with_exchange(
                     session, executor, tracked_symbols,
+                    balance_tolerance=recon_cfg.balance_drift_threshold,
+                    position_tolerance=recon_cfg.size_mismatch_threshold,
                 )
 
             if exchange_result["status"] == "mismatch":
@@ -769,6 +1803,17 @@ def run_reconciliation(self) -> Dict[str, Any]:  # noqa: ANN001
     }
     if exchange_result is not None:
         summary["exchange"] = exchange_result
+    if recovery_result is not None:
+        summary["fill_recovery"] = {
+            "recovery": recovery_result,
+            "lost_orders": lost_result,
+        }
+    if sync_result is not None:
+        summary["order_sync"] = {
+            "sync": sync_result,
+            "stops": stop_result,
+            "orphan_stops": orphan_stop_result,
+        }
 
     # Publish summary event
     if total_mismatches == 0:

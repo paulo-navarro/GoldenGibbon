@@ -988,3 +988,728 @@ class TestMarginStopOrder:
         limit_price = Decimal(params["price"])
         # limit should be > stop for BUY side
         assert limit_price > stop_price
+
+
+# ── Exchange Query Layer (phase 6.1) ────────────────────────────────────────
+
+
+_OPEN_ORDER_RAW = {
+    "orderId": 12345,
+    "symbol": "BTCUSDT",
+    "side": "BUY",
+    "type": "LIMIT",
+    "status": "NEW",
+    "timeInForce": "GTC",
+    "origQty": "0.10000",
+    "executedQty": "0.00000",
+    "cumulativeQuoteQty": "0.00000",
+    "price": "50000.00",
+    "stopPrice": "0.00",
+    "time": 1714900000000,
+    "updateTime": 1714900001000,
+}
+
+_STOP_ORDER_RAW = {
+    "orderId": 12346,
+    "symbol": "ETHUSDT",
+    "side": "SELL",
+    "type": "STOP_LOSS_LIMIT",
+    "status": "NEW",
+    "timeInForce": "GTC",
+    "origQty": "1.500",
+    "executedQty": "0.000",
+    "cumulativeQuoteQty": "0.000",
+    "price": "3400.00",
+    "stopPrice": "3500.00",
+    "time": 1714900002000,
+    "updateTime": 1714900003000,
+}
+
+
+@patch("core.execution.binance.get_publisher")
+class TestGetOpenOrders:
+    """Tests for BinanceExecutor.get_open_orders() — phase 6.1.1."""
+
+    def test_with_symbol_filter(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(ex, "_signed_request", return_value=[_OPEN_ORDER_RAW]) as mock_req:
+            result = ex.get_open_orders(symbol="BTCUSDT")
+
+        mock_req.assert_called_once_with("GET", "/api/v3/openOrders", {"symbol": "BTCUSDT"})
+        assert len(result) == 1
+        order = result[0]
+        assert order["orderId"] == 12345
+        assert order["symbol"] == "BTCUSDT"
+        assert order["side"] == "BUY"
+        assert order["type"] == "LIMIT"
+        assert order["status"] == "NEW"
+        assert order["origQty"] == Decimal("0.10000")
+        assert order["executedQty"] == Decimal("0.00000")
+        assert order["price"] == Decimal("50000.00")
+        assert order["stopPrice"] == Decimal("0.00")
+        assert order["time"] == 1714900000000
+        assert order["updateTime"] == 1714900001000
+
+    def test_without_symbol_returns_all(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(
+            ex, "_signed_request", return_value=[_OPEN_ORDER_RAW, _STOP_ORDER_RAW]
+        ) as mock_req:
+            result = ex.get_open_orders()
+
+        mock_req.assert_called_once_with("GET", "/api/v3/openOrders", None)
+        assert len(result) == 2
+        assert result[0]["symbol"] == "BTCUSDT"
+        assert result[1]["symbol"] == "ETHUSDT"
+
+    def test_empty_response(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(ex, "_signed_request", return_value=[]):
+            result = ex.get_open_orders(symbol="BTCUSDT")
+
+        assert result == []
+
+    def test_api_error_propagates(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(
+            ex, "_signed_request", side_effect=BinanceAPIError(-1003, "Too many requests")
+        ):
+            with pytest.raises(BinanceAPIError) as exc_info:
+                ex.get_open_orders()
+            assert exc_info.value.code == -1003
+
+
+@patch("core.execution.binance.get_publisher")
+class TestGetAllOrders:
+    """Tests for BinanceExecutor.get_all_orders() — phase 6.1.2."""
+
+    def test_happy_path_with_start_time(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+        filled_order = {**_OPEN_ORDER_RAW, "status": "FILLED", "executedQty": "0.10000"}
+
+        with patch.object(ex, "_signed_request", return_value=[filled_order]) as mock_req:
+            result = ex.get_all_orders("BTCUSDT", start_time=1714900000000)
+
+        mock_req.assert_called_once_with(
+            "GET",
+            "/api/v3/allOrders",
+            {"symbol": "BTCUSDT", "limit": 500, "startTime": 1714900000000},
+        )
+        assert len(result) == 1
+        assert result[0]["status"] == "FILLED"
+        assert result[0]["executedQty"] == Decimal("0.10000")
+
+    def test_without_start_time(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(ex, "_signed_request", return_value=[]) as mock_req:
+            ex.get_all_orders("ETHUSDT")
+
+        mock_req.assert_called_once_with(
+            "GET",
+            "/api/v3/allOrders",
+            {"symbol": "ETHUSDT", "limit": 500},
+        )
+
+    def test_limit_clamped_to_1000(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(ex, "_signed_request", return_value=[]) as mock_req:
+            ex.get_all_orders("BTCUSDT", limit=5000)
+
+        call_params = mock_req.call_args[0][2]
+        assert call_params["limit"] == 1000
+
+    def test_empty_response(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(ex, "_signed_request", return_value=[]):
+            result = ex.get_all_orders("BTCUSDT")
+
+        assert result == []
+
+    def test_api_error_propagates(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(
+            ex, "_signed_request", side_effect=BinanceAPIError(-2010, "Insufficient balance")
+        ):
+            with pytest.raises(BinanceAPIError) as exc_info:
+                ex.get_all_orders("BTCUSDT")
+            assert exc_info.value.code == -2010
+
+
+# ── get_my_trades (phase 6.1.3) ─────────────────────────────────────────────
+
+_TRADE_RAW = {
+    "id": 99001,
+    "orderId": 12345,
+    "symbol": "BTCUSDT",
+    "side": "BUY",
+    "price": "50100.50",
+    "qty": "0.05000",
+    "commission": "0.00005",
+    "commissionAsset": "BTC",
+    "time": 1714900010000,
+}
+
+
+@patch("core.execution.binance.get_publisher")
+class TestGetMyTrades:
+    """Tests for BinanceExecutor.get_my_trades() — phase 6.1.3."""
+
+    def test_happy_path(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(ex, "_signed_request", return_value=[_TRADE_RAW]) as mock_req:
+            result = ex.get_my_trades("BTCUSDT", start_time=1714900000000)
+
+        mock_req.assert_called_once_with(
+            "GET",
+            "/api/v3/myTrades",
+            {"symbol": "BTCUSDT", "limit": 500, "startTime": 1714900000000},
+        )
+        assert len(result) == 1
+        t = result[0]
+        assert t["id"] == 99001
+        assert t["orderId"] == 12345
+        assert t["symbol"] == "BTCUSDT"
+        assert t["side"] == "BUY"
+        assert t["price"] == Decimal("50100.50")
+        assert t["qty"] == Decimal("0.05000")
+        assert t["commission"] == Decimal("0.00005")
+        assert t["commissionAsset"] == "BTC"
+        assert t["time"] == 1714900010000
+
+    def test_limit_clamped_to_1000(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(ex, "_signed_request", return_value=[]) as mock_req:
+            ex.get_my_trades("BTCUSDT", limit=5000)
+
+        call_params = mock_req.call_args[0][2]
+        assert call_params["limit"] == 1000
+
+    def test_empty_response(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(ex, "_signed_request", return_value=[]):
+            result = ex.get_my_trades("BTCUSDT")
+
+        assert result == []
+
+    def test_api_error_propagates(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(
+            ex, "_signed_request", side_effect=BinanceAPIError(-1003, "Too many requests")
+        ):
+            with pytest.raises(BinanceAPIError):
+                ex.get_my_trades("BTCUSDT")
+
+
+# ── get_margin_open_orders (phase 6.1.4) ─────────────────────────────────────
+
+
+@patch("core.execution.binance.get_publisher")
+class TestGetMarginOpenOrders:
+    """Tests for BinanceExecutor.get_margin_open_orders() — phase 6.1.4."""
+
+    def test_with_symbol(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(ex, "_signed_request", return_value=[_OPEN_ORDER_RAW]) as mock_req:
+            result = ex.get_margin_open_orders(symbol="BTCUSDT")
+
+        mock_req.assert_called_once_with(
+            "GET", "/sapi/v1/margin/openOrders", {"symbol": "BTCUSDT"}
+        )
+        assert len(result) == 1
+        assert result[0]["orderId"] == 12345
+
+    def test_without_symbol(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(ex, "_signed_request", return_value=[]) as mock_req:
+            ex.get_margin_open_orders()
+
+        mock_req.assert_called_once_with("GET", "/sapi/v1/margin/openOrders", None)
+
+    def test_api_error_propagates(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(
+            ex, "_signed_request", side_effect=BinanceAPIError(-3003, "Margin account not exist")
+        ):
+            with pytest.raises(BinanceAPIError):
+                ex.get_margin_open_orders()
+
+
+# ── get_order_status (phase 6.1.5) ───────────────────────────────────────────
+
+_FILLED_ORDER_RAW = {
+    **_OPEN_ORDER_RAW,
+    "status": "FILLED",
+    "executedQty": "0.10000",
+    "cumulativeQuoteQty": "5000.00",
+}
+
+
+@patch("core.execution.binance.get_publisher")
+class TestGetOrderStatus:
+    """Tests for BinanceExecutor.get_order_status() — phase 6.1.5."""
+
+    def test_filled_order(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(ex, "_signed_request", return_value=_FILLED_ORDER_RAW) as mock_req:
+            result = ex.get_order_status("BTCUSDT", 12345)
+
+        mock_req.assert_called_once_with(
+            "GET", "/api/v3/order", {"symbol": "BTCUSDT", "orderId": 12345}
+        )
+        assert result["status"] == "FILLED"
+        assert result["executedQty"] == Decimal("0.10000")
+
+    def test_new_order(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(ex, "_signed_request", return_value=_OPEN_ORDER_RAW):
+            result = ex.get_order_status("BTCUSDT", 12345)
+
+        assert result["status"] == "NEW"
+
+    def test_api_error_propagates(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(
+            ex, "_signed_request", side_effect=BinanceAPIError(-2011, "Unknown order")
+        ):
+            with pytest.raises(BinanceAPIError):
+                ex.get_order_status("BTCUSDT", 99999)
+
+
+# ── cancel_order (phase 6.1.6) ───────────────────────────────────────────────
+
+_CANCELLED_ORDER_RAW = {
+    **_OPEN_ORDER_RAW,
+    "status": "CANCELED",
+}
+
+
+@patch("core.execution.binance.get_publisher")
+class TestCancelOrder:
+    """Tests for BinanceExecutor.cancel_order() — phase 6.1.6."""
+
+    def test_successful_cancel(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(ex, "_signed_request", return_value=_CANCELLED_ORDER_RAW) as mock_req:
+            result = ex.cancel_order("BTCUSDT", 12345)
+
+        mock_req.assert_called_once_with(
+            "DELETE", "/api/v3/order", {"symbol": "BTCUSDT", "orderId": 12345}
+        )
+        assert result["status"] == "CANCELED"
+        assert result["orderId"] == 12345
+
+    def test_already_filled_returns_gracefully(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(
+            ex, "_signed_request", side_effect=BinanceAPIError(-2011, "Unknown order")
+        ):
+            result = ex.cancel_order("BTCUSDT", 12345)
+
+        assert result["status"] == "CANCELED"
+        assert result["orderId"] == 12345
+        assert result["symbol"] == "BTCUSDT"
+
+    def test_order_does_not_exist_returns_gracefully(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(
+            ex, "_signed_request", side_effect=BinanceAPIError(-2013, "Order does not exist")
+        ):
+            result = ex.cancel_order("BTCUSDT", 99999)
+
+        assert result["status"] == "CANCELED"
+        assert result["orderId"] == 99999
+
+    def test_unexpected_api_error_propagates(self, mock_pub):
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        with patch.object(
+            ex, "_signed_request", side_effect=BinanceAPIError(-1003, "Too many requests")
+        ):
+            with pytest.raises(BinanceAPIError) as exc_info:
+                ex.cancel_order("BTCUSDT", 12345)
+            assert exc_info.value.code == -1003
+
+
+# ── Phase 6.3: Write-Ahead Order Flow ───────────────────────────────────────
+
+
+@patch("core.execution.binance.get_publisher")
+class TestWriteAheadPlaceAndFill:
+    """Test that _place_and_fill creates PENDING record before API call."""
+
+    def test_creates_pending_record_before_api_call(self, mock_pub):
+        """Write-ahead: OrderRecord(PENDING) exists before _signed_request fires."""
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        records_created = []
+        status_at_api_call = []
+
+        def fake_session_factory():
+            from contextlib import contextmanager
+            from unittest.mock import MagicMock as _M
+
+            @contextmanager
+            def _session():
+                session = _M()
+                session.flush = lambda: setattr(
+                    session._last_added, "id", 42
+                )
+
+                def _add(record):
+                    session._last_added = record
+                    records_created.append(record)
+
+                def _get(model, pk):
+                    if records_created:
+                        return records_created[0]
+                    return None
+
+                session.add = _add
+                session.get = _get
+                yield session
+
+            return _session()
+
+        ex._session_factory = fake_session_factory
+
+        fill_response = {
+            "orderId": 12345,
+            "status": "FILLED",
+            "executedQty": "0.1",
+            "cumulativeQuoteQty": "5000",
+            "fills": [{"price": "50000", "qty": "0.1", "commission": "0.05", "commissionAsset": "USDT"}],
+        }
+
+        def mock_signed(method, path, params):
+            # Capture the status of the record at the time of the API call
+            if records_created:
+                status_at_api_call.append(records_created[0].status)
+            return fill_response
+
+        with patch.object(ex, "_signed_request", side_effect=mock_signed):
+            order = ex._place_and_fill(_open_decision(), OrderSide.BUY, intent="open_long")
+
+        assert order is not None
+        assert order.status == OrderStatus.FILLED
+        # Write-ahead record was created BEFORE the API call
+        assert len(records_created) == 1
+        # At the moment of the API call, status was still "pending"
+        assert status_at_api_call[0] == "pending"
+        assert records_created[0].intent == "open_long"
+        # After fill, reconciliation_status is updated to "synced"
+        assert records_created[0].reconciliation_status == "synced"
+
+    def test_rejected_order_updates_record_to_rejected(self, mock_pub):
+        """On API rejection, write-ahead record transitions to REJECTED."""
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        last_update = {}
+
+        def fake_session_factory():
+            from contextlib import contextmanager
+            from unittest.mock import MagicMock as _M
+
+            @contextmanager
+            def _session():
+                session = _M()
+                record = _M()
+                record.id = 42
+
+                def _add(r):
+                    session._record = r
+                    r.id = 42
+
+                def _get(model, pk):
+                    return session._record
+
+                session.add = _add
+                session.flush = lambda: None
+                session.get = _get
+                yield session
+
+            return _session()
+
+        ex._session_factory = fake_session_factory
+
+        with patch.object(
+            ex, "_signed_request", side_effect=BinanceAPIError(-2010, "Insufficient balance")
+        ):
+            order = ex._place_and_fill(_open_decision(), OrderSide.BUY, intent="open_long")
+
+        assert order is not None
+        assert order.status == OrderStatus.REJECTED
+
+    def test_unexpected_error_leaves_record_pending(self, mock_pub):
+        """On unexpected crash, record stays PENDING (for recovery by 6.5)."""
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        pending_record = None
+
+        def fake_session_factory():
+            from contextlib import contextmanager
+            from unittest.mock import MagicMock as _M
+
+            @contextmanager
+            def _session():
+                nonlocal pending_record
+                session = _M()
+                record = _M()
+                record.id = 42
+                record.status = "pending"
+
+                def _add(r):
+                    nonlocal pending_record
+                    r.id = 42
+                    pending_record = r
+
+                def _get(model, pk):
+                    return pending_record
+
+                session.add = _add
+                session.flush = lambda: None
+                session.get = _get
+                yield session
+
+            return _session()
+
+        ex._session_factory = fake_session_factory
+
+        with patch.object(
+            ex, "_signed_request", side_effect=RuntimeError("Connection reset")
+        ):
+            order = ex._place_and_fill(_open_decision(), OrderSide.BUY, intent="open_long")
+
+        assert order is None
+        # Record should stay PENDING (no update to rejected)
+        assert pending_record.status == "pending"
+
+    def test_exchange_order_id_persisted_after_fill(self, mock_pub):
+        """After fill, exchange_order_id is set on the DB record."""
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        updates = []
+
+        def fake_session_factory():
+            from contextlib import contextmanager
+            from unittest.mock import MagicMock as _M
+
+            @contextmanager
+            def _session():
+                session = _M()
+                record = _M()
+                record.id = 42
+                record.status = "pending"
+
+                def _add(r):
+                    r.id = 42
+                    session._record = r
+
+                def _get(model, pk):
+                    r = session._record
+                    updates.append({"before_status": r.status})
+                    return r
+
+                session.add = _add
+                session.flush = lambda: None
+                session.get = _get
+                yield session
+
+            return _session()
+
+        ex._session_factory = fake_session_factory
+
+        fill_response = {
+            "orderId": 77777,
+            "status": "FILLED",
+            "executedQty": "0.1",
+            "cumulativeQuoteQty": "5000",
+            "fills": [{"price": "50000", "qty": "0.1", "commission": "0.05", "commissionAsset": "USDT"}],
+        }
+
+        with patch.object(ex, "_signed_request", return_value=fill_response):
+            order = ex._place_and_fill(_open_decision(), OrderSide.BUY, intent="open_long")
+
+        assert order.exchange_order_id == "77777"
+
+    def test_no_write_ahead_when_session_factory_is_none(self, mock_pub):
+        """Without session_factory, write-ahead is skipped (paper mode)."""
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+        assert ex._session_factory is None
+
+        fill_response = {
+            "orderId": 12345,
+            "status": "FILLED",
+            "executedQty": "0.1",
+            "cumulativeQuoteQty": "5000",
+            "fills": [{"price": "50000", "qty": "0.1", "commission": "0.05", "commissionAsset": "USDT"}],
+        }
+
+        with patch.object(ex, "_signed_request", return_value=fill_response):
+            order = ex._place_and_fill(_open_decision(), OrderSide.BUY, intent="open_long")
+
+        assert order is not None
+        assert order.status == OrderStatus.FILLED
+
+
+@patch("core.execution.binance.get_publisher")
+class TestWriteAheadStopOrder:
+    """Test that stop orders use write-ahead."""
+
+    def test_stop_order_creates_pending_record(self, mock_pub):
+        """_place_stop_order writes PENDING record with intent=stop_loss."""
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        records_created = []
+
+        def fake_session_factory():
+            from contextlib import contextmanager
+            from unittest.mock import MagicMock as _M
+
+            @contextmanager
+            def _session():
+                session = _M()
+
+                def _add(r):
+                    r.id = 42
+                    records_created.append(r)
+
+                def _get(model, pk):
+                    if records_created:
+                        return records_created[0]
+                    return None
+
+                session.add = _add
+                session.flush = lambda: None
+                session.get = _get
+                yield session
+
+            return _session()
+
+        ex._session_factory = fake_session_factory
+
+        with patch.object(
+            ex, "_signed_request", return_value={"orderId": 99988}
+        ):
+            order_id = ex._place_stop_order("BTCUSDT", Decimal("0.1"), Decimal("48500"))
+
+        assert order_id == "99988"
+        assert len(records_created) == 1
+        assert records_created[0].intent == "stop_loss"
+        assert records_created[0].status == "pending"
+        assert records_created[0].side == "sell"
+
+    def test_stop_order_rejected_marks_record(self, mock_pub):
+        """If stop order fails, record is marked rejected."""
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        last_record = None
+
+        def fake_session_factory():
+            from contextlib import contextmanager
+            from unittest.mock import MagicMock as _M
+
+            @contextmanager
+            def _session():
+                nonlocal last_record
+                session = _M()
+                record = _M()
+                record.id = 42
+                record.status = "pending"
+
+                def _add(r):
+                    nonlocal last_record
+                    r.id = 42
+                    last_record = r
+
+                def _get(model, pk):
+                    return last_record
+
+                session.add = _add
+                session.flush = lambda: None
+                session.get = _get
+                yield session
+
+            return _session()
+
+        ex._session_factory = fake_session_factory
+
+        with patch.object(
+            ex, "_signed_request", side_effect=BinanceAPIError(-2010, "Insufficient balance")
+        ):
+            order_id = ex._place_stop_order("BTCUSDT", Decimal("0.1"), Decimal("48500"))
+
+        assert order_id is None
+
+
+@patch("core.execution.binance.get_publisher")
+class TestDeriveIntent:
+    """Test _derive_intent helper."""
+
+    def test_open_long(self, mock_pub):
+        assert BinanceExecutor._derive_intent(RiskAction.OPEN, PositionSide.LONG) == "open_long"
+
+    def test_open_short(self, mock_pub):
+        assert BinanceExecutor._derive_intent(RiskAction.OPEN, PositionSide.SHORT) == "open_short"
+
+    def test_close_long(self, mock_pub):
+        assert BinanceExecutor._derive_intent(RiskAction.CLOSE, PositionSide.LONG) == "close_long"
+
+    def test_close_short(self, mock_pub):
+        assert BinanceExecutor._derive_intent(RiskAction.CLOSE, PositionSide.SHORT) == "close_short"
+
+    def test_scale_in(self, mock_pub):
+        assert BinanceExecutor._derive_intent(RiskAction.SCALE_IN, PositionSide.LONG) == "scale_in"
+
+    def test_reduce(self, mock_pub):
+        assert BinanceExecutor._derive_intent(RiskAction.REDUCE, PositionSide.LONG) == "reduce"

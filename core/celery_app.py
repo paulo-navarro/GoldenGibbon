@@ -73,10 +73,10 @@ app.conf.update(
             # ~60 s to populate the DB cache before the tick runs.
             "schedule": crontab(minute="2,17,32,47"),
         },
-        "reconciliation-15m": {
+        "reconciliation-2m": {
             "task": "core.tasks.run_reconciliation",
-            # Every 15 minutes at :05, :20, :35, :50.
-            "schedule": crontab(minute="5,20,35,50"),
+            # Every 2 minutes — task itself checks `reconciliation.enabled`.
+            "schedule": 120.0,
         },
         "sync-exchange-balances-2m": {
             "task": "core.tasks.sync_exchange_balances",
@@ -124,20 +124,70 @@ def _setup_worker_logging(**_kwargs: object) -> None:
 @worker_ready.connect
 def _reconcile_on_startup(**_kwargs: object) -> None:
     """
-    Enqueue a reconciliation check when the Celery worker is ready.
+    Run synchronous fill recovery then enqueue full reconciliation.
 
-    Controlled by ``live_trading.reconcile_on_startup`` in
-    ``settings.yaml`` (defaults to ``True``).  The task runs
-    asynchronously inside the worker so it doesn't block startup.
+    Fill recovery runs **synchronously** to guarantee pending orders from
+    the previous crash are resolved before the worker accepts any tasks.
+    The full reconciliation is then enqueued async (order sync, position
+    checks, etc.).
+
+    Controlled by ``live_trading.reconcile_on_startup`` (defaults True).
     """
     try:
         from core.config import get_settings
 
         settings = get_settings()
-        if settings.live_trading.reconcile_on_startup:
-            from core.tasks import run_reconciliation
+        if not settings.live_trading.reconcile_on_startup:
+            return
 
-            run_reconciliation.delay()
+        # ── Synchronous fill recovery (6.7.4) ────────────────────────
+        if settings.live_trading.enabled:
+            try:
+                from decimal import Decimal
+
+                from core.execution.binance import BinanceExecutor
+                from core.portfolio import PortfolioManager as _PM
+                from core.tasks._reconciliation import (
+                    _recover_pending_orders,
+                    _recover_pending_orders_without_id,
+                )
+                from db import get_session
+
+                executor = BinanceExecutor.from_settings(
+                    strategy_name="_startup_recovery",
+                    portfolio_manager=_PM(initial_capital=Decimal("1")),
+                )
+
+                recon_cfg = settings.reconciliation
+
+                with get_session() as session:
+                    _recover_pending_orders(
+                        session, executor,
+                        recovery_age_seconds=recon_cfg.recovery_age_seconds,
+                    )
+
+                with get_session() as session:
+                    _recover_pending_orders_without_id(
+                        session, executor,
+                        lost_age_seconds=recon_cfg.lost_age_seconds,
+                    )
+
+                import logging
+                logging.getLogger(__name__).info(
+                    "Startup fill recovery completed synchronously."
+                )
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Startup fill recovery failed; full reconciliation "
+                    "will retry asynchronously.",
+                    exc_info=True,
+                )
+
+        # ── Async full reconciliation ────────────────────────────────
+        from core.tasks import run_reconciliation
+
+        run_reconciliation.delay()
     except Exception:  # pragma: no cover – best-effort
         import logging
 

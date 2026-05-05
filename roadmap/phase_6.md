@@ -51,12 +51,12 @@ Princípios:
 - Margin: `GET /sapi/v1/margin/openOrders`, `GET /sapi/v1/margin/allOrders`, `GET /sapi/v1/margin/myTrades`
 - Futures (referência): `GET /fapi/v1/openOrders`
 
-- [ ] **6.1.1** `get_open_orders(symbol: str | None = None) -> list[dict]` — retorna todas as ordens abertas na conta spot. Sem symbol → todas. Campos mínimos: `orderId`, `symbol`, `side`, `type`, `status`, `origQty`, `executedQty`, `price`, `stopPrice`, `time`, `updateTime`
-- [ ] **6.1.2** `get_all_orders(symbol: str, start_time: int | None = None, limit: int = 500) -> list[dict]` — histórico de ordens para um symbol (spot). Usado para fill recovery
-- [ ] **6.1.3** `get_my_trades(symbol: str, start_time: int | None = None, limit: int = 500) -> list[dict]` — trades executados na conta. Campos: `id`, `orderId`, `symbol`, `side`, `price`, `qty`, `commission`, `commissionAsset`, `time`
-- [ ] **6.1.4** `get_margin_open_orders(symbol: str | None = None) -> list[dict]` — mesma interface do 6.1.1 para margin
-- [ ] **6.1.5** `get_order_status(symbol: str, order_id: int) -> dict` — consulta status de uma ordem específica (`GET /api/v3/order`)
-- [ ] **6.1.6** `cancel_order(symbol: str, order_id: int) -> dict` — cancela ordem aberta (`DELETE /api/v3/order`); retorna status final. Se a ordem já foi executada ou cancelada, trata graciosamente (não lança erro)
+- [x] **6.1.1** `get_open_orders(symbol: str | None = None) -> list[dict]` — retorna todas as ordens abertas na conta spot. Sem symbol → todas. Campos mínimos: `orderId`, `symbol`, `side`, `type`, `status`, `origQty`, `executedQty`, `price`, `stopPrice`, `time`, `updateTime`
+- [x] **6.1.2** `get_all_orders(symbol: str, start_time: int | None = None, limit: int = 500) -> list[dict]` — histórico de ordens para um symbol (spot). Usado para fill recovery
+- [x] **6.1.3** `get_my_trades(symbol: str, start_time: int | None = None, limit: int = 500) -> list[dict]` — trades executados na conta. Campos: `id`, `orderId`, `symbol`, `side`, `price`, `qty`, `commission`, `commissionAsset`, `time`
+- [x] **6.1.4** `get_margin_open_orders(symbol: str | None = None) -> list[dict]` — mesma interface do 6.1.1 para margin
+- [x] **6.1.5** `get_order_status(symbol: str, order_id: int) -> dict` — consulta status de uma ordem específica (`GET /api/v3/order`)
+- [x] **6.1.6** `cancel_order(symbol: str, order_id: int) -> dict` — cancela ordem aberta (`DELETE /api/v3/order`); retorna status final. Se a ordem já foi executada ou cancelada, trata graciosamente (não lança erro)
 
 ---
 
@@ -70,14 +70,14 @@ O `order_records` atual já tem os campos essenciais, mas faltam:
 - `reconciled_at` — timestamp da última vez que a ordem foi verificada contra a exchange
 - `reconciliation_status` — PENDING_SYNC, SYNCED, ORPHAN, RECOVERED
 
-- [ ] **6.2.1** Adicionar enum `OrderIntent` no `core/models.py`: `OPEN_LONG`, `CLOSE_LONG`, `OPEN_SHORT`, `CLOSE_SHORT`, `STOP_LOSS`, `SCALE_IN`, `REDUCE`
-- [ ] **6.2.2** Adicionar coluna `intent VARCHAR(20)` ao `OrderRecord` — nullable para ordens históricas
-- [ ] **6.2.3** Adicionar coluna `reconciled_at TIMESTAMP` ao `OrderRecord` — última verificação com exchange
-- [ ] **6.2.4** Adicionar coluna `reconciliation_status VARCHAR(20) DEFAULT 'pending_sync'` ao `OrderRecord`
-- [ ] **6.2.5** Adicionar índice `ix_order_records_reconciliation` em `(reconciliation_status, created_at)` para queries de sync
-- [ ] **6.2.6** Adicionar índice `ix_order_records_exchange_order_id` em `(exchange_order_id)` para lookups rápidos
-- [ ] **6.2.7** Gerar migration Alembic: `alembic revision --autogenerate -m "add order reconciliation columns"`
-- [ ] **6.2.8** Aplicar e verificar: `alembic upgrade head`
+- [x] **6.2.1** Adicionar enum `OrderIntent` no `core/models.py`: `OPEN_LONG`, `CLOSE_LONG`, `OPEN_SHORT`, `CLOSE_SHORT`, `STOP_LOSS`, `SCALE_IN`, `REDUCE`
+- [x] **6.2.2** Adicionar coluna `intent VARCHAR(20)` ao `OrderRecord` — nullable para ordens históricas
+- [x] **6.2.3** Adicionar coluna `reconciled_at TIMESTAMP` ao `OrderRecord` — última verificação com exchange
+- [x] **6.2.4** Adicionar coluna `reconciliation_status VARCHAR(20) DEFAULT 'pending_sync'` ao `OrderRecord`
+- [x] **6.2.5** Adicionar índice `ix_order_records_reconciliation` em `(reconciliation_status, created_at)` para queries de sync
+- [x] **6.2.6** Adicionar índice `ix_order_records_exchange_order_id` em `(exchange_order_id)` para lookups rápidos
+- [x] **6.2.7** Gerar migration Alembic: `alembic revision --autogenerate -m "add order reconciliation columns"`
+- [x] **6.2.8** Aplicar e verificar: `alembic upgrade head`
 
 ---
 
@@ -87,12 +87,12 @@ O `order_records` atual já tem os campos essenciais, mas faltam:
 > **Solução:** write-ahead — grava a ordem no DB *antes* de enviá-la à exchange.
 > Depende de: 6.2.
 
-- [ ] **6.3.1** Refactor `_place_and_fill()`: antes de chamar a API da Binance, criar `OrderRecord` com `status=PENDING`, `intent=<intent>`, `reconciliation_status=pending_sync` e fazer `session.commit()`
-- [ ] **6.3.2** Após o fill, atualizar o `OrderRecord` existente (não criar um novo): `status=FILLED`, `exchange_order_id`, `filled_amount`, `avg_fill_price`, `fee_usdt`, `reconciliation_status=synced`
-- [ ] **6.3.3** Em caso de erro/rejeição: atualizar `status=REJECTED` com `exchange_status` contendo a mensagem de erro
-- [ ] **6.3.4** Refactor `_place_margin_order()`: mesma lógica write-ahead para ordens margin
-- [ ] **6.3.5** Refactor `_place_stop_order()` e `_place_margin_stop_order()`: gravar stop order no DB com `intent=STOP_LOSS` antes de colocá-la na exchange
-- [ ] **6.3.6** Garantir que o `exchange_order_id` é sempre persistido — é a chave de reconciliação
+- [x] **6.3.1** Refactor `_place_and_fill()`: antes de chamar a API da Binance, criar `OrderRecord` com `status=PENDING`, `intent=<intent>`, `reconciliation_status=pending_sync` e fazer `session.commit()`
+- [x] **6.3.2** Após o fill, atualizar o `OrderRecord` existente (não criar um novo): `status=FILLED`, `exchange_order_id`, `filled_amount`, `avg_fill_price`, `fee_usdt`, `reconciliation_status=synced`
+- [x] **6.3.3** Em caso de erro/rejeição: atualizar `status=REJECTED` com `exchange_status` contendo a mensagem de erro
+- [x] **6.3.4** Refactor `_place_margin_order()`: mesma lógica write-ahead para ordens margin
+- [x] **6.3.5** Refactor `_place_stop_order()` e `_place_margin_stop_order()`: gravar stop order no DB com `intent=STOP_LOSS` antes de colocá-la na exchange
+- [x] **6.3.6** Garantir que o `exchange_order_id` é sempre persistido — é a chave de reconciliação
 
 ---
 
@@ -102,17 +102,17 @@ O `order_records` atual já tem os campos essenciais, mas faltam:
 > Detecta: stop orders executadas que o GG não viu, ordens órfãs, ordens canceladas pela exchange.
 > Depende de: 6.1, 6.2.
 
-- [ ] **6.4.1** Nova função `_sync_open_orders(session, executor, symbols)`:
+- [x] **6.4.1** Nova função `_sync_open_orders(session, executor, symbols)`:
   - Busca todas as open orders na exchange (`get_open_orders()`)
   - Para cada order, verifica se existe `OrderRecord` com mesmo `exchange_order_id`
   - **Ordem conhecida:** atualiza status se mudou (ex: parcialmente filled)
   - **Ordem órfã (externa):** ordem na exchange que o GG não colocou (manual, outro bot, API direta) ou perdeu tracking. Cria `OrderRecord` com `reconciliation_status=orphan`, `intent=NULL`. Destacada no frontend (ver 6.8.6)
-- [ ] **6.4.2** Detectar stop orders executadas: buscar `OrderRecord` onde `intent=STOP_LOSS` e `status=PENDING`, consultar `get_order_status()` na exchange
+- [x] **6.4.2** Detectar stop orders executadas: buscar `OrderRecord` onde `intent=STOP_LOSS` e `status=PENDING`, consultar `get_order_status()` na exchange
   - Se `status=FILLED` na exchange → disparar fill recovery (6.5)
   - Se `status=CANCELED` → atualizar para CANCELLED localmente
   - Se não existe na exchange → marcar como `EXPIRED`
-- [ ] **6.4.3** Detectar stop orders órfãs na exchange: open orders na exchange com tipo `STOP_LOSS_LIMIT` que não correspondem a nenhuma posição aberta no GG → cancelar via `cancel_order()` (com safety check)
-- [ ] **6.4.4** Atualizar `reconciled_at` e `reconciliation_status` em cada `OrderRecord` verificado
+- [x] **6.4.3** Detectar stop orders órfãs na exchange: open orders na exchange com tipo `STOP_LOSS_LIMIT` que não correspondem a nenhuma posição aberta no GG → cancelar via `cancel_order()` (com safety check)
+- [x] **6.4.4** Atualizar `reconciled_at` e `reconciliation_status` em cada `OrderRecord` verificado
 
 ---
 
@@ -122,13 +122,13 @@ O `order_records` atual já tem os campos essenciais, mas faltam:
 > **Este é o componente mais crítico** — resolve o problema de "ativo some do GG" e "ativo vendido mas continua no GG".
 > Depende de: 6.1, 6.2, 6.3.
 
-- [ ] **6.5.1** Nova função `_recover_pending_orders(session, executor)`:
+- [x] **6.5.1** Nova função `_recover_pending_orders(session, executor)`:
   - Query: `OrderRecord` onde `status=PENDING` e `exchange_order_id IS NOT NULL` e `created_at < now() - 2 minutes`
   - Para cada uma, consultar `get_order_status()` na exchange
   - Se `FILLED` → executar recovery (6.5.2)
   - Se `CANCELED` / `EXPIRED` → atualizar status localmente
   - Se `NEW` (ainda aberta) → noop, será processada no próximo ciclo
-- [ ] **6.5.2** `_apply_fill_recovery(session, order_record, exchange_data)`:
+- [x] **6.5.2** `_apply_fill_recovery(session, order_record, exchange_data)`:
   - Determinar a ação baseada no `intent`:
     - `OPEN_LONG` / `OPEN_SHORT`: chamar `pm.open_position()` com os dados do fill
     - `CLOSE_LONG` / `CLOSE_SHORT`: chamar `pm.close_position()` + deletar `PositionRecord`
@@ -136,13 +136,13 @@ O `order_records` atual já tem os campos essenciais, mas faltam:
     - `REDUCE` / `SCALE_IN`: chamar `pm.reduce_position()` / `pm.open_position()` (parcial)
   - Atualizar `OrderRecord`: `status=FILLED`, fills, fees
   - **Idempotência**: verificar se a posição/trade já existe antes de criar (checar por `exchange_order_id` em trades)
-- [ ] **6.5.3** `_recover_pending_orders_without_id(session, executor)`:
+- [x] **6.5.3** `_recover_pending_orders_without_id(session, executor)`:
   - Query: `OrderRecord` onde `status=PENDING` e `exchange_order_id IS NULL` e `created_at < now() - 5 minutes`
   - O GG crashou *antes* de receber o response da exchange
   - Buscar `get_all_orders(symbol, start_time=order.created_at)` e tentar match por (symbol, side, qty, timestamp ±30s)
   - Se match encontrado → associar `exchange_order_id` e processar como 6.5.1
   - Se nenhum match → marcar como `LOST` (a ordem provavelmente nunca chegou à exchange)
-- [ ] **6.5.4** Guard de duplicação: antes de aplicar qualquer recovery, verificar se já existe `TradeRecord` referenciando o mesmo `exchange_order_id`
+- [x] **6.5.4** Guard de duplicação: antes de aplicar qualquer recovery, verificar se já existe `TradeRecord` referenciando o mesmo `exchange_order_id`
 
 ---
 
@@ -151,7 +151,7 @@ O `order_records` atual já tem os campos essenciais, mas faltam:
 > Substitui os Checks D e E atuais por uma reconciliação completa com auto-repair.
 > Depende de: 6.1.
 
-- [ ] **6.6.1** Refactor `_reconcile_with_exchange()` → `_reconcile_positions_with_exchange()`:
+- [x] **6.6.1** Refactor `_reconcile_with_exchange()` → `_reconcile_positions_with_exchange()`:
   - **Asset no GG, zero na exchange** (já existe): auto-repair — deletar position, reset state, **registrar TradeRecord de emergência** com `exit_reason=reconciliation_force_close` para não perder o tracking de PnL
   - **Asset na exchange, zero no GG** (já existe como alert): tentar recovery automático — buscar `get_my_trades(symbol)` recentes, identificar a ordem de compra, reconstruir `PositionRecord` com preço de entrada real
   - **Size mismatch** (novo): position no GG com size diferente da exchange — ajustar `PositionRecord.size` para match da exchange, logar a diferença
@@ -160,7 +160,7 @@ O `order_records` atual já tem os campos essenciais, mas faltam:
   - Se drift > threshold configurável → ajustar `usdt_balance` na strategy state para match
   - **Implementado:** `sync_exchange_balances` task (Celery Beat a cada 2 min) + auto-repair proporcional + recovery sync on startup
 - [ ] **6.6.3** **Margin debt check** (novo para shorts): consultar `GET /sapi/v1/margin/account` e verificar que `borrowed` amounts correspondem a short positions abertas no GG
-- [ ] **6.6.4** Toda reparação gera um `ReconciliationEvent` com: timestamp, tipo de reparo, valores antes/depois, exchange_data de referência
+- [x] **6.6.4** Toda reparação gera um `ReconciliationEvent` com: timestamp, tipo de reparo, valores antes/depois, exchange_data de referência
 
 ---
 
@@ -169,7 +169,7 @@ O `order_records` atual já tem os campos essenciais, mas faltam:
 > Unifica todos os checks em um fluxo ordenado e configurável.
 > Depende de: 6.4, 6.5, 6.6.
 
-- [ ] **6.7.1** Novo fluxo de `run_reconciliation()`:
+- [x] **6.7.1** Novo fluxo de `run_reconciliation()`:
   ```
   1. DB consistency checks (existente — Checks A, B, C)
   2. Recover pending orders (6.5) — resolve ordens perdidas ANTES de comparar posições
@@ -177,7 +177,7 @@ O `order_records` atual já tem os campos essenciais, mas faltam:
   4. Position reconciliation v2 (6.6) — compara estado final com exchange
   5. Publish summary + alerts
   ```
-- [ ] **6.7.2** `ReconciliationConfig` Pydantic model em `core/config.py`, persistido via `app_configs` (namespace `"reconciliation"`) — mesmo padrão de `RiskConfig`, `ExecutionConfig`, etc.:
+- [x] **6.7.2** `ReconciliationConfig` Pydantic model em `core/config.py`, persistido via `app_configs` (namespace `"reconciliation"`) — mesmo padrão de `RiskConfig`, `ExecutionConfig`, etc.:
   ```python
   class ReconciliationConfig(BaseModel):
       enabled: bool = True
@@ -193,8 +193,87 @@ O `order_records` atual já tem os campos essenciais, mas faltam:
   - Seed defaults com `save_app_config("reconciliation", ...)` se namespace não existir
   - Celery Beat interval lê `interval_minutes` do DB (não mais hardcoded)
   - Expor no settings panel do frontend para ajuste em runtime
-- [ ] **6.7.3** Cada step do orchestrator retorna um resultado estruturado; o summary final agrega todos
-- [ ] **6.7.4** Startup recovery: na inicialização do worker, rodar fill recovery (6.5) antes de qualquer tick — garante que ordens perdidas no último crash são recuperadas imediatamente
+- [x] **6.7.3** Cada step do orchestrator retorna um resultado estruturado; o summary final agrega todos
+- [x] **6.7.4** Startup recovery: na inicialização do worker, rodar fill recovery (6.5) antes de qualquer tick — garante que ordens perdidas no último crash são recuperadas imediatamente
+
+---
+
+## BUGS — Code Review (Phase 6 audit)
+
+> Bugs, inconsistências e fraquezas detectados na revisão do código implementado.
+> Devem ser resolvidos antes de prosseguir para 6.8.
+
+### 🔴 Bugs (crash ou dados incorretos em produção)
+
+- [ ] **BUG-1** — `get_ticker_prices()` chamado sem argumento obrigatório
+  - **Arquivo:** `core/tasks/_reconciliation.py` linha ~326
+  - **Problema:** `executor.get_ticker_prices()` é chamado sem `symbols`, mas a assinatura é `get_ticker_prices(self, symbols: list[str])`. Causa `TypeError` em toda execução de `_reconcile_with_exchange` quando tenta buscar preços para calcular PnL no force-close.
+  - **Impacto:** Position reconciliation v2 (6.6) falha silenciosamente — posições fantasma não são force-closed corretamente.
+  - **Fix:** Passar `symbols` como argumento: `executor.get_ticker_prices(symbols)`
+
+- [ ] **BUG-2** — Typo `cummulativeQuoteQty` impede cálculo correto de avg_price no fill recovery
+  - **Arquivo:** `core/tasks/_reconciliation.py` linha ~1087
+  - **Problema:** `_apply_fill_recovery` usa `exchange_data.get("cummulativeQuoteQty")` (duplo 'm'), mas `_parse_order_response` normaliza o campo como `"cumulativeQuoteQty"` (um 'm'). O campo nunca é encontrado no dict.
+  - **Impacto:** O fallback usa `exchange_data.get("price", "0")` — que para MARKET orders é `"0.00000000"`. Resultado: `avg_price = 0`, posições reconstruídas com entry_price zero, PnL completamente errado.
+  - **Fix:** Corrigir para `exchange_data.get("cumulativeQuoteQty")`
+
+- [ ] **BUG-3** — `filled_amount` e `avg_fill_price` atribuídos como `float` em vez de `Decimal`
+  - **Arquivo:** `core/tasks/_reconciliation.py` linhas ~1092-1093
+  - **Problema:** `order_record.filled_amount = float(filled_qty)` e `order_record.avg_fill_price = float(avg_price)` — a coluna DB é `Numeric(20,8)` (Decimal). Conversão para float introduz imprecisão de ponto flutuante em dados financeiros (e.g. `0.1` → `0.09999999...`).
+  - **Impacto:** Perda de precisão em registros de fill — pode causar divergências acumulativas em PnL e balance checks.
+  - **Fix:** Manter como `Decimal`: `order_record.filled_amount = filled_qty` e `order_record.avg_fill_price = avg_price`
+
+### 🟡 Inconsistências (comportamento diverge da especificação/config)
+
+- [ ] **BUG-4** — Config flags `auto_repair` / `force_close_orphans` / `recover_untracked` nunca são verificados
+  - **Arquivo:** `core/tasks/_reconciliation.py` (todo o módulo)
+  - **Problema:** `ReconciliationConfig` define `auto_repair`, `force_close_orphans` e `recover_untracked` como flags configuráveis, mas o código de reconciliação **nunca consulta esses valores** — repara incondicionalmente.
+  - **Impacto:** O operador não consegue desligar auto-repair em emergência sem desligar toda a reconciliação (`enabled=False`). Comportamento misleading.
+  - **Fix:** Guardar cada bloco de repair com `if recon_cfg.auto_repair:`, `if recon_cfg.force_close_orphans:`, `if recon_cfg.recover_untracked:`
+
+- [ ] **BUG-5** — `order_type` truncado a 10 caracteres corrompe dados de ordens órfãs
+  - **Arquivo:** `core/tasks/_reconciliation.py` linha ~869
+  - **Problema:** `order_type=order["type"].lower()[:10]` trunca tipos como `"stop_loss_limit"` (15 chars) para `"stop_loss_"`. A coluna `OrderRecord.order_type` é `String(10)`.
+  - **Impacto:** Dados de ordens órfãs ficam incorretos; queries futuras por `order_type='stop_loss_limit'` nunca encontram estes registros.
+  - **Fix:** Expandir a coluna para `String(20)` (migration) ou mapear para um valor curto (e.g. `"sll"` / `"sl"`)
+
+- [ ] **BUG-6** — `OrderRecord` não tem coluna `strategy` — fill recovery pode reconstruir na strategy errada
+  - **Arquivo:** `core/tasks/_reconciliation.py` (múltiplas funções de recovery)
+  - **Problema:** Quando fill recovery precisa determinar a strategy de uma ordem, faz `session.query(StrategyStateRecord).filter_by(symbol=symbol).first()`. Se múltiplas strategies operam o mesmo símbolo (e.g. SmartHodler + BearGuard em BTCUSDT), retorna uma arbitrária.
+  - **Impacto:** Recovery pode abrir/fechar posição na strategy errada — cascata de inconsistências.
+  - **Fix:** Adicionar coluna `strategy VARCHAR(50)` ao `OrderRecord` (nullable, preencher no write-ahead via `self._strategy`). Migration necessária.
+
+- [ ] **BUG-7** — `ReconciliationConfig.interval_minutes` é dead code — Beat interval hardcoded
+  - **Arquivo:** `core/celery_app.py` linha ~79
+  - **Problema:** O `beat_schedule` usa `"schedule": 120.0` (hardcoded 2 min). O campo `interval_minutes` do `ReconciliationConfig` nunca é lido pelo Beat — alterar o valor no DB/config não tem efeito.
+  - **Impacto:** Operador pensa que pode ajustar o intervalo em runtime, mas não pode.
+  - **Fix:** Usar `schedule=settings.reconciliation.interval_minutes * 60` (requer rework de como Beat lê config), ou remover o campo do config e documentar que requer restart.
+
+### 🟠 Fraquezas (funcionam mas com riscos)
+
+- [ ] **BUG-8** — Race condition entre `sync_exchange_balances` e `run_reconciliation`
+  - **Arquivo:** `core/tasks/_reconciliation.py` (ambos tasks)
+  - **Problema:** Ambos rodam a cada 2 minutos, podem sobrepor-se no tempo, e ambos lêem/escrevem em `StrategyStateRecord.state_data` (balance, equity). Sem lock ou serialização, um pode fazer stale read e sobrescrever o repair do outro.
+  - **Impacto:** Reparos de balance podem ser revertidos silenciosamente; em edge cases, loop infinito de "drift detectado → reparado → sobrescrito → drift detectado de novo".
+  - **Fix:** Usar `task_acks_late=True` + `solo` pool, ou adicionar `advisory lock` no DB antes de escrever state_data, ou consolidar ambos em um único task.
+
+- [ ] **BUG-9** — Position reconstruction assume `side="long"` incondicionalmente
+  - **Arquivo:** `core/tasks/_reconciliation.py` linha ~535
+  - **Problema:** Na reconstrução de posição (asset na exchange sem PositionRecord local), `side` é hardcoded como `"long"`. Se o asset é resultado de um short parcialmente fechado (BearGuard), a posição será reconstruída incorretamente como long.
+  - **Impacto:** BearGuard shorts reconstrídos como longs terão PnL invertido e decisões de close erradas.
+  - **Fix:** Inferir `side` a partir do `StrategyStateRecord` (se strategy é bear_guard → short) ou do `intent` de ordens recentes no símbolo.
+
+- [ ] **BUG-10** — Idempotency check de close usa janela de 60s — insuficiente
+  - **Arquivo:** `core/tasks/_reconciliation.py` linha ~1157
+  - **Problema:** O check de idempotência para `close_long`/`stop_loss` verifica `TradeRecord` com `exit_time >= now - timedelta(seconds=60)`. Mas o recovery age padrão é 120s (ordem precisa ter >2 min para entrar no recovery). Ou seja, o trade original pode ter sido criado há >60s quando o recovery roda → check não encontra → duplica.
+  - **Impacto:** Trades duplicados em cenário de crash + restart lento (>60s entre fill real e recovery).
+  - **Fix:** Verificar por `exchange_order_id` no `TradeRecord` (precisa adicionar campo) ou expandir janela para `recovery_age_seconds + margem`.
+
+- [ ] **BUG-11** — Startup recovery sem retry dedicado nem alerta de falha
+  - **Arquivo:** `core/celery_app.py` linhas ~142-175
+  - **Problema:** Se a API da Binance estiver down no momento do startup, o recovery síncrono falha (catch genérico logga warning) e depende do ciclo assíncrono de 2 min. Não há retry imediato nem alerta de que pending orders ficaram sem resolver.
+  - **Impacto:** Worker inicia com estado potencialmente inconsistente. Se o primeiro tick executar antes do ciclo de 2 min resolver, pode duplicar ordens ou operar com balance errado.
+  - **Fix:** Adicionar retry com backoff (max 3 tentativas, 5s/15s/30s) no bloco síncrono, e emitir alerta CRITICAL se todas falharem.
 
 ---
 

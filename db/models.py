@@ -190,6 +190,13 @@ class OrderRecord(Base):
 
     trading_mode: Mapped[str] = mapped_column(String(10), nullable=False, default="paper", server_default="paper")
 
+    # Reconciliation fields (Phase 6.2)
+    intent: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    reconciled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    reconciliation_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="pending_sync", server_default="pending_sync"
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -210,6 +217,8 @@ class OrderRecord(Base):
         Index("ix_order_records_symbol_created", "symbol", "created_at"),
         Index("ix_order_records_status_created", "status", "created_at"),
         Index("ix_order_records_trading_mode", "trading_mode"),
+        Index("ix_order_records_reconciliation", "reconciliation_status", "created_at"),
+        Index("ix_order_records_exchange_order_id", "exchange_order_id"),
     )
     
     def __repr__(self) -> str:

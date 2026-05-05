@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from db import get_session
-from db.models import PositionRecord, PortfolioSnapshot, StrategyStateRecord, TradeRecord
+from db.models import PositionRecord, PortfolioSnapshot, StrategyStateRecord, TradeRecord, OrderRecord
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -473,6 +473,24 @@ class TestRunReconciliation:
         assert summary["mismatches"] >= 1
         assert summary["repairs"] >= 1
 
+    def test_disabled_via_config_skips_all_work(self):
+        """When reconciliation.enabled=False, task returns immediately."""
+        from unittest.mock import patch
+
+        from core.config import ReconciliationConfig
+
+        disabled_cfg = ReconciliationConfig(enabled=False)
+
+        with patch("core.config.get_settings") as mock_settings:
+            mock_settings.return_value.reconciliation = disabled_cfg
+            from core.tasks import run_reconciliation
+
+            result = run_reconciliation.apply()
+            assert result.successful()
+            summary = result.result
+            assert summary["status"] == "disabled"
+            assert summary["pairs_checked"] == 0
+
     def test_publishes_ok_event_on_clean_state(self, _seed_state):
         """Clean state → publishes RECONCILIATION_OK event."""
         _seed_state(state="flat", position=False)
@@ -586,13 +604,15 @@ class TestStartupReconciliation:
 class TestReconcileWithExchange:
     """Verify Check D (USDT balance) and Check E (position size) vs Binance."""
 
-    def _make_executor(self, balances: dict) -> MagicMock:
+    def _make_executor(self, balances: dict, *, trades=None, ticker_prices=None) -> MagicMock:
         """Build a mock executor that returns given balances."""
         executor = MagicMock()
         executor.get_account_info.return_value = {
             "balances": balances,
             "can_trade": True,
         }
+        executor.get_ticker_prices.return_value = ticker_prices or {}
+        executor.get_my_trades.return_value = trades if trades is not None else []
         return executor
 
     def test_ok_when_balances_match(self, _seed_state):
@@ -655,7 +675,7 @@ class TestReconcileWithExchange:
         assert "8000" in usdt_check["detail"]
 
     def test_position_mismatch_detected(self, _seed_state):
-        """Local position size differs from exchange → warning."""
+        """Local position size differs from exchange → auto-repaired."""
         _seed_state(
             state="position",
             position=True,
@@ -674,8 +694,8 @@ class TestReconcileWithExchange:
 
         assert result["status"] == "mismatch"
         pos_check = next(c for c in result["checks"] if c["check"] == "exchange_position_BTCUSDT")
-        assert pos_check["result"] == "warning"
-        assert "0.05" in pos_check["detail"]
+        assert pos_check["result"] == "repaired"
+        assert "0.02" in pos_check["detail"]
 
     def test_no_position_no_exchange_balance_ok(self, _seed_state):
         """No local position + no exchange balance → ok."""
@@ -734,7 +754,7 @@ class TestReconcileWithExchange:
         assert "exchange_position_ETHUSDT" in check_names
 
     def test_stale_position_auto_repaired_when_exchange_zero(self, _seed_state):
-        """Local position exists but exchange has zero balance → auto-repair."""
+        """Local position exists but exchange has zero balance → auto-repair with TradeRecord."""
         _seed_state(
             state="position",
             position=True,
@@ -755,15 +775,20 @@ class TestReconcileWithExchange:
         pos_check = next(c for c in result["checks"] if c["check"] == "exchange_position_BTCUSDT")
         assert pos_check["result"] == "repaired"
         assert len(result["repairs"]) >= 1
-        assert "flat" in result["repairs"][0]
+        assert "force-closed" in result["repairs"][0]
 
         with get_session() as session:
+            from db.models import StrategyStateRecord, TradeRecord as TR
             pos = session.query(PositionRecord).filter_by(symbol="BTCUSDT").first()
             assert pos is None
             state = session.query(StrategyStateRecord).filter_by(
                 symbol="BTCUSDT", strategy="smart_hodler",
             ).first()
             assert state.state == "flat"
+            # Should have created an emergency TradeRecord
+            trade = session.query(TR).filter_by(symbol="BTCUSDT").first()
+            assert trade is not None
+            assert trade.exit_reason == "reconciliation_force_close"
 
     def test_stale_position_evicts_worker_state(self, _seed_state):
         """Auto-repair evicts the in-memory worker state cache entry."""
@@ -835,7 +860,7 @@ class TestReconcileWithExchange:
         assert result["status"] == "ok"
 
     def test_exchange_has_asset_no_local_position_critical(self, _seed_state):
-        """Exchange has asset but NO local position → critical alert, no auto-repair."""
+        """Exchange has asset but NO local position + no trades → critical alert."""
         _seed_state(
             state="flat",
             state_data={
@@ -847,10 +872,13 @@ class TestReconcileWithExchange:
             },
         )
 
-        executor = self._make_executor({
-            "USDT": {"free": Decimal("10000"), "locked": Decimal("0")},
-            "BTC": {"free": Decimal("847.90"), "locked": Decimal("0")},
-        })
+        executor = self._make_executor(
+            {
+                "USDT": {"free": Decimal("10000"), "locked": Decimal("0")},
+                "BTC": {"free": Decimal("847.90"), "locked": Decimal("0")},
+            },
+            trades=[],  # No trades → cannot reconstruct
+        )
 
         from core.tasks import _reconcile_with_exchange
 
@@ -864,5 +892,806 @@ class TestReconcileWithExchange:
         assert result["status"] == "mismatch"
         pos_check = next(c for c in result["checks"] if c["check"] == "exchange_position_BTCUSDT")
         assert pos_check["result"] == "critical"
-        assert "NO local position" in pos_check["detail"]
+        assert "Could not reconstruct" in pos_check["detail"]
         assert len(result.get("repairs", [])) == 0
+
+    def test_untracked_asset_reconstructed_from_trades(self, _seed_state):
+        """Exchange has asset + trade history → position reconstructed."""
+        _seed_state(
+            state="flat",
+            state_data={
+                "run_id": "test",
+                "usdt_balance": "10000",
+                "equity": "10000",
+                "total_pnl": "0",
+                "cooldown_remaining": 0,
+            },
+        )
+
+        # Mock trades that show net buy of 1.0 BTC at avg price 50000
+        trades = [
+            {
+                "id": 1,
+                "orderId": 100,
+                "symbol": "BTCUSDT",
+                "side": "BUY",
+                "price": "50000",
+                "qty": "1.0",
+                "commission": "0.001",
+                "commissionAsset": "BTC",
+                "time": 1700000000000,
+            }
+        ]
+
+        executor = self._make_executor(
+            {
+                "USDT": {"free": Decimal("10000"), "locked": Decimal("0")},
+                "BTC": {"free": Decimal("1.0"), "locked": Decimal("0")},
+            },
+            trades=trades,
+        )
+
+        from core.tasks import _reconcile_with_exchange
+
+        with get_session() as session:
+            result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+
+        assert result["status"] == "mismatch"
+        pos_check = next(c for c in result["checks"] if c["check"] == "exchange_position_BTCUSDT")
+        assert pos_check["result"] == "repaired"
+        assert "Reconstructed" in pos_check["detail"]
+        assert len(result["repairs"]) >= 1
+        assert "reconstructed" in result["repairs"][0]
+
+        # Verify PositionRecord was created
+        with get_session() as session:
+            pos = session.query(PositionRecord).filter_by(symbol="BTCUSDT").first()
+            assert pos is not None
+            assert pos.size == Decimal("1.0")
+            assert pos.entry_price == Decimal("50000")
+
+    def test_size_mismatch_auto_repaired(self, _seed_state):
+        """Local size=1.5, exchange=1.2 → PositionRecord.size adjusted to 1.2."""
+        _seed_state(
+            state="position",
+            position=True,
+            position_size=Decimal("1.5"),
+            entry_price=Decimal("50000"),
+        )
+
+        executor = self._make_executor({
+            "USDT": {"free": Decimal("5000"), "locked": Decimal("0")},
+            "BTC": {"free": Decimal("1.2"), "locked": Decimal("0")},
+        })
+
+        from core.tasks import _reconcile_with_exchange
+
+        with get_session() as session:
+            result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+
+        assert result["status"] == "mismatch"
+        pos_check = next(c for c in result["checks"] if c["check"] == "exchange_position_BTCUSDT")
+        assert pos_check["result"] == "repaired"
+        assert len(result["repairs"]) >= 1
+        assert "adjusted" in result["repairs"][0]
+
+        # Verify position size was adjusted
+        with get_session() as session:
+            pos = session.query(PositionRecord).filter_by(symbol="BTCUSDT").first()
+            assert pos is not None
+            assert pos.size == Decimal("1.2")
+
+    def test_force_close_pnl_calculated(self, _seed_state):
+        """Force-close uses ticker price for PnL calculation."""
+        _seed_state(
+            state="position",
+            position=True,
+            position_size=Decimal("1.0"),
+            entry_price=Decimal("50000"),
+        )
+
+        executor = self._make_executor(
+            {
+                "USDT": {"free": Decimal("5000"), "locked": Decimal("0")},
+            },
+            ticker_prices={"BTCUSDT": Decimal("55000")},
+        )
+
+        from core.tasks import _reconcile_with_exchange
+
+        with get_session() as session:
+            result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+
+        # Verify TradeRecord has correct PnL
+        with get_session() as session:
+            trade = session.query(TradeRecord).filter_by(symbol="BTCUSDT").first()
+            assert trade is not None
+            assert trade.exit_reason == "reconciliation_force_close"
+            assert trade.exit_price == Decimal("55000")
+            # PnL = (55000 - 50000) * 1.0 = 5000
+            assert trade.pnl_usdt == Decimal("5000")
+
+
+# ── Phase 6.4: Open Order Sync ───────────────────────────────────────────────
+
+
+class TestSyncOpenOrders:
+    """Verify _sync_open_orders: matches exchange orders to local records."""
+
+    def test_known_order_gets_synced(self):
+        """An open order matching a local OrderRecord → reconciled_at set, status=synced."""
+        from core.tasks import _sync_open_orders
+
+        # Pre-create a local order record
+        with get_session() as session:
+            session.add(OrderRecord(
+                symbol="BTCUSDT",
+                side="buy",
+                order_type="limit",
+                amount=1.5,
+                price=50000,
+                status="pending",
+                exchange_order_id="12345",
+                exchange_status="NEW",
+                trading_mode="live",
+                reconciliation_status="pending_sync",
+            ))
+
+        executor = MagicMock()
+        executor.get_open_orders.return_value = [
+            {
+                "orderId": 12345,
+                "symbol": "BTCUSDT",
+                "side": "BUY",
+                "type": "LIMIT",
+                "status": "NEW",
+                "origQty": "1.5",
+                "price": "50000",
+                "executedQty": "0",
+            }
+        ]
+
+        with get_session() as session:
+            result = _sync_open_orders(session, executor)
+
+        assert result["status"] == "ok"
+        assert result["orders_synced"] == 1
+        assert result["orphans_found"] == 0
+
+        # Verify the record was updated
+        with get_session() as session:
+            record = session.query(OrderRecord).filter_by(exchange_order_id="12345").first()
+            assert record.reconciliation_status == "synced"
+            assert record.reconciled_at is not None
+
+    def test_orphan_order_creates_record(self):
+        """An open order with no local match → creates orphan OrderRecord."""
+        from core.tasks import _sync_open_orders
+
+        executor = MagicMock()
+        executor.get_open_orders.return_value = [
+            {
+                "orderId": 99999,
+                "symbol": "ETHUSDT",
+                "side": "SELL",
+                "type": "LIMIT",
+                "status": "NEW",
+                "origQty": "10.0",
+                "price": "3500",
+                "executedQty": "0",
+            }
+        ]
+
+        with get_session() as session:
+            result = _sync_open_orders(session, executor)
+
+        assert result["status"] == "ok"
+        assert result["orphans_found"] == 1
+        assert result["orders_synced"] == 0
+
+        # Verify orphan record was created
+        with get_session() as session:
+            record = session.query(OrderRecord).filter_by(exchange_order_id="99999").first()
+            assert record is not None
+            assert record.reconciliation_status == "orphan"
+            assert record.symbol == "ETHUSDT"
+            assert record.side == "sell"
+
+    def test_api_error_returns_error_status(self):
+        """Exchange API failure → graceful error return."""
+        from core.tasks import _sync_open_orders
+
+        executor = MagicMock()
+        executor.get_open_orders.side_effect = ConnectionError("timeout")
+
+        with get_session() as session:
+            result = _sync_open_orders(session, executor)
+
+        assert result["status"] == "error"
+
+    def test_empty_open_orders(self):
+        """No open orders on exchange → 0 synced, 0 orphans."""
+        from core.tasks import _sync_open_orders
+
+        executor = MagicMock()
+        executor.get_open_orders.return_value = []
+
+        with get_session() as session:
+            result = _sync_open_orders(session, executor)
+
+        assert result == {"status": "ok", "orders_synced": 0, "orphans_found": 0}
+
+
+class TestCheckPendingStopOrders:
+    """Verify _check_pending_stop_orders: status checks for pending stops."""
+
+    def test_filled_stop_detected(self):
+        """Pending stop that's FILLED on exchange → marked for fill recovery."""
+        from core.tasks import _check_pending_stop_orders
+
+        with get_session() as session:
+            session.add(OrderRecord(
+                symbol="BTCUSDT",
+                side="sell",
+                order_type="stop_limit",
+                amount=0.5,
+                status="pending",
+                intent="stop_loss",
+                exchange_order_id="55555",
+                exchange_status="NEW",
+                trading_mode="live",
+                reconciliation_status="pending_sync",
+            ))
+
+        executor = MagicMock()
+        executor.get_order_status.return_value = {
+            "orderId": 55555,
+            "status": "FILLED",
+            "executedQty": "0.5",
+        }
+
+        with get_session() as session:
+            result = _check_pending_stop_orders(session, executor)
+
+        assert result["status"] == "ok"
+        assert result["filled_stops"] == 1
+        assert result["cancelled_stops"] == 0
+
+        with get_session() as session:
+            record = session.query(OrderRecord).filter_by(exchange_order_id="55555").first()
+            assert record.exchange_status == "FILLED"
+            assert record.reconciliation_status == "pending_sync"
+
+    def test_cancelled_stop_detected(self):
+        """Pending stop that's CANCELED on exchange → marked cancelled locally."""
+        from core.tasks import _check_pending_stop_orders
+
+        with get_session() as session:
+            session.add(OrderRecord(
+                symbol="ETHUSDT",
+                side="sell",
+                order_type="stop_limit",
+                amount=5.0,
+                status="pending",
+                intent="stop_loss",
+                exchange_order_id="66666",
+                exchange_status="NEW",
+                trading_mode="live",
+                reconciliation_status="pending_sync",
+            ))
+
+        executor = MagicMock()
+        executor.get_order_status.return_value = {
+            "orderId": 66666,
+            "status": "CANCELED",
+        }
+
+        with get_session() as session:
+            result = _check_pending_stop_orders(session, executor)
+
+        assert result["status"] == "ok"
+        assert result["cancelled_stops"] == 1
+
+        with get_session() as session:
+            record = session.query(OrderRecord).filter_by(exchange_order_id="66666").first()
+            assert record.status == "cancelled"
+            assert record.exchange_status == "CANCELED"
+            assert record.reconciliation_status == "synced"
+
+    def test_order_not_found_on_exchange(self):
+        """Stop order that doesn't exist on exchange → marked expired."""
+        from core.execution.binance import BinanceAPIError
+        from core.tasks import _check_pending_stop_orders
+
+        with get_session() as session:
+            session.add(OrderRecord(
+                symbol="BTCUSDT",
+                side="sell",
+                order_type="stop_limit",
+                amount=0.3,
+                status="pending",
+                intent="stop_loss",
+                exchange_order_id="77777",
+                exchange_status="NEW",
+                trading_mode="live",
+                reconciliation_status="pending_sync",
+            ))
+
+        executor = MagicMock()
+        executor.get_order_status.side_effect = BinanceAPIError(-2013, "Order does not exist.")
+
+        with get_session() as session:
+            result = _check_pending_stop_orders(session, executor)
+
+        assert result["status"] == "ok"
+        assert result["expired_stops"] == 1
+
+        with get_session() as session:
+            record = session.query(OrderRecord).filter_by(exchange_order_id="77777").first()
+            assert record.status == "cancelled"
+            assert record.exchange_status == "EXPIRED"
+
+    def test_no_pending_stops(self):
+        """No pending stop orders → zero counts."""
+        from core.tasks import _check_pending_stop_orders
+
+        executor = MagicMock()
+
+        with get_session() as session:
+            result = _check_pending_stop_orders(session, executor)
+
+        assert result == {
+            "status": "ok",
+            "pending_stops_checked": 0,
+            "filled_stops": 0,
+            "cancelled_stops": 0,
+            "expired_stops": 0,
+        }
+
+
+class TestCancelOrphanStopOrders:
+    """Verify _cancel_orphan_stop_orders: cleans up stops without positions."""
+
+    def test_stop_with_no_position_gets_cancelled(self):
+        """Stop order on exchange for symbol with no position → cancel."""
+        from core.tasks import _cancel_orphan_stop_orders
+
+        executor = MagicMock()
+        executor.cancel_order.return_value = {"orderId": 88888, "status": "CANCELED"}
+
+        open_orders = [
+            {
+                "orderId": 88888,
+                "symbol": "BTCUSDT",
+                "type": "STOP_LOSS_LIMIT",
+                "side": "SELL",
+            }
+        ]
+
+        with get_session() as session:
+            result = _cancel_orphan_stop_orders(session, executor, open_orders)
+
+        assert result["status"] == "ok"
+        assert result["orphan_stops_cancelled"] == 1
+        executor.cancel_order.assert_called_once_with("BTCUSDT", 88888)
+
+    def test_stop_with_position_not_cancelled(self, _seed_state):
+        """Stop order for symbol with active position → leave alone."""
+        from core.tasks import _cancel_orphan_stop_orders
+
+        _seed_state(state="position", position=True)
+
+        executor = MagicMock()
+
+        open_orders = [
+            {
+                "orderId": 88888,
+                "symbol": "BTCUSDT",
+                "type": "STOP_LOSS_LIMIT",
+                "side": "SELL",
+            }
+        ]
+
+        with get_session() as session:
+            result = _cancel_orphan_stop_orders(session, executor, open_orders)
+
+        assert result["status"] == "ok"
+        assert result["orphan_stops_cancelled"] == 0
+        executor.cancel_order.assert_not_called()
+
+    def test_non_stop_orders_ignored(self):
+        """Regular limit orders are not checked for orphan stops."""
+        from core.tasks import _cancel_orphan_stop_orders
+
+        executor = MagicMock()
+
+        open_orders = [
+            {
+                "orderId": 11111,
+                "symbol": "BTCUSDT",
+                "type": "LIMIT",
+                "side": "BUY",
+            }
+        ]
+
+        with get_session() as session:
+            result = _cancel_orphan_stop_orders(session, executor, open_orders)
+
+        assert result["stop_orders_checked"] == 0
+        assert result["orphan_stops_cancelled"] == 0
+        executor.cancel_order.assert_not_called()
+
+
+# ── Phase 6.5: Fill Recovery ─────────────────────────────────────────────────
+
+
+class TestRecoverPendingOrders:
+    """Verify _recover_pending_orders: recovers fills for stale pending orders."""
+
+    def _make_stale_order(self, *, intent="open_long", exchange_order_id="12345", symbol="BTCUSDT"):
+        """Insert a stale pending order (>2 min old)."""
+        from datetime import timedelta
+
+        with get_session() as session:
+            order = OrderRecord(
+                symbol=symbol,
+                side="buy",
+                order_type="market",
+                amount=1.0,
+                status="pending",
+                intent=intent,
+                exchange_order_id=exchange_order_id,
+                exchange_status="NEW",
+                trading_mode="live",
+                reconciliation_status="pending_sync",
+            )
+            session.add(order)
+            session.flush()
+            # Backdate created_at to make it stale
+            order.created_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+    def _seed_strategy_state(self, *, symbol="BTCUSDT", strategy="smart_hodler", state="flat", balance="10000"):
+        """Insert a StrategyStateRecord."""
+        from db.models import StrategyStateRecord
+
+        with get_session() as session:
+            session.add(StrategyStateRecord(
+                symbol=symbol,
+                strategy=strategy,
+                state=state,
+                consecutive_buy_candles=0,
+                state_data={"usdt_balance": balance, "equity": balance, "total_pnl": "0"},
+            ))
+
+    def _seed_position(self, *, symbol="BTCUSDT", strategy="smart_hodler", size="1.0", entry_price="50000"):
+        """Insert a PositionRecord."""
+        with get_session() as session:
+            session.add(PositionRecord(
+                symbol=symbol,
+                strategy=strategy,
+                side="long",
+                size=Decimal(size),
+                entry_price=Decimal(entry_price),
+                entry_time=datetime.now(timezone.utc) - __import__("datetime").timedelta(hours=2),
+                highest_close=Decimal(entry_price),
+                trailing_stop_price=Decimal(entry_price) * Decimal("0.95"),
+                hard_stop_price=Decimal(entry_price) * Decimal("0.97"),
+                scale_in_count=0,
+                buy_signal_candles=0,
+            ))
+
+    def test_filled_open_long_creates_position(self):
+        """Pending open_long + FILLED on exchange → PositionRecord created."""
+        from core.tasks import _recover_pending_orders
+
+        self._seed_strategy_state(balance="10000")
+        self._make_stale_order(intent="open_long", exchange_order_id="11111")
+
+        executor = MagicMock()
+        executor.get_order_status.return_value = {
+            "orderId": 11111,
+            "status": "FILLED",
+            "executedQty": "1.0",
+            "cummulativeQuoteQty": "50000.0",
+            "price": "50000",
+        }
+
+        with get_session() as session:
+            result = _recover_pending_orders(session, executor)
+
+        assert result["status"] == "ok"
+        assert result["recovered"] == 1
+
+        # Verify position was created
+        with get_session() as session:
+            pos = session.query(PositionRecord).filter_by(symbol="BTCUSDT").first()
+            assert pos is not None
+            assert pos.size == Decimal("1.0")
+            assert pos.entry_price == Decimal("50000")
+
+        # Verify order was updated
+        with get_session() as session:
+            order = session.query(OrderRecord).filter_by(exchange_order_id="11111").first()
+            assert order.status == "filled"
+            assert order.reconciliation_status == "recovered"
+
+    def test_filled_close_long_creates_trade(self):
+        """Pending close_long + FILLED → PositionRecord deleted, TradeRecord created."""
+        from db.models import StrategyStateRecord, TradeRecord as TR
+        from core.tasks import _recover_pending_orders
+
+        self._seed_strategy_state(state="position", balance="0")
+        self._seed_position(size="1.0", entry_price="50000")
+        self._make_stale_order(intent="close_long", exchange_order_id="22222")
+
+        executor = MagicMock()
+        executor.get_order_status.return_value = {
+            "orderId": 22222,
+            "status": "FILLED",
+            "executedQty": "1.0",
+            "cummulativeQuoteQty": "55000.0",
+            "price": "55000",
+        }
+
+        with get_session() as session:
+            result = _recover_pending_orders(session, executor)
+
+        assert result["recovered"] == 1
+
+        # Position should be deleted
+        with get_session() as session:
+            pos = session.query(PositionRecord).filter_by(symbol="BTCUSDT").first()
+            assert pos is None
+
+        # Trade should be created
+        with get_session() as session:
+            trade = session.query(TR).filter_by(symbol="BTCUSDT").first()
+            assert trade is not None
+            assert trade.pnl_usdt > 0  # Profitable close
+
+        # Strategy state should be flat
+        with get_session() as session:
+            state = session.query(StrategyStateRecord).filter_by(symbol="BTCUSDT").first()
+            assert state.state == "flat"
+
+    def test_filled_stop_loss_closes_position(self):
+        """Pending stop_loss + FILLED → same as close."""
+        from db.models import TradeRecord as TR
+        from core.tasks import _recover_pending_orders
+
+        self._seed_strategy_state(state="position", balance="0")
+        self._seed_position(size="1.0", entry_price="50000")
+        self._make_stale_order(intent="stop_loss", exchange_order_id="33333")
+
+        executor = MagicMock()
+        executor.get_order_status.return_value = {
+            "orderId": 33333,
+            "status": "FILLED",
+            "executedQty": "1.0",
+            "cummulativeQuoteQty": "48000.0",
+            "price": "48000",
+        }
+
+        with get_session() as session:
+            result = _recover_pending_orders(session, executor)
+
+        assert result["recovered"] == 1
+
+        with get_session() as session:
+            pos = session.query(PositionRecord).filter_by(symbol="BTCUSDT").first()
+            assert pos is None
+            trade = session.query(TR).filter_by(symbol="BTCUSDT").first()
+            assert trade is not None
+            assert trade.pnl_usdt < 0  # Loss (stop hit)
+            assert trade.exit_reason == "trailing_stop"
+
+    def test_cancelled_order_updated(self):
+        """CANCELED on exchange → OrderRecord updated, no position change."""
+        from core.tasks import _recover_pending_orders
+
+        self._seed_strategy_state()
+        self._make_stale_order(intent="open_long", exchange_order_id="44444")
+
+        executor = MagicMock()
+        executor.get_order_status.return_value = {
+            "orderId": 44444,
+            "status": "CANCELED",
+        }
+
+        with get_session() as session:
+            result = _recover_pending_orders(session, executor)
+
+        assert result["cancelled"] == 1
+        assert result["recovered"] == 0
+
+        with get_session() as session:
+            order = session.query(OrderRecord).filter_by(exchange_order_id="44444").first()
+            assert order.status == "cancelled"
+            assert order.reconciliation_status == "synced"
+
+    def test_still_open_order_skipped(self):
+        """NEW on exchange → no changes, counted as still_open."""
+        from core.tasks import _recover_pending_orders
+
+        self._seed_strategy_state()
+        self._make_stale_order(intent="open_long", exchange_order_id="55555")
+
+        executor = MagicMock()
+        executor.get_order_status.return_value = {
+            "orderId": 55555,
+            "status": "NEW",
+        }
+
+        with get_session() as session:
+            result = _recover_pending_orders(session, executor)
+
+        assert result["still_open"] == 1
+        assert result["recovered"] == 0
+
+        # Order should remain pending
+        with get_session() as session:
+            order = session.query(OrderRecord).filter_by(exchange_order_id="55555").first()
+            assert order.status == "pending"
+
+    def test_idempotent_no_duplicate_trade(self):
+        """If TradeRecord already exists for a close, skip creating another."""
+        from db.models import TradeRecord as TR
+        from core.tasks import _recover_pending_orders
+
+        self._seed_strategy_state(state="position", balance="0")
+        self._seed_position(size="1.0", entry_price="50000")
+        self._make_stale_order(intent="close_long", exchange_order_id="66666")
+
+        # Pre-create a trade that looks like a recent close
+        with get_session() as session:
+            session.add(TR(
+                symbol="BTCUSDT",
+                strategy="smart_hodler",
+                side="long",
+                entry_price=Decimal("50000"),
+                exit_price=Decimal("55000"),
+                size=Decimal("1.0"),
+                entry_time=datetime.now(timezone.utc) - __import__("datetime").timedelta(hours=2),
+                exit_time=datetime.now(timezone.utc),
+                pnl_usdt=Decimal("5000"),
+                pnl_percent=Decimal("10"),
+                duration_minutes=120,
+                exit_reason="manual",
+                trading_mode="live",
+            ))
+
+        executor = MagicMock()
+        executor.get_order_status.return_value = {
+            "orderId": 66666,
+            "status": "FILLED",
+            "executedQty": "1.0",
+            "cummulativeQuoteQty": "55000.0",
+            "price": "55000",
+        }
+
+        with get_session() as session:
+            result = _recover_pending_orders(session, executor)
+
+        assert result["recovered"] == 1
+
+        # Should NOT create a duplicate trade
+        with get_session() as session:
+            trades = session.query(TR).filter_by(symbol="BTCUSDT").all()
+            assert len(trades) == 1  # Only the pre-existing one
+
+
+class TestRecoverPendingWithoutId:
+    """Verify _recover_pending_orders_without_id: matches orders by criteria."""
+
+    def _make_orphan_order(self, *, intent="open_long", symbol="BTCUSDT", amount=1.0):
+        """Insert an orphan pending order (no exchange_order_id, >5 min old)."""
+        from datetime import timedelta
+
+        with get_session() as session:
+            order = OrderRecord(
+                symbol=symbol,
+                side="buy",
+                order_type="market",
+                amount=amount,
+                status="pending",
+                intent=intent,
+                exchange_order_id=None,
+                trading_mode="live",
+                reconciliation_status="pending_sync",
+            )
+            session.add(order)
+            session.flush()
+            order.created_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+
+    def test_matched_by_symbol_side_qty_time(self):
+        """Finds matching order on exchange → sets exchange_order_id, recovers."""
+        from db.models import StrategyStateRecord
+        from core.tasks import _recover_pending_orders_without_id
+
+        self._make_orphan_order(intent="open_long", amount=1.0)
+
+        # Seed strategy state
+        with get_session() as session:
+            session.add(StrategyStateRecord(
+                symbol="BTCUSDT",
+                strategy="smart_hodler",
+                state="flat",
+                consecutive_buy_candles=0,
+                state_data={"usdt_balance": "10000", "equity": "10000", "total_pnl": "0"},
+            ))
+
+        # Mock exchange returns a matching order
+        order_time_ms = int((datetime.now(timezone.utc) - __import__("datetime").timedelta(minutes=10)).timestamp() * 1000)
+        executor = MagicMock()
+        executor.get_all_orders.return_value = [
+            {
+                "orderId": 77777,
+                "symbol": "BTCUSDT",
+                "side": "BUY",
+                "origQty": "1.0",
+                "status": "FILLED",
+                "executedQty": "1.0",
+                "cummulativeQuoteQty": "50000.0",
+                "price": "50000",
+                "time": order_time_ms,
+            }
+        ]
+
+        with get_session() as session:
+            result = _recover_pending_orders_without_id(session, executor)
+
+        assert result["status"] == "ok"
+        assert result["matched"] == 1
+        assert result["lost"] == 0
+
+        # Should have set exchange_order_id
+        with get_session() as session:
+            order = session.query(OrderRecord).filter_by(symbol="BTCUSDT").first()
+            assert order.exchange_order_id == "77777"
+
+    def test_no_match_marks_lost(self):
+        """No matching orders on exchange → marked as lost."""
+        from core.tasks import _recover_pending_orders_without_id
+
+        self._make_orphan_order(intent="open_long", amount=1.0)
+
+        executor = MagicMock()
+        executor.get_all_orders.return_value = []  # No orders found
+
+        with get_session() as session:
+            result = _recover_pending_orders_without_id(session, executor)
+
+        assert result["status"] == "ok"
+        assert result["matched"] == 0
+        assert result["lost"] == 1
+
+        with get_session() as session:
+            order = session.query(OrderRecord).filter_by(symbol="BTCUSDT").first()
+            assert order.status == "cancelled"
+            assert order.reconciliation_status == "lost"
+
+    def test_skips_recent_orders(self):
+        """Orders < 5 min old are not processed."""
+        from core.tasks import _recover_pending_orders_without_id
+
+        # Create a recent order (not stale)
+        with get_session() as session:
+            session.add(OrderRecord(
+                symbol="BTCUSDT",
+                side="buy",
+                order_type="market",
+                amount=1.0,
+                status="pending",
+                intent="open_long",
+                exchange_order_id=None,
+                trading_mode="live",
+                reconciliation_status="pending_sync",
+            ))
+
+        executor = MagicMock()
+
+        with get_session() as session:
+            result = _recover_pending_orders_without_id(session, executor)
+
+        assert result["orders_checked"] == 0
+        executor.get_all_orders.assert_not_called()

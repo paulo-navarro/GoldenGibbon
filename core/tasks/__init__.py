@@ -209,6 +209,12 @@ from core.tasks._tick import (  # noqa: E402, F401
 from core.tasks._reconciliation import (  # noqa: E402, F401
     _reconcile_pair,
     _reconcile_with_exchange,
+    _sync_open_orders,
+    _check_pending_stop_orders,
+    _cancel_orphan_stop_orders,
+    _recover_pending_orders,
+    _recover_pending_orders_without_id,
+    _apply_fill_recovery,
     run_reconciliation,
     sync_exchange_balances,
     _PNL_TOLERANCE,

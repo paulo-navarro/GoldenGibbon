@@ -56,8 +56,31 @@ def _persist_tick_results(
 
     # ── 1. Order + Trade audit trail ─────────────────────────────────
     if execution_result is not None:
-        order_rec = order_to_orm(execution_result.order, run_id=run_id, trading_mode=comp.trading_mode)
-        session.add(order_rec)
+        # Check if write-ahead already created an OrderRecord for this order
+        existing_order_rec = None
+        if execution_result.order.exchange_order_id:
+            existing_order_rec = (
+                session.query(OrderRecord)
+                .filter_by(exchange_order_id=execution_result.order.exchange_order_id)
+                .first()
+            )
+
+        if existing_order_rec is None:
+            order_rec = order_to_orm(execution_result.order, run_id=run_id, trading_mode=comp.trading_mode)
+            session.add(order_rec)
+        else:
+            # Write-ahead record exists — update it with final fill data
+            o = execution_result.order
+            existing_order_rec.status = o.status.value
+            existing_order_rec.filled_amount = o.filled_amount
+            existing_order_rec.avg_fill_price = o.avg_fill_price
+            existing_order_rec.fee_usdt = o.fee_usdt
+            existing_order_rec.slippage_percent = o.slippage_percent
+            existing_order_rec.exchange_status = o.exchange_status
+            existing_order_rec.filled_at = o.filled_at
+            existing_order_rec.run_id = run_id
+            if o.reject_reason:
+                existing_order_rec.reject_reason = o.reject_reason
 
         if execution_result.trade is not None:
             trade_rec = trade_to_orm(execution_result.trade, run_id=run_id, trading_mode=comp.trading_mode)
