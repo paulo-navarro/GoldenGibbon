@@ -135,7 +135,16 @@ function OpenPositionsTable() {
               {positions.map((p) => (
                 <TableRow key={p.symbol} hover>
                   <TableCell>
-                    <Typography variant="body2" fontWeight={600}>{p.symbol}</Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Typography variant="body2" fontWeight={600}>{p.symbol}</Typography>
+                      <Chip
+                        label={p.side === 'short' ? 'SHORT' : 'LONG'}
+                        size="small"
+                        color={p.side === 'short' ? 'error' : 'success'}
+                        variant="outlined"
+                        sx={{ fontSize: '0.65rem', height: 18 }}
+                      />
+                    </Box>
                   </TableCell>
                   <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
                     {fmt(p.size, 4)}

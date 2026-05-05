@@ -225,7 +225,84 @@ def _recover_state(
             error=str(exc),
         )
 
+    # In live mode, correct usdt_balance from exchange to fix drift
+    if trading_mode == "live":
+        try:
+            _sync_balance_from_exchange(strategy_name, symbol, pm)
+        except Exception as exc:
+            logger.warning(
+                "state_recovery: exchange balance sync failed (using DB value)",
+                strategy=strategy_name,
+                symbol=symbol,
+                error=str(exc),
+            )
+
     return recovered_run_id
+
+
+def _sync_balance_from_exchange(
+    strategy_name: str,
+    symbol: str,
+    pm,  # noqa: ANN001 – PortfolioManager
+) -> None:
+    """
+    Correct the portfolio's USDT balance from real Binance account data.
+
+    Each (strategy, symbol) pair tracks an allocated fraction of the total
+    account balance.  On recovery, the DB-saved balance may have drifted
+    from reality (crash between order and persist, etc.).  This function
+    fetches the real USDT balance and adjusts proportionally.
+    """
+    from db import get_session
+    from db.models import StrategyStateRecord
+
+    from core.execution.binance import BinanceExecutor
+    from core.portfolio import PortfolioManager as _PM
+
+    executor = BinanceExecutor.from_settings(
+        strategy_name="_recovery_sync",
+        portfolio_manager=_PM(initial_capital=Decimal("1")),
+    )
+    account = executor.get_account_info()
+    balances = account["balances"]
+
+    exchange_usdt = Decimal("0")
+    if "USDT" in balances:
+        exchange_usdt = balances["USDT"]["free"] + balances["USDT"]["locked"]
+
+    with get_session() as session:
+        state_recs = list(session.query(StrategyStateRecord).all())
+        local_total = Decimal("0")
+        my_balance = Decimal("0")
+        for rec in state_recs:
+            data = rec.state_data or {}
+            bal = Decimal(str(data.get("usdt_balance", 0)))
+            local_total += bal
+            if rec.strategy == strategy_name and rec.symbol == symbol:
+                my_balance = bal
+
+    if local_total <= 0:
+        return
+
+    drift = exchange_usdt - local_total
+    if abs(drift) <= Decimal("0.01"):
+        return
+
+    share = my_balance / local_total if local_total > 0 else Decimal("0")
+    corrected = my_balance + (drift * share)
+    if corrected < 0:
+        corrected = Decimal("0")
+
+    pm._portfolio.usdt_balance = corrected
+    logger.info(
+        "state_recovery: corrected usdt_balance from exchange",
+        strategy=strategy_name,
+        symbol=symbol,
+        db_balance=str(my_balance),
+        corrected_balance=str(corrected),
+        exchange_usdt=str(exchange_usdt),
+        drift=str(drift),
+    )
 
 
 
@@ -266,7 +343,16 @@ def _get_or_create_components(
         taker_fee = Decimal(str(execution_config.get("taker_fee", 0.001)))
 
         pm = PortfolioManager(initial_capital=cap, taker_fee=taker_fee)
-        risk_engine = RiskEngine(strategy_name, strategy_config, risk_config)
+
+        from core.config import get_settings as _get_settings
+
+        _settings = _get_settings()
+        risk_engine = RiskEngine(
+            strategy_name,
+            strategy_config,
+            risk_config,
+            shorts_enabled=_settings.shorts.enabled,
+        )
 
         if trading_mode == "live":
             from core.execution.binance import BinanceExecutor
@@ -327,9 +413,7 @@ def _get_or_create_components(
 
         # Regime detector (phase 3, task 1.1)
         from core.regime import RegimeDetector
-        from core.config import get_settings as _get_settings
 
-        _settings = _get_settings()
         regime_detector = RegimeDetector(
             trending_threshold=_settings.regime.adx_trending_threshold,
             ranging_threshold=_settings.regime.adx_ranging_threshold,

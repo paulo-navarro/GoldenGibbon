@@ -171,23 +171,23 @@ shorts:
 > Depends on: 5.1, 5.7.
 > Follow pattern: [tests/test_smart_hodler.py](../tests/test_smart_hodler.py)
 
-- [ ] **5.8.1** Helper `_make_candles(close_val, volume_val, length)` — constant OHLCV DataFrame
-- [ ] **5.8.2** Helper `_make_series(value, length)` — constant pd.Series
-- [ ] **5.8.3** Helper `_make_falling_series(start, end, length)` and `_make_rising_series(start, end, length)`
-- [ ] **5.8.4** `DEFAULT_CONFIG` dict with all BearGuard params
-- [ ] **5.8.5** Test: `Signal.SHORT` emitted when all 7 conditions met (from `FLAT`)
-- [ ] **5.8.6** Test: `Signal.HOLD` when each individual condition is false — one test per condition, use `pytest.mark.parametrize`
-- [ ] **5.8.7** Test: `Signal.HOLD` from `POSITION` even when all SHORT conditions met (no re-entry while in position)
-- [ ] **5.8.8** Test: `Signal.SELL_FULL` emitted on golden cross (EMA50 > EMA200) while in `POSITION`
-- [ ] **5.8.9** Test: `Signal.SELL_FULL` emitted after N consecutive closes above EMA200 while in `POSITION`
-- [ ] **5.8.10** Test: `Signal.SELL_HALF` emitted when 1H RSI > 70 AND ADX falling, from `POSITION` → state becomes `REDUCED`
-- [ ] **5.8.11** Test: `Signal.SELL_HALF` NOT emitted from `REDUCED` (only full cover from that state)
-- [ ] **5.8.12** Test: signal priority — `SELL_FULL` takes precedence over `SELL_HALF` over `SHORT` over `HOLD`
-- [ ] **5.8.13** Test: state transitions — `FLAT → POSITION → REDUCED → FLAT` and `FLAT → POSITION → COOLDOWN → FLAT`
-- [ ] **5.8.14** Test: cooldown countdown — strategy stays in `HOLD` for `cooldown_candles` ticks, then transitions back to `FLAT`
-- [ ] **5.8.15** Test: NaN guard — return `HOLD` if any indicator is NaN
-- [ ] **5.8.16** Test: missing secondary data — return `HOLD` if `has_secondary == False`
-- [ ] **5.8.17** Test: session filter — no `SHORT` during dead zone, but `SELL_FULL` still fires
+- [x] **5.8.1** Helper `_make_candles(close_val, volume_val, length)` — constant OHLCV DataFrame
+- [x] **5.8.2** Helper `_make_series(value, length)` — constant pd.Series
+- [x] **5.8.3** Helper `_make_falling_series(start, end, length)` and `_make_rising_series(start, end, length)`
+- [x] **5.8.4** `DEFAULT_CONFIG` dict with all BearGuard params
+- [x] **5.8.5** Test: `Signal.SHORT` emitted when all 7 conditions met (from `FLAT`)
+- [x] **5.8.6** Test: `Signal.HOLD` when each individual condition is false — one test per condition, use `pytest.mark.parametrize`
+- [x] **5.8.7** Test: `Signal.HOLD` from `POSITION` even when all SHORT conditions met (no re-entry while in position)
+- [x] **5.8.8** Test: `Signal.SELL_FULL` emitted on golden cross (EMA50 > EMA200) while in `POSITION`
+- [x] **5.8.9** Test: `Signal.SELL_FULL` emitted after N consecutive closes above EMA200 while in `POSITION`
+- [x] **5.8.10** Test: `Signal.SELL_HALF` emitted when 1H RSI > 70 AND ADX falling, from `POSITION` → state becomes `REDUCED`
+- [x] **5.8.11** Test: `Signal.SELL_HALF` NOT emitted from `REDUCED` (only full cover from that state)
+- [x] **5.8.12** Test: signal priority — `SELL_FULL` takes precedence over `SELL_HALF` over `SHORT` over `HOLD`
+- [x] **5.8.13** Test: state transitions — `FLAT → POSITION → REDUCED → FLAT` and `FLAT → POSITION → COOLDOWN → FLAT`
+- [x] **5.8.14** Test: cooldown countdown — strategy stays in `HOLD` for `cooldown_candles` ticks, then transitions back to `FLAT`
+- [x] **5.8.15** Test: NaN guard — return `HOLD` if any indicator is NaN
+- [x] **5.8.16** Test: missing secondary data — return `HOLD` if `has_secondary == False`
+- [x] **5.8.17** Test: session filter — no `SHORT` during dead zone, but `SELL_FULL` still fires
 
 ---
 
@@ -195,17 +195,17 @@ shorts:
 
 > Depends on: 5.1, 5.3.
 
-- [ ] **5.9.1** Test: `Signal.SHORT` with `shorts.enabled=False` → `RiskDecision(action=HOLD)` (kill switch)
-- [ ] **5.9.2** Test: `Signal.SHORT` with `shorts.enabled=True`, no existing position → `RiskDecision(action=OPEN, side=SHORT)` with correct size
-- [ ] **5.9.3** Test: `Signal.SHORT` with existing short position → `RiskDecision(action=HOLD)` (no scale-in)
-- [ ] **5.9.4** Test: `_evaluate_short_open()` hard stop is ABOVE entry (`entry × (1 + hard_stop_pct)`)
-- [ ] **5.9.5** Test: `_evaluate_short_open()` trailing stop initial value is ABOVE entry (`entry + ATR × mult`)
-- [ ] **5.9.6** Test: `check_stops()` for short — hard stop fires when `close > hard_stop_price`
-- [ ] **5.9.7** Test: `check_stops()` for short — hard stop does NOT fire when `close < entry` (moving in our favour)
-- [ ] **5.9.8** Test: `check_stops()` for short — trailing stop ratchets downward; `lowest_close` tracks minimum
-- [ ] **5.9.9** Test: `check_stops()` for short — trailing stop fires when price bounces above the trailing level
-- [ ] **5.9.10** Test: break-even ratchet for short — hard stop ratchets DOWN (to entry, then below) as profit grows
-- [ ] **5.9.11** Test: ratcheted hard stop for short never moves back UP
+- [x] **5.9.1** Test: `Signal.SHORT` with `shorts.enabled=False` → `RiskDecision(action=HOLD)` (kill switch)
+- [x] **5.9.2** Test: `Signal.SHORT` with `shorts.enabled=True`, no existing position → `RiskDecision(action=OPEN, side=SHORT)` with correct size
+- [x] **5.9.3** Test: `Signal.SHORT` with existing short position → `RiskDecision(action=HOLD)` (no scale-in)
+- [x] **5.9.4** Test: `_evaluate_short_open()` hard stop is ABOVE entry (`entry × (1 + hard_stop_pct)`)
+- [x] **5.9.5** Test: `_evaluate_short_open()` trailing stop initial value is ABOVE entry (`entry + ATR × mult`)
+- [x] **5.9.6** Test: `check_stops()` for short — hard stop fires when `close > hard_stop_price`
+- [x] **5.9.7** Test: `check_stops()` for short — hard stop does NOT fire when `close < entry` (moving in our favour)
+- [x] **5.9.8** Test: `check_stops()` for short — trailing stop ratchets downward; `lowest_close` tracks minimum
+- [x] **5.9.9** Test: `check_stops()` for short — trailing stop fires when price bounces above the trailing level
+- [x] **5.9.10** Test: break-even ratchet for short — hard stop ratchets DOWN (to entry, then below) as profit grows
+- [x] **5.9.11** Test: ratcheted hard stop for short never moves back UP
 
 ---
 
@@ -213,11 +213,11 @@ shorts:
 
 > Depends on: 5.1, 5.4, 5.5.
 
-- [ ] **5.10.1** Test: `OPEN` with `side=SHORT` — creates short position, applies sell slippage (fill price < reference price)
-- [ ] **5.10.2** Test: `CLOSE` on short position — applies buy slippage (fill price > reference price), PnL correct when price fell
-- [ ] **5.10.3** Test: `CLOSE` on short position — PnL correct when price rose (loss scenario)
-- [ ] **5.10.4** Test: `REDUCE` on short position — partial cover, correct remaining size and PnL
-- [ ] **5.10.5** Test: `Order.side` is `SELL` for short open, `BUY` for short close/reduce
+- [x] **5.10.1** Test: `OPEN` with `side=SHORT` — creates short position, applies sell slippage (fill price < reference price)
+- [x] **5.10.2** Test: `CLOSE` on short position — applies buy slippage (fill price > reference price), PnL correct when price fell
+- [x] **5.10.3** Test: `CLOSE` on short position — PnL correct when price rose (loss scenario)
+- [x] **5.10.4** Test: `REDUCE` on short position — partial cover, correct remaining size and PnL
+- [x] **5.10.5** Test: `Order.side` is `SELL` for short open, `BUY` for short close/reduce
 
 ---
 
@@ -226,12 +226,12 @@ shorts:
 > Wire everything together in the live tick loop.
 > Depends on: 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7.
 
-- [ ] **5.11.1** Add `bear_guard` as a supported strategy in `_build_components()`: instantiate `BearGuard(config)` when strategy name is `"bear_guard"`
-- [ ] **5.11.2** Pass `shorts_enabled` from settings to `RiskEngine` at construction time (or read from `get_settings()` inside evaluate — keep consistent with existing pattern)
-- [ ] **5.11.3** In the tick loop, after `check_stops()`, handle `position.side == SHORT` when calling `pm.update_stops()` — pass `lowest_close` from `StopCheckResult` (new field) alongside existing fields
-- [ ] **5.11.4** Add `"bear_guard"` to the `strategy_regime_map` in regime config (Phase 3 gating): `"bear_guard": "trending"` — BearGuard only operates in trending (downward) markets, so regime gate should block it when ranging (same ADX logic as Smart Hodler, but the trend direction is confirmed by the death cross itself)
-- [ ] **5.11.5** Add `bear_guard` section to `strategies.yaml` with all default parameters from [§ 10](strategy_bear_guard.md#10-risk-parameters-default-config)
-- [ ] **5.11.6** Manual smoke test: run backtest with `bear_guard` on a period with a known bear market (e.g., BTCUSDT 2022-01 to 2022-06) and confirm: signals appear, stops fire correctly, PnL is positive
+- [x] **5.11.1** Add `bear_guard` as a supported strategy in `_build_components()`: instantiate `BearGuard(config)` when strategy name is `"bear_guard"`
+- [x] **5.11.2** Pass `shorts_enabled` from settings to `RiskEngine` at construction time (or read from `get_settings()` inside evaluate — keep consistent with existing pattern)
+- [x] **5.11.3** In the tick loop, after `check_stops()`, handle `position.side == SHORT` when calling `pm.update_stops()` — pass `lowest_close` from `StopCheckResult` (new field) alongside existing fields
+- [x] **5.11.4** Add `"bear_guard"` to the `strategy_regime_map` in regime config (Phase 3 gating): `"bear_guard": "trending"` — BearGuard only operates in trending (downward) markets, so regime gate should block it when ranging (same ADX logic as Smart Hodler, but the trend direction is confirmed by the death cross itself)
+- [x] **5.11.5** Add `bear_guard` section to `strategies.yaml` with all default parameters from [§ 10](strategy_bear_guard.md#10-risk-parameters-default-config)
+- [x] **5.11.6** Manual smoke test: run backtest with `bear_guard` on a period with a known bear market (e.g., BTCUSDT 2022-01 to 2022-06) and confirm: signals appear, stops fire correctly, PnL is positive
 
 ---
 
@@ -239,11 +239,11 @@ shorts:
 
 > Only needed if the ORM `PositionRecord` in `db/models.py` stores position data.
 
-- [ ] **5.12.1** Inspect `db/models.py` — check if `PositionRecord` (or equivalent) exists and stores `side`, `lowest_close`
-- [ ] **5.12.2** If yes: add `side VARCHAR(5) NOT NULL DEFAULT 'long'` and `lowest_close NUMERIC` columns
-- [ ] **5.12.3** Generate migration: `alembic revision --autogenerate -m "add position side and lowest_close"`
-- [ ] **5.12.4** Review generated migration file — confirm only the expected columns are added, no destructive changes
-- [ ] **5.12.5** Apply: `alembic upgrade head`
+- [x] **5.12.1** Inspect `db/models.py` — check if `PositionRecord` (or equivalent) exists and stores `side`, `lowest_close`
+- [x] **5.12.2** `side` already existed; added `lowest_close NUMERIC(20,8) NULL` column
+- [x] **5.12.3** Generate migration: `alembic revision --autogenerate -m "add lowest_close to positions"`
+- [x] **5.12.4** Review generated migration file — only `positions.lowest_close` added, no destructive changes
+- [x] **5.12.5** Apply: `alembic upgrade head`
 
 ---
 
@@ -251,19 +251,19 @@ shorts:
 
 > The frontend can be updated in a follow-up. Short positions do not break existing UI — they simply won't appear until frontend support is added.
 
-- [ ] **5.13.1** In Open Positions table: show position `side` badge (`LONG` / `SHORT`) — colour coded (green / red)
-- [ ] **5.13.2** In Signals card: show `SHORT` signal alongside existing signals; badge colour red
-- [ ] **5.13.3** In Settings page: expose `shorts.enabled` toggle with a clear warning label ("enables Binance Margin borrowing")
-- [ ] **5.13.4** In Portfolio page: PnL for short positions renders correctly (negative when price rises)
+- [x] **5.13.1** In Open Positions table: show position `side` badge (`LONG` / `SHORT`) — colour coded (green / red)
+- [x] **5.13.2** In Signals card: show `SHORT` signal alongside existing signals; badge colour warning (orange)
+- [x] **5.13.3** In Settings page: expose `shorts.enabled` toggle with a clear warning label ("enables Binance Margin borrowing")
+- [x] **5.13.4** In Portfolio page: PnL for short positions renders correctly (negative when price rises)
 
 ---
 
 ## Completion Checklist
 
-- [ ] All tasks in 5.1–5.10 done
-- [ ] Full test suite passes: `.venv-test/bin/python -m pytest tests/ -v`
-- [ ] No regressions in existing strategies: `tests/test_smart_hodler.py`, `tests/test_mean_reversion.py`, `tests/test_risk_engine.py`, `tests/test_paper_executor.py`
-- [ ] Smoke test: BearGuard backtest on BTCUSDT 2022-Q1 produces valid results
-- [ ] `shorts.enabled = false` in config → full test suite still passes, BearGuard generates no orders
-- [ ] 5.11 wired and manually verified
-- [ ] Strategy spec reviewed: [strategy_bear_guard.md](strategy_bear_guard.md)
+- [x] All tasks in 5.1–5.10 done
+- [x] Full test suite passes: `.venv-test/bin/python -m pytest tests/ -v`
+- [x] No regressions in existing strategies: `tests/test_smart_hodler.py`, `tests/test_mean_reversion.py`, `tests/test_risk_engine.py`, `tests/test_paper_executor.py`
+- [x] Smoke test: BearGuard backtest on BTCUSDT 2022-Q1 produces valid results
+- [x] `shorts.enabled = false` in config → full test suite still passes, BearGuard generates no orders
+- [x] 5.11 wired and manually verified
+- [x] Strategy spec reviewed: [strategy_bear_guard.md](strategy_bear_guard.md)

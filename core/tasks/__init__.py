@@ -210,6 +210,7 @@ from core.tasks._reconciliation import (  # noqa: E402, F401
     _reconcile_pair,
     _reconcile_with_exchange,
     run_reconciliation,
+    sync_exchange_balances,
     _PNL_TOLERANCE,
     _EXCHANGE_BALANCE_TOLERANCE,
     _EXCHANGE_POSITION_TOLERANCE,

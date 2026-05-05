@@ -535,6 +535,7 @@ def run_single_strategy_tick(
             comp.pm.update_stops(
                 symbol,
                 highest_close=stop_result.highest_close,
+                lowest_close=stop_result.lowest_close,
                 trailing_stop_price=stop_result.trailing_stop_price,
                 hard_stop_price=stop_result.hard_stop_price,
             )
@@ -579,7 +580,7 @@ def run_single_strategy_tick(
                 detected = classification.regime
                 gate_blocked = False
 
-                if signal == Signal.BUY and settings.regime.regime_gating_enabled:
+                if signal in (Signal.BUY, Signal.SHORT) and settings.regime.regime_gating_enabled:
                     expected = settings.regime.strategy_regime_map.get(strategy_name)
                     if (
                         expected is not None

@@ -87,6 +87,7 @@ class PositionRecord(Base):
     entry_price: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
     entry_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     highest_close: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
+    lowest_close: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 8), nullable=True)
     trailing_stop_price: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
     hard_stop_price: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
     exchange_stop_order_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)

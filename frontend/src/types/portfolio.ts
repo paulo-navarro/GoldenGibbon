@@ -5,6 +5,7 @@
 /** Open position with stops and scaling info. */
 export interface Position {
   symbol: string;
+  side: 'long' | 'short';
   size: string; // Decimal
   entry_price: string; // Decimal
   entry_time: string; // ISO 8601

@@ -449,6 +449,157 @@ def _reconcile_with_exchange(
 
 
 
+# ── Periodic balance sync (phase 6 — exchange source of truth) ──────────────
+
+
+@app.task(bind=True, name="core.tasks.sync_exchange_balances")
+def sync_exchange_balances(self) -> Dict[str, Any]:  # noqa: ANN001
+    """
+    Sync USDT balance and equity with Binance every 2 minutes.
+
+    Fetches real account balances and live ticker prices, calculates
+    true equity, publishes WebSocket events so the dashboard stays
+    current between ticks, and auto-repairs balance drift in
+    ``StrategyStateRecord`` when it exceeds a threshold.
+
+    Only runs when ``live_trading.enabled`` is True.
+    """
+    from core.config import get_settings
+    from core.events import EventChannel, EventType, get_publisher
+    from db import get_session
+    from db.models import PositionRecord, StrategyStateRecord
+
+    settings = get_settings()
+    publisher = get_publisher()
+
+    if not settings.live_trading.enabled:
+        return {"status": "skipped", "reason": "live_trading not enabled"}
+
+    try:
+        from core.execution.binance import BinanceExecutor
+        from core.portfolio import PortfolioManager as _PM
+
+        executor = BinanceExecutor.from_settings(
+            strategy_name="_balance_sync",
+            portfolio_manager=_PM(initial_capital=Decimal("1")),
+        )
+
+        account = executor.get_account_info()
+        balances = account["balances"]
+
+        exchange_usdt = Decimal("0")
+        if "USDT" in balances:
+            exchange_usdt = balances["USDT"]["free"] + balances["USDT"]["locked"]
+
+        # Fetch live prices for open positions to calculate real equity
+        with get_session() as session:
+            pos_recs = list(session.query(PositionRecord).all())
+
+            positions_value = Decimal("0")
+            if pos_recs:
+                symbols = list({r.symbol for r in pos_recs})
+                live_prices = executor.get_ticker_prices(symbols)
+
+                for rec in pos_recs:
+                    price = live_prices.get(rec.symbol, rec.entry_price)
+                    positions_value += rec.size * price
+
+            real_equity = exchange_usdt + positions_value
+
+            # Publish events so frontend updates immediately
+            from datetime import datetime, timezone
+
+            now = datetime.now(timezone.utc)
+
+            publisher.publish(
+                EventChannel.PORTFOLIO,
+                EventType.BALANCE_UPDATED,
+                {
+                    "usdt_balance": str(exchange_usdt),
+                    "total_pnl": "0",
+                    "open_trades_count": len(pos_recs),
+                    "source": "exchange_sync",
+                },
+            )
+
+            from core.models import PortfolioSnapshot
+
+            snapshot = PortfolioSnapshot(
+                timestamp=now,
+                usdt_balance=exchange_usdt,
+                positions_value=positions_value,
+                total_equity=real_equity,
+                total_pnl=Decimal("0"),
+                open_positions_count=len(pos_recs),
+            )
+            publisher.publish_model(
+                EventChannel.PORTFOLIO, EventType.EQUITY_UPDATED, snapshot,
+            )
+
+            # Auto-repair balance drift if above threshold
+            state_recs = list(session.query(StrategyStateRecord).all())
+            local_usdt_total = Decimal("0")
+            for rec in state_recs:
+                data = rec.state_data or {}
+                local_usdt_total += Decimal(str(data.get("usdt_balance", 0)))
+
+            usdt_drift = exchange_usdt - local_usdt_total
+
+            repaired = False
+            if abs(usdt_drift) > _EXCHANGE_BALANCE_TOLERANCE and state_recs:
+                # Distribute the drift proportionally across strategy states
+                if local_usdt_total > 0:
+                    for rec in state_recs:
+                        data = rec.state_data or {}
+                        old_bal = Decimal(str(data.get("usdt_balance", 0)))
+                        if old_bal <= 0:
+                            continue
+                        share = old_bal / local_usdt_total
+                        new_bal = old_bal + (usdt_drift * share)
+                        rec.state_data = {
+                            **data,
+                            "usdt_balance": str(new_bal),
+                            "equity": str(new_bal + positions_value),
+                        }
+                else:
+                    # All states at zero — assign evenly
+                    per_state = exchange_usdt / len(state_recs)
+                    for rec in state_recs:
+                        data = rec.state_data or {}
+                        rec.state_data = {
+                            **data,
+                            "usdt_balance": str(per_state),
+                            "equity": str(per_state),
+                        }
+                repaired = True
+
+                logger.warning(
+                    "balance_sync: auto-repaired USDT drift",
+                    local=str(local_usdt_total),
+                    exchange=str(exchange_usdt),
+                    drift=str(usdt_drift),
+                )
+
+        summary: Dict[str, Any] = {
+            "status": "ok",
+            "exchange_usdt": str(exchange_usdt),
+            "positions_value": str(positions_value),
+            "equity": str(real_equity),
+            "local_usdt": str(local_usdt_total),
+            "drift": str(usdt_drift),
+            "repaired": repaired,
+        }
+        logger.info("sync_exchange_balances: done", **summary)
+        return summary
+
+    except Exception as exc:
+        logger.error(
+            "sync_exchange_balances: failed",
+            error=str(exc),
+            exc_info=True,
+        )
+        return {"status": "error", "error": str(exc)}
+
 
 # ── run_reconciliation (task 3.9) ────────────────────────────────────────────
 

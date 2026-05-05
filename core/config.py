@@ -226,6 +226,7 @@ class BearGuardConfig(BaseModel):
     volume_filter_pct: float = Field(default=0.70, gt=0, le=5.0)
 
     # Hourly Confirmation (1H)
+    ema_hourly: int = Field(default=21, ge=1)
     hourly_ema_lookback: int = Field(default=4, ge=1)
     hourly_rsi_bear_threshold: float = Field(default=55, ge=0, le=100)
     rsi_period: int = Field(default=14, ge=1)
@@ -486,7 +487,11 @@ class RegimeConfig(BaseModel):
     rebalance_enabled: bool = Field(default=False, description="Enable regime-based allocation rebalancing")
     regime_shift_pct: float = Field(default=0.2, ge=0, le=0.5, description="Max weight shift on regime change")
     strategy_regime_map: Dict[str, str] = Field(
-        default_factory=lambda: {"smart_hodler": "trending", "mean_reversion": "ranging"},
+        default_factory=lambda: {
+            "smart_hodler": "trending",
+            "mean_reversion": "ranging",
+            "bear_guard": "trending",
+        },
         description="Which regime each strategy favors",
     )
 

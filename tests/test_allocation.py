@@ -294,4 +294,4 @@ class TestRegimeAdjustedAllocations:
         cfg = RegimeConfig()
         assert cfg.rebalance_enabled is False
         assert cfg.regime_shift_pct == 0.2
-        assert cfg.strategy_regime_map == {"smart_hodler": "trending", "mean_reversion": "ranging"}
+        assert cfg.strategy_regime_map == {"smart_hodler": "trending", "mean_reversion": "ranging", "bear_guard": "trending"}

@@ -45,9 +45,10 @@ function pnlColor(value: string | null | undefined): string {
   return parseFloat(value) >= 0 ? 'success.main' : 'error.main';
 }
 
-function signalColor(signal: Signal): 'success' | 'error' | 'default' {
+function signalColor(signal: Signal): 'success' | 'error' | 'warning' | 'default' {
   if (signal === 'buy') return 'success';
   if (signal === 'sell_full' || signal === 'sell_half') return 'error';
+  if (signal === 'short') return 'warning';
   return 'default';
 }
 
@@ -171,7 +172,18 @@ function OpenPositionsTable() {
             <TableBody>
               {positions.map((p) => (
                 <TableRow key={p.symbol} hover>
-                  <TableCell>{p.symbol}</TableCell>
+                  <TableCell>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      {p.symbol}
+                      <Chip
+                        label={p.side === 'short' ? 'S' : 'L'}
+                        size="small"
+                        color={p.side === 'short' ? 'error' : 'success'}
+                        variant="outlined"
+                        sx={{ fontSize: '0.6rem', height: 16, minWidth: 0, '& .MuiChip-label': { px: 0.5 } }}
+                      />
+                    </Box>
+                  </TableCell>
                   <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{fmt(p.size, 4)}</TableCell>
                   <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>${fmt(p.entry_price)}</TableCell>
                   <TableCell align="right" sx={{ color: pnlColor(p.unrealized_pnl_percent), fontVariantNumeric: 'tabular-nums' }}>
@@ -190,7 +202,7 @@ function OpenPositionsTable() {
   );
 }
 
-const SIGNAL_TYPES: Array<Signal | 'all'> = ['all', 'buy', 'sell_full', 'sell_half', 'hold'];
+const SIGNAL_TYPES: Array<Signal | 'all'> = ['all', 'buy', 'sell_full', 'sell_half', 'short', 'hold'];
 
 function RecentSignals({
   strategies,

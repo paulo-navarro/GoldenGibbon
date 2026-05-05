@@ -27,6 +27,7 @@ from core.models import (
     StrategyState,
     Trade,
 )
+from core.config import get_settings
 from core.portfolio import PortfolioManager
 from core.risk import RiskEngine
 from core.strategies.base import Strategy
@@ -127,6 +128,7 @@ class BacktestRunner:
             strategy_name=self._strategy.name,
             strategy_config=self._strategy_config,
             risk_config=self._risk_config,
+            shorts_enabled=get_settings().shorts.enabled,
         )
         executor = PaperExecutor(
             strategy_name=self._strategy.name,

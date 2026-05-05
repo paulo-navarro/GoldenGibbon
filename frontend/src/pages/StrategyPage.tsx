@@ -32,9 +32,10 @@ import type { Signal, StrategyState } from '../types/enums';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function signalColor(signal: Signal): 'success' | 'error' | 'default' {
+function signalColor(signal: Signal): 'success' | 'error' | 'warning' | 'default' {
   if (signal === 'buy') return 'success';
   if (signal === 'sell_full' || signal === 'sell_half') return 'error';
+  if (signal === 'short') return 'warning';
   return 'default';
 }
 

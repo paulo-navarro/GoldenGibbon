@@ -14,7 +14,7 @@
 | Ativo some do GG mas continua na exchange | Crash entre `place_order()` e `pm.open_position()`; ordem executou mas DB não registrou |
 | Posição fantasma após restart | `order_records` grava status PENDING mas nunca atualiza para FILLED se o worker morre |
 | Stop orders órfãs na exchange | GG coloca stop, fecha posição por trailing, mas não cancela o stop na exchange |
-| Balance drift silencioso | Reconciliação de USDT é advisory — loga warning mas não repara |
+| Balance drift silencioso | Reconciliação de USDT é advisory — loga warning mas não repara — **parcialmente resolvido: sync_exchange_balances (2 min) + auto-repair de drift** |
 
 ---
 
@@ -155,9 +155,10 @@ O `order_records` atual já tem os campos essenciais, mas faltam:
   - **Asset no GG, zero na exchange** (já existe): auto-repair — deletar position, reset state, **registrar TradeRecord de emergência** com `exit_reason=reconciliation_force_close` para não perder o tracking de PnL
   - **Asset na exchange, zero no GG** (já existe como alert): tentar recovery automático — buscar `get_my_trades(symbol)` recentes, identificar a ordem de compra, reconstruir `PositionRecord` com preço de entrada real
   - **Size mismatch** (novo): position no GG com size diferente da exchange — ajustar `PositionRecord.size` para match da exchange, logar a diferença
-- [ ] **6.6.2** USDT balance reconciliation melhorada:
+- [x] **6.6.2** USDT balance reconciliation melhorada:
   - Calcular USDT esperado: `sum(strategy_state.usdt_balance)` + `sum(positions * current_price)` ≈ `exchange_total_equity`
   - Se drift > threshold configurável → ajustar `usdt_balance` na strategy state para match
+  - **Implementado:** `sync_exchange_balances` task (Celery Beat a cada 2 min) + auto-repair proporcional + recovery sync on startup
 - [ ] **6.6.3** **Margin debt check** (novo para shorts): consultar `GET /sapi/v1/margin/account` e verificar que `borrowed` amounts correspondem a short positions abertas no GG
 - [ ] **6.6.4** Toda reparação gera um `ReconciliationEvent` com: timestamp, tipo de reparo, valores antes/depois, exchange_data de referência
 

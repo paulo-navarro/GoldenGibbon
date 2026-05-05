@@ -102,6 +102,14 @@ function NamespaceEditor({ namespace, onSaved }: { namespace: string; onSaved?: 
                     onChange={(_, checked) => handleChange(field.name, checked)}
                   />
                 </Box>
+                {field.description && (
+                  <Typography variant="caption" color="text.secondary">{field.description}</Typography>
+                )}
+                {namespace === 'shorts' && field.name === 'enabled' && (
+                  <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 0.5 }}>
+                    ⚠️ Enabling shorts activates Binance Margin borrowing. Use with caution.
+                  </Typography>
+                )}
               </Grid>
             );
           }

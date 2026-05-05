@@ -78,6 +78,12 @@ app.conf.update(
             # Every 15 minutes at :05, :20, :35, :50.
             "schedule": crontab(minute="5,20,35,50"),
         },
+        "sync-exchange-balances-2m": {
+            "task": "core.tasks.sync_exchange_balances",
+            # Every 2 minutes — keeps dashboard USDT balance and equity
+            # in sync with the exchange between strategy ticks.
+            "schedule": 120.0,
+        },
         "heartbeat-60s": {
             "task": "core.tasks.emit_heartbeat",
             # Every 60 seconds — proves both Beat and a worker are alive.
