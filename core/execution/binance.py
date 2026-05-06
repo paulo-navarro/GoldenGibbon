@@ -287,6 +287,7 @@ class BinanceExecutor(_OrdersMixin, _ActionsMixin):
         intent: str,
         trading_mode: str = "live",
         strategy: Optional[str] = None,
+        stop_price: Optional[Decimal] = None,
     ) -> Optional[int]:
         """
         Create a PENDING OrderRecord in the DB before calling the exchange.
@@ -297,7 +298,20 @@ class BinanceExecutor(_OrdersMixin, _ActionsMixin):
         if self._session_factory is None:
             return None
 
+        from core.models import OrderIntent
         from db.models import OrderRecord
+
+        # Validate intent against enum — reject typos early
+        valid_intents = {e.value for e in OrderIntent}
+        if intent not in valid_intents:
+            logger.critical(
+                "write_ahead_order: invalid intent",
+                symbol=symbol,
+                side=side,
+                intent=intent,
+                valid=list(valid_intents),
+            )
+            return None
 
         try:
             with self._session_factory() as session:
@@ -307,6 +321,7 @@ class BinanceExecutor(_OrdersMixin, _ActionsMixin):
                     order_type=order_type,
                     amount=amount,
                     price=price,
+                    stop_price=stop_price,
                     status="pending",
                     filled_amount=Decimal("0"),
                     intent=intent,

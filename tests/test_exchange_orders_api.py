@@ -50,6 +50,7 @@ def client():
 
 
 def _seed_gg_order(*, symbol="BTCUSDT", side="buy", status="filled", intent="open_long"):
+    import uuid
     with get_session() as session:
         session.add(OrderRecord(
             symbol=symbol,
@@ -60,7 +61,7 @@ def _seed_gg_order(*, symbol="BTCUSDT", side="buy", status="filled", intent="ope
             status=status,
             filled_amount=Decimal("1.0"),
             avg_fill_price=Decimal("50000"),
-            exchange_order_id="12345",
+            exchange_order_id=str(uuid.uuid4().int)[:12],
             exchange_status="FILLED",
             trading_mode="live",
             intent=intent,
@@ -112,7 +113,7 @@ class TestExchangeOrders:
         assert len(data) == 1
         assert data[0]["source"] == "gg"
         assert data[0]["intent"] == "open_long"
-        assert data[0]["exchange_order_id"] == "12345"
+        assert data[0]["exchange_order_id"] is not None
 
     def test_orphan_order_has_source_orphan(self, client):
         _seed_orphan_order()

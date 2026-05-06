@@ -354,25 +354,25 @@ O `order_records` atual já tem os campos essenciais, mas faltam:
 
 ### 🔴 Bugs (crash ou dados incorretos em produção)
 
-- [ ] **BUG-12** — `stop_price` field mapping errado no endpoint de exchange orders
+- [x] **BUG-12** — `stop_price` field mapping errado no endpoint de exchange orders
   - **Arquivo:** `api/routes/exchange_orders.py` linha ~47
   - **Problema:** `_to_exchange_order()` mapeia `stop_price=rec.limit_price`. Para ordens STOP_LOSS_LIMIT, `limit_price` é o preço-limite de execução *após* o stop trigger — não é o preço de trigger (stopPrice). O `OrderRecord` não tem coluna `stop_price`.
   - **Impacto:** Dashboard mostra preços de stop incorretos; operador não consegue verificar seus níveis de proteção.
   - **Fix:** Adicionar coluna `stop_price Numeric(20,8)` ao `OrderRecord`, popular no write-ahead (de `order["stopPrice"]`) e na criação de órfãs. Migration necessária.
 
-- [ ] **BUG-13** — Multi-strategy symbol resolution ainda não-determinística em `_apply_fill_recovery`
+- [x] **BUG-13** — Multi-strategy symbol resolution ainda não-determinística em `_apply_fill_recovery`
   - **Arquivo:** `core/tasks/_reconciliation.py` linha ~1261
   - **Problema:** Quando `order_record.strategy` é NULL (órfã ou ordem legada), fallback usa `.filter_by(symbol=symbol).first()` no `StrategyStateRecord`. Se SmartHodler + BearGuard operam BTCUSDT, retorna resultado arbitrário (DB sort order).
   - **Impacto:** Recovery pode reconstruir na strategy errada → PnL invertido, decisões de close erradas.
   - **Fix:** Usar a mesma lógica de inferência do 6.6 (checar intents recentes, checar strategy name), ou rejeitar recovery quando ambiguidade existe e alertar.
 
-- [ ] **BUG-14** — `OrderIntent` enum nunca é validado no write-ahead
+- [x] **BUG-14** — `OrderIntent` enum nunca é validado no write-ahead
   - **Arquivo:** `core/execution/binance.py` linha ~312, `db/models.py` linha ~199
   - **Problema:** `OrderIntent` enum existe em `core/models.py`, mas `OrderRecord.intent` é `String(20)` sem validação. O write-ahead passa `intent=intent` como string raw — typos passam silenciosamente.
   - **Impacto:** Fill recovery roteia por intent string; um typo resulta em no-op silencioso (ordem nunca recuperada).
   - **Fix:** Validar intent contra `OrderIntent` enum antes de persistir, ou usar um CHECK constraint na coluna.
 
-- [ ] **BUG-15** — Sem unique constraint em `exchange_order_id` — idempotência frágil
+- [x] **BUG-15** — Sem unique constraint em `exchange_order_id` — idempotência frágil
   - **Arquivo:** `db/models.py` linha ~224
   - **Problema:** Índice `ix_order_records_exchange_order_id` existe mas **não é UNIQUE**. Paper mode pode ter mesmo `exchange_order_id` que live mode. Idempotency check (`filter_by(exchange_order_id=eid).first()`) pode retornar record errado.
   - **Impacto:** Fill recovery pode duplicar trades ou associar fill ao record errado se IDs colidirem entre modos.

@@ -44,7 +44,7 @@ def _to_exchange_order(rec: OrderRecord) -> ExchangeOrder:
         orig_qty=rec.amount,
         executed_qty=rec.filled_amount,
         price=rec.price or rec.avg_fill_price,
-        stop_price=rec.limit_price,
+        stop_price=rec.stop_price,
         time=rec.created_at,
         source=source,
         intent=rec.intent if source == "gg" else None,

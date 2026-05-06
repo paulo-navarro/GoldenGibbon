@@ -540,12 +540,29 @@ def _reconcile_with_exchange(
                                 break
                         entry_time = datetime.fromtimestamp(entry_time_ms / 1000, tz=timezone.utc)
 
-                        state_rec = (
+                        state_recs = (
                             session.query(StrategyStateRecord)
                             .filter_by(symbol=symbol)
-                            .first()
+                            .all()
                         )
-                        strategy_name = state_rec.strategy if state_rec else "smart_hodler"
+                        if len(state_recs) == 1:
+                            strategy_name = state_recs[0].strategy
+                        elif len(state_recs) > 1:
+                            # Infer from recent order intents which strategy owns this
+                            recent_order = (
+                                session.query(_OR)
+                                .filter_by(symbol=symbol)
+                                .filter(_OR.intent.in_(["open_long", "open_short"]))
+                                .order_by(_OR.created_at.desc())
+                                .first()
+                            )
+                            if recent_order and recent_order.strategy:
+                                strategy_name = recent_order.strategy
+                            else:
+                                # Default to first non-bear for longs
+                                strategy_name = state_recs[0].strategy
+                        else:
+                            strategy_name = "smart_hodler"
 
                         # Infer side from recent order intents, then strategy name
                         inferred_side = "long"
@@ -992,6 +1009,7 @@ def _sync_open_orders(
                 order_type=order["type"].lower(),
                 amount=order["origQty"],
                 price=order.get("price"),
+                stop_price=order.get("stopPrice"),
                 status=order.get("status", "NEW").lower(),
                 filled_amount=order.get("executedQty", 0),
                 exchange_order_id=exchange_order_id,
@@ -1256,12 +1274,49 @@ def _apply_fill_recovery(
     if order_record.strategy:
         strategy_name = order_record.strategy
     else:
-        state_rec = (
+        state_recs = (
             session.query(StrategyStateRecord)
             .filter_by(symbol=symbol)
-            .first()
+            .all()
         )
-        strategy_name = state_rec.strategy if state_rec else "unknown"
+        if len(state_recs) == 1:
+            strategy_name = state_recs[0].strategy
+        elif len(state_recs) > 1:
+            # Multiple strategies trade this symbol — infer from intent/side
+            matched = None
+            if intent in ("open_short", "close_short", "stop_loss"):
+                # Short-related intents belong to bear-type strategies
+                for sr in state_recs:
+                    if "bear" in sr.strategy.lower():
+                        matched = sr
+                        break
+            if matched is None and intent in ("open_long", "close_long", "scale_in", "reduce"):
+                # Long-related intents belong to non-bear strategies
+                for sr in state_recs:
+                    if "bear" not in sr.strategy.lower():
+                        matched = sr
+                        break
+            if matched is None:
+                # Still ambiguous — pick by exchange order side
+                order_side = exchange_data.get("side", "").upper()
+                if order_side == "SELL":
+                    matched = next((sr for sr in state_recs if "bear" in sr.strategy.lower()), None)
+                elif order_side == "BUY":
+                    matched = next((sr for sr in state_recs if "bear" not in sr.strategy.lower()), None)
+            if matched:
+                strategy_name = matched.strategy
+            else:
+                # Cannot resolve — skip recovery, alert operator
+                logger.critical(
+                    "fill_recovery: ambiguous strategy for symbol, skipping",
+                    symbol=symbol,
+                    intent=intent,
+                    strategies=[sr.strategy for sr in state_recs],
+                )
+                order_record.reconciliation_status = "pending_sync"
+                return f"ambiguous strategy, recovery skipped: {symbol}"
+        else:
+            strategy_name = "unknown"
 
     # ── Route by intent ───────────────────────────────────────────────
     if intent in ("open_long", "open_short"):

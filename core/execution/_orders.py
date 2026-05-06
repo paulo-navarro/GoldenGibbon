@@ -236,7 +236,8 @@ class _OrdersMixin:
             side="buy",
             order_type="stop_loss_limit",
             amount=qty,
-            price=formatted_stop,
+            price=limit_price,
+            stop_price=formatted_stop,
             intent="stop_loss",
         )
 
@@ -755,7 +756,8 @@ class _OrdersMixin:
             side="sell",
             order_type="stop_loss_limit",
             amount=qty,
-            price=formatted_stop,
+            price=limit_price,
+            stop_price=formatted_stop,
             intent="stop_loss",
         )
 

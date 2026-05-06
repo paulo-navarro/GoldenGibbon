@@ -187,6 +187,7 @@ class OrderRecord(Base):
     exchange_order_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     time_in_force: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     limit_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 8), nullable=True)
+    stop_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 8), nullable=True)
     reject_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     exchange_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
@@ -222,6 +223,7 @@ class OrderRecord(Base):
         Index("ix_order_records_trading_mode", "trading_mode"),
         Index("ix_order_records_reconciliation", "reconciliation_status", "created_at"),
         Index("ix_order_records_exchange_order_id", "exchange_order_id"),
+        UniqueConstraint("exchange_order_id", "trading_mode", name="uq_order_exchange_id_mode"),
     )
     
     def __repr__(self) -> str:
