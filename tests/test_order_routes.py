@@ -116,14 +116,15 @@ def _make_client():
         patch("api.main.reset_publisher"),
         patch("api.main.check_connection", return_value=True),
         patch("redis.asyncio.from_url", return_value=mock_async_redis),
+        patch("api.routes.orders._default_trading_mode", return_value="paper"),
     )
 
 
 @pytest.fixture()
 def client():
     """TestClient with real DB but no seed data."""
-    p1, p2, p3, p4 = _make_client()
-    with p1 as mock_init, p2, p3, p4:
+    p1, p2, p3, p4, p5 = _make_client()
+    with p1 as mock_init, p2, p3, p4, p5:
         mock_pub = MagicMock()
         mock_pub.enabled = True
         mock_init.return_value = mock_pub
@@ -136,8 +137,8 @@ def client():
 @pytest.fixture()
 def seeded_client():
     """TestClient with 15 orders pre-seeded in a single run."""
-    p1, p2, p3, p4 = _make_client()
-    with p1 as mock_init, p2, p3, p4:
+    p1, p2, p3, p4, p5 = _make_client()
+    with p1 as mock_init, p2, p3, p4, p5:
         mock_pub = MagicMock()
         mock_pub.enabled = True
         mock_init.return_value = mock_pub
@@ -155,8 +156,8 @@ def seeded_client():
 @pytest.fixture()
 def multi_run_client():
     """TestClient with two different run_ids seeded."""
-    p1, p2, p3, p4 = _make_client()
-    with p1 as mock_init, p2, p3, p4:
+    p1, p2, p3, p4, p5 = _make_client()
+    with p1 as mock_init, p2, p3, p4, p5:
         mock_pub = MagicMock()
         mock_pub.enabled = True
         mock_init.return_value = mock_pub
@@ -183,8 +184,8 @@ def multi_run_client():
 @pytest.fixture()
 def mixed_client():
     """TestClient with orders across multiple symbols, sides, and statuses."""
-    p1, p2, p3, p4 = _make_client()
-    with p1 as mock_init, p2, p3, p4:
+    p1, p2, p3, p4, p5 = _make_client()
+    with p1 as mock_init, p2, p3, p4, p5:
         mock_pub = MagicMock()
         mock_pub.enabled = True
         mock_init.return_value = mock_pub

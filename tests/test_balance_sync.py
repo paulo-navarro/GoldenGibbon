@@ -123,11 +123,18 @@ class TestSyncExchangeBalances:
 
     def test_skips_when_not_live(self):
         """Paper mode → skipped."""
+        from core.config import get_settings
         from core.tasks import sync_exchange_balances
 
-        result = sync_exchange_balances.apply()
-        assert result.successful()
-        assert result.result["status"] == "skipped"
+        settings = get_settings()
+        settings.live_trading.enabled = False
+
+        try:
+            result = sync_exchange_balances.apply()
+            assert result.successful()
+            assert result.result["status"] == "skipped"
+        finally:
+            settings.live_trading.enabled = False
 
     @patch("core.execution.binance.BinanceExecutor.from_settings")
     def test_publishes_events(self, mock_from_settings, _seed):

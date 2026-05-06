@@ -446,15 +446,23 @@ class TestRunReconciliation:
 
     def test_returns_summary_dict_clean_db(self):
         """Clean DB → summary with zero mismatches."""
+        from core.config import get_settings
         from core.tasks import run_reconciliation
 
-        result = run_reconciliation.apply()
-        assert result.successful()
-        summary = result.result
-        assert isinstance(summary, dict)
-        assert summary["mismatches"] == 0
-        assert summary["repairs"] == 0
-        assert isinstance(summary["details"], list)
+        settings = get_settings()
+        original = settings.live_trading.enabled
+        settings.live_trading.enabled = False
+
+        try:
+            result = run_reconciliation.apply()
+            assert result.successful()
+            summary = result.result
+            assert isinstance(summary, dict)
+            assert summary["mismatches"] == 0
+            assert summary["repairs"] == 0
+            assert isinstance(summary["details"], list)
+        finally:
+            settings.live_trading.enabled = original
 
     def test_detects_and_repairs_mismatch(self, _seed_state):
         """Mismatch seeded → task detects and reports it."""

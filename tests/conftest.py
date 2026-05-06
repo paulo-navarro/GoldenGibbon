@@ -26,6 +26,13 @@ def clean_database():
     This fixture runs automatically before each test to ensure
     test isolation and prevent duplicate key conflicts.
     """
+    # Force paper mode for tests so live_trading.enabled in DB doesn't
+    # cause tests to hit the real Binance API.
+    from core.config import get_settings
+    settings = get_settings()
+    _original_enabled = settings.live_trading.enabled
+    settings.live_trading.enabled = False
+
     with get_session() as session:
         # Delete in reverse dependency order
         session.query(BacktestResult).delete()
@@ -39,6 +46,9 @@ def clean_database():
     
     yield  # Run the test
     
+    # Restore original setting
+    settings.live_trading.enabled = _original_enabled
+
     # Cleanup after test (optional, but good practice)
     with get_session() as session:
         session.query(BacktestResult).delete()

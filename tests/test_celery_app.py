@@ -247,15 +247,23 @@ class TestTaskStubs:
 
     def test_run_reconciliation_returns_summary_dict(self):
         """run_reconciliation returns a summary dict with check counts."""
+        from core.config import get_settings
         from core.tasks import run_reconciliation
 
-        result = run_reconciliation.apply()
-        assert result.successful()
-        summary = result.result
-        assert isinstance(summary, dict)
-        assert "pairs_checked" in summary
-        assert "mismatches" in summary
-        assert "repairs" in summary
-        assert "details" in summary
-        # Clean DB → no mismatches expected
-        assert summary["mismatches"] == 0
+        settings = get_settings()
+        original = settings.live_trading.enabled
+        settings.live_trading.enabled = False
+
+        try:
+            result = run_reconciliation.apply()
+            assert result.successful()
+            summary = result.result
+            assert isinstance(summary, dict)
+            assert "pairs_checked" in summary
+            assert "mismatches" in summary
+            assert "repairs" in summary
+            assert "details" in summary
+            # Clean DB → no mismatches expected
+            assert summary["mismatches"] == 0
+        finally:
+            settings.live_trading.enabled = original
