@@ -96,6 +96,17 @@ def get_session() -> Generator[Session, None, None]:
         session.close()
 
 
+# Advisory lock ID for state_data writes (reconciliation + balance sync).
+_STATE_DATA_LOCK_ID = 827_400_001
+
+
+@contextmanager
+def state_data_lock(session: Session) -> Generator[None, None, None]:
+    """Acquire a Postgres advisory lock scoped to the session (released on commit/rollback)."""
+    session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": _STATE_DATA_LOCK_ID})
+    yield
+
+
 def get_db() -> Generator[Session, None, None]:
     """
     Dependency injection for FastAPI.

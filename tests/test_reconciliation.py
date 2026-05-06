@@ -1392,7 +1392,7 @@ class TestRecoverPendingOrders:
             "orderId": 11111,
             "status": "FILLED",
             "executedQty": "1.0",
-            "cummulativeQuoteQty": "50000.0",
+            "cumulativeQuoteQty": "50000.0",
             "price": "50000",
         }
 
@@ -1429,7 +1429,7 @@ class TestRecoverPendingOrders:
             "orderId": 22222,
             "status": "FILLED",
             "executedQty": "1.0",
-            "cummulativeQuoteQty": "55000.0",
+            "cumulativeQuoteQty": "55000.0",
             "price": "55000",
         }
 
@@ -1468,7 +1468,7 @@ class TestRecoverPendingOrders:
             "orderId": 33333,
             "status": "FILLED",
             "executedQty": "1.0",
-            "cummulativeQuoteQty": "48000.0",
+            "cumulativeQuoteQty": "48000.0",
             "price": "48000",
         }
 
@@ -1565,7 +1565,7 @@ class TestRecoverPendingOrders:
             "orderId": 66666,
             "status": "FILLED",
             "executedQty": "1.0",
-            "cummulativeQuoteQty": "55000.0",
+            "cumulativeQuoteQty": "55000.0",
             "price": "55000",
         }
 
@@ -1631,7 +1631,7 @@ class TestRecoverPendingWithoutId:
                 "origQty": "1.0",
                 "status": "FILLED",
                 "executedQty": "1.0",
-                "cummulativeQuoteQty": "50000.0",
+                "cumulativeQuoteQty": "50000.0",
                 "price": "50000",
                 "time": order_time_ms,
             }

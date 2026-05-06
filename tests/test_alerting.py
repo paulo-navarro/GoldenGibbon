@@ -15,7 +15,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from core.alerting import Alerter, get_alerter, init_alerter, reset_alerter
+from core.alerting import (
+    Alerter,
+    AlertSeverity,
+    get_alerter,
+    init_alerter,
+    reset_alerter,
+)
 
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
@@ -240,3 +246,109 @@ class TestSingleton:
         """Default config has alerting.enabled=False → disabled alerter."""
         a = get_alerter()
         assert a.enabled is False
+
+
+# ── AlertSeverity ──────────────────────────────────────────────────────────
+
+
+class TestAlertSeverity:
+    def test_enum_values(self):
+        assert AlertSeverity.INFO == "info"
+        assert AlertSeverity.WARNING == "warning"
+        assert AlertSeverity.CRITICAL == "critical"
+
+    def test_meets_threshold_critical_vs_warning(self):
+        assert AlertSeverity.meets_threshold(AlertSeverity.CRITICAL, AlertSeverity.WARNING) is True
+
+    def test_meets_threshold_warning_vs_warning(self):
+        assert AlertSeverity.meets_threshold(AlertSeverity.WARNING, AlertSeverity.WARNING) is True
+
+    def test_meets_threshold_info_below_warning(self):
+        assert AlertSeverity.meets_threshold(AlertSeverity.INFO, AlertSeverity.WARNING) is False
+
+    def test_meets_threshold_info_vs_info(self):
+        assert AlertSeverity.meets_threshold(AlertSeverity.INFO, AlertSeverity.INFO) is True
+
+    def test_meets_threshold_warning_below_critical(self):
+        assert AlertSeverity.meets_threshold(AlertSeverity.WARNING, AlertSeverity.CRITICAL) is False
+
+
+# ── alert_reconciliation() ─────────────────────────────────────────────────
+
+
+class TestAlertReconciliationSeverity:
+    @patch("core.alerting.requests.post")
+    def test_critical_sends_alert(self, mock_post):
+        mock_post.return_value = MagicMock(ok=True)
+        a = _make_alerter()
+        a.alert_reconciliation(
+            severity=AlertSeverity.CRITICAL,
+            event_type="position_force_closed",
+            details="BTCUSDT: 2 positions closed",
+            min_severity=AlertSeverity.WARNING,
+        )
+        mock_post.assert_called_once()
+        text = mock_post.call_args[1]["json"]["text"]
+        assert "CRITICAL RECONCILIATION" in text
+        assert "position_force_closed" in text
+        assert "BTCUSDT" in text
+
+    @patch("core.alerting.requests.post")
+    def test_warning_sends_with_min_warning(self, mock_post):
+        mock_post.return_value = MagicMock(ok=True)
+        a = _make_alerter()
+        a.alert_reconciliation(
+            severity=AlertSeverity.WARNING,
+            event_type="order_orphan_detected",
+            details="Orphan BUY order on ETHUSDT",
+            min_severity=AlertSeverity.WARNING,
+        )
+        mock_post.assert_called_once()
+        text = mock_post.call_args[1]["json"]["text"]
+        assert "RECONCILIATION WARNING" in text
+        assert "order_orphan_detected" in text
+
+    @patch("core.alerting.requests.post")
+    def test_info_not_sent_with_min_warning(self, mock_post):
+        a = _make_alerter()
+        a.alert_reconciliation(
+            severity=AlertSeverity.INFO,
+            event_type="stop_order_synced",
+            details="Stop synced OK",
+            min_severity=AlertSeverity.WARNING,
+        )
+        mock_post.assert_not_called()
+
+    @patch("core.alerting.requests.post")
+    def test_info_sent_with_min_info(self, mock_post):
+        mock_post.return_value = MagicMock(ok=True)
+        a = _make_alerter()
+        a.alert_reconciliation(
+            severity=AlertSeverity.INFO,
+            event_type="stop_order_synced",
+            details="Stop synced OK",
+            min_severity=AlertSeverity.INFO,
+        )
+        mock_post.assert_called_once()
+
+    @patch("core.alerting.requests.post")
+    def test_warning_not_sent_with_min_critical(self, mock_post):
+        a = _make_alerter()
+        a.alert_reconciliation(
+            severity=AlertSeverity.WARNING,
+            event_type="order_orphan_detected",
+            details="Orphan order",
+            min_severity=AlertSeverity.CRITICAL,
+        )
+        mock_post.assert_not_called()
+
+    @patch("core.alerting.requests.post")
+    def test_disabled_alerter_no_error(self, mock_post):
+        a = _make_alerter(enabled=False)
+        a.alert_reconciliation(
+            severity=AlertSeverity.CRITICAL,
+            event_type="position_force_closed",
+            details="test",
+            min_severity=AlertSeverity.WARNING,
+        )
+        mock_post.assert_not_called()

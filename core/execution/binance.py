@@ -286,6 +286,7 @@ class BinanceExecutor(_OrdersMixin, _ActionsMixin):
         price: Optional[Decimal],
         intent: str,
         trading_mode: str = "live",
+        strategy: Optional[str] = None,
     ) -> Optional[int]:
         """
         Create a PENDING OrderRecord in the DB before calling the exchange.
@@ -311,6 +312,7 @@ class BinanceExecutor(_OrdersMixin, _ActionsMixin):
                     intent=intent,
                     reconciliation_status="pending_sync",
                     trading_mode=trading_mode,
+                    strategy=strategy or self._strategy,
                 )
                 session.add(record)
                 session.flush()
@@ -583,6 +585,32 @@ class BinanceExecutor(_OrdersMixin, _ActionsMixin):
 
         data = self._signed_request("GET", "/sapi/v1/margin/openOrders", params or None)
         return [self._parse_order_response(item) for item in data]
+
+    def get_margin_account(self) -> Dict[str, Dict[str, Decimal]]:
+        """
+        Fetch margin account details via ``GET /sapi/v1/margin/account``.
+
+        Returns a dict keyed by asset with ``borrowed`` and ``free`` amounts::
+
+            {"BTC": {"borrowed": Decimal("0.05"), "free": Decimal("0.01")}, ...}
+
+        Only assets with non-zero borrowed or free balances are included.
+        """
+        data = self._signed_request("GET", "/sapi/v1/margin/account")
+
+        result: Dict[str, Dict[str, Decimal]] = {}
+        for item in data.get("userAssets", []):
+            borrowed = Decimal(item.get("borrowed", "0"))
+            free = Decimal(item.get("free", "0"))
+            locked = Decimal(item.get("locked", "0"))
+            if borrowed > 0 or free > 0 or locked > 0:
+                result[item["asset"]] = {
+                    "borrowed": borrowed,
+                    "free": free,
+                    "locked": locked,
+                }
+
+        return result
 
     def get_order_status(self, symbol: str, order_id: int) -> dict:
         """

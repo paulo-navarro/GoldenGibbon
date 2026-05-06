@@ -75,8 +75,11 @@ app.conf.update(
         },
         "reconciliation-2m": {
             "task": "core.tasks.run_reconciliation",
-            # Every 2 minutes — task itself checks `reconciliation.enabled`.
-            "schedule": 120.0,
+            # Interval sourced from ReconciliationConfig.interval_minutes
+            # (default 2 min). Requires worker restart to take effect.
+            "schedule": float(
+                int(os.environ.get("GG_RECONCILIATION_INTERVAL_MIN", "2")) * 60
+            ),
         },
         "sync-exchange-balances-2m": {
             "task": "core.tasks.sync_exchange_balances",
@@ -140,48 +143,71 @@ def _reconcile_on_startup(**_kwargs: object) -> None:
         if not settings.live_trading.reconcile_on_startup:
             return
 
-        # ── Synchronous fill recovery (6.7.4) ────────────────────────
+        # ── Synchronous fill recovery (6.7.4) with retry ────────────
         if settings.live_trading.enabled:
-            try:
-                from decimal import Decimal
+            import logging
+            import time
 
-                from core.execution.binance import BinanceExecutor
-                from core.portfolio import PortfolioManager as _PM
-                from core.tasks._reconciliation import (
-                    _recover_pending_orders,
-                    _recover_pending_orders_without_id,
-                )
-                from db import get_session
+            _log = logging.getLogger(__name__)
+            _retry_delays = (5, 15, 30)
+            _recovery_ok = False
 
-                executor = BinanceExecutor.from_settings(
-                    strategy_name="_startup_recovery",
-                    portfolio_manager=_PM(initial_capital=Decimal("1")),
-                )
+            for attempt, delay in enumerate(_retry_delays, 1):
+                try:
+                    from decimal import Decimal
 
-                recon_cfg = settings.reconciliation
+                    from core.execution.binance import BinanceExecutor
+                    from core.portfolio import PortfolioManager as _PM
+                    from core.tasks._reconciliation import (
+                        _recover_pending_orders,
+                        _recover_pending_orders_without_id,
+                    )
+                    from db import get_session
 
-                with get_session() as session:
-                    _recover_pending_orders(
-                        session, executor,
-                        recovery_age_seconds=recon_cfg.recovery_age_seconds,
+                    executor = BinanceExecutor.from_settings(
+                        strategy_name="_startup_recovery",
+                        portfolio_manager=_PM(initial_capital=Decimal("1")),
                     )
 
-                with get_session() as session:
-                    _recover_pending_orders_without_id(
-                        session, executor,
-                        lost_age_seconds=recon_cfg.lost_age_seconds,
-                    )
+                    recon_cfg = settings.reconciliation
 
-                import logging
-                logging.getLogger(__name__).info(
-                    "Startup fill recovery completed synchronously."
-                )
-            except Exception:
-                import logging
-                logging.getLogger(__name__).warning(
-                    "Startup fill recovery failed; full reconciliation "
-                    "will retry asynchronously.",
-                    exc_info=True,
+                    with get_session() as session:
+                        _recover_pending_orders(
+                            session, executor,
+                            recovery_age_seconds=recon_cfg.recovery_age_seconds,
+                        )
+
+                    with get_session() as session:
+                        _recover_pending_orders_without_id(
+                            session, executor,
+                            lost_age_seconds=recon_cfg.lost_age_seconds,
+                        )
+
+                    _log.info("Startup fill recovery completed synchronously.")
+                    _recovery_ok = True
+                    break
+                except Exception:
+                    if attempt < len(_retry_delays):
+                        _log.warning(
+                            "Startup fill recovery attempt %d/%d failed, "
+                            "retrying in %ds...",
+                            attempt, len(_retry_delays), delay,
+                            exc_info=True,
+                        )
+                        time.sleep(delay)
+                    else:
+                        _log.warning(
+                            "Startup fill recovery attempt %d/%d failed.",
+                            attempt, len(_retry_delays),
+                            exc_info=True,
+                        )
+
+            if not _recovery_ok:
+                _log.critical(
+                    "Startup fill recovery FAILED after %d attempts. "
+                    "Pending orders may remain unresolved until the next "
+                    "async reconciliation cycle.",
+                    len(_retry_delays),
                 )
 
         # ── Async full reconciliation ────────────────────────────────

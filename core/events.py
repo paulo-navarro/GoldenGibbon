@@ -117,6 +117,13 @@ class EventType(str, Enum):
     RECONCILIATION_MISMATCH = "reconciliation_mismatch"
     RECONCILIATION_REPAIRED = "reconciliation_repaired"
 
+    # ── Reconciliation granular (phase 6.8) ──────────────────────────
+    FILL_RECOVERED = "fill_recovered"
+    ORDER_ORPHAN_DETECTED = "order_orphan_detected"
+    POSITION_FORCE_CLOSED = "position_force_closed"
+    POSITION_RECONSTRUCTED = "position_reconstructed"
+    STOP_ORDER_SYNCED = "stop_order_synced"
+
 
 # ── Event Envelope ───────────────────────────────────────────────────────────
 

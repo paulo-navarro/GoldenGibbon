@@ -143,6 +143,7 @@ class TradeRecord(Base):
     max_adverse_excursion: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 8), nullable=True)
     
     trading_mode: Mapped[str] = mapped_column(String(10), nullable=False, default="paper", server_default="paper")
+    exchange_order_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -154,8 +155,9 @@ class TradeRecord(Base):
         Index("ix_trade_records_symbol_strategy_entry", "symbol", "strategy", "entry_time"),
         Index("ix_trade_records_strategy_exit", "strategy", "exit_time"),
         Index("ix_trade_records_trading_mode", "trading_mode"),
+        Index("ix_trade_records_exchange_order_id", "exchange_order_id"),
     )
-    
+
     def __repr__(self) -> str:
         return f"<TradeRecord(symbol={self.symbol}, entry={self.entry_price}, exit={self.exit_price}, pnl={self.pnl_usdt})>"
 
@@ -174,7 +176,7 @@ class OrderRecord(Base):
     run_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
     symbol: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     side: Mapped[str] = mapped_column(String(10), nullable=False)  # buy, sell
-    order_type: Mapped[str] = mapped_column(String(10), nullable=False)  # market, limit
+    order_type: Mapped[str] = mapped_column(String(20), nullable=False)  # market, limit, stop_loss_limit, etc.
     amount: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
     price: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 8), nullable=True)  # null for market
     status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)  # pending, filled, etc.
@@ -191,6 +193,7 @@ class OrderRecord(Base):
     trading_mode: Mapped[str] = mapped_column(String(10), nullable=False, default="paper", server_default="paper")
 
     # Reconciliation fields (Phase 6.2)
+    strategy: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
     intent: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     reconciled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     reconciliation_status: Mapped[str] = mapped_column(

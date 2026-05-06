@@ -236,6 +236,9 @@ def _reconcile_with_exchange(
     *,
     balance_tolerance: Decimal = _EXCHANGE_BALANCE_TOLERANCE,
     position_tolerance: Decimal = _EXCHANGE_POSITION_TOLERANCE,
+    auto_repair: bool = True,
+    force_close_orphans: bool = True,
+    recover_untracked: bool = True,
 ) -> Dict[str, Any]:
     """
     Compare local DB state against Binance account balances.
@@ -323,7 +326,7 @@ def _reconcile_with_exchange(
 
     # Fetch current prices for PnL calculations (best-effort)
     try:
-        ticker_prices = executor.get_ticker_prices()
+        ticker_prices = executor.get_ticker_prices(symbols)
     except Exception:
         ticker_prices = {}
 
@@ -356,197 +359,347 @@ def _reconcile_with_exchange(
         elif pos_recs and exchange_size <= position_tolerance:
             # Exchange has zero/dust but local DB has open position(s).
             # The sell was executed on Binance but the local state was
-            # never cleaned up.  Auto-repair: delete stale positions,
-            # create emergency TradeRecord, and reset state to FLAT.
-            from datetime import datetime, timezone
-            from db.models import TradeRecord
-
+            # never cleaned up.
             has_mismatch = True
-            now = datetime.now(timezone.utc)
-            current_price = ticker_prices.get(symbol, None)
 
-            for rec in pos_recs:
-                strategy = rec.strategy
-
-                # Create emergency TradeRecord so PnL is not lost
-                exit_price = current_price if current_price else rec.entry_price
-                pnl = (exit_price - rec.entry_price) * rec.size
-                pnl_percent = (
-                    (pnl / (rec.entry_price * rec.size)) * 100
-                    if rec.entry_price * rec.size > 0
-                    else Decimal("0")
-                )
-                duration_minutes = int((now - rec.entry_time).total_seconds() / 60)
-
-                trade_rec = TradeRecord(
-                    symbol=symbol,
-                    strategy=strategy,
-                    side=rec.side or "long",
-                    entry_price=rec.entry_price,
-                    exit_price=exit_price,
-                    size=rec.size,
-                    entry_time=rec.entry_time,
-                    exit_time=now,
-                    pnl_usdt=pnl,
-                    pnl_percent=pnl_percent,
-                    duration_minutes=duration_minutes,
-                    exit_reason="reconciliation_force_close",
-                    trading_mode="live",
-                )
-                session.add(trade_rec)
-
-                session.delete(rec)
-
-                state_rec = (
-                    session.query(StrategyStateRecord)
-                    .filter_by(symbol=symbol, strategy=strategy)
-                    .first()
-                )
-                if state_rec is not None and state_rec.state in ("position", "reduced"):
-                    old_state = state_rec.state
-                    state_rec.state = "flat"
-                    if state_rec.state_data:
-                        state_data = dict(state_rec.state_data)
-                        balance = Decimal(str(state_data.get("usdt_balance", "0")))
-                        proceeds = exit_price * rec.size
-                        total_pnl = Decimal(str(state_data.get("total_pnl", "0")))
-                        state_data["usdt_balance"] = str(balance + proceeds)
-                        state_data["total_pnl"] = str(total_pnl + pnl)
-                        state_data["cooldown_remaining"] = 0
-                        state_rec.state_data = state_data
-                    repairs.append(
-                        f"force-closed {strategy}:{symbol} from {old_state} to flat "
-                        f"(exchange has zero balance, PnL={pnl:.2f} USDT)"
-                    )
-
-                # Evict in-memory cache so next tick rebuilds from corrected DB
-                _tick_key: _WorkerStateKey = (strategy, symbol)
-                if _tick_key in _worker_state:
-                    del _worker_state[_tick_key]
-
+            if not force_close_orphans:
+                checks.append({
+                    "check": f"exchange_position_{symbol}",
+                    "result": "warning",
+                    "detail": (
+                        f"local_size={local_size} vs exchange_size={exchange_size} "
+                        f"— force_close_orphans disabled, skipping repair"
+                    ),
+                })
                 logger.warning(
-                    "reconcile_exchange: force-closed stale position",
+                    "reconcile_exchange: stale position detected (repair disabled)",
                     symbol=symbol,
-                    strategy=strategy,
-                    local_size=str(rec.size),
+                    local_size=str(local_size),
                     exchange_size=str(exchange_size),
-                    pnl=str(pnl),
                 )
+            else:
+                from datetime import datetime, timezone
+                from db.models import TradeRecord
 
-            checks.append({
-                "check": f"exchange_position_{symbol}",
-                "result": "repaired",
-                "detail": (
-                    f"local_size={local_size} vs exchange_size={exchange_size} "
-                    f"— force-closed {len(pos_recs)} stale position(s), "
-                    f"created TradeRecord(s), reset state to flat"
-                ),
-            })
+                now = datetime.now(timezone.utc)
+                current_price = ticker_prices.get(symbol, None)
 
-            # Publish repair event
-            from core.events import EventChannel, EventType, get_publisher
-            publisher = get_publisher()
-            publisher.publish(
-                EventChannel.SYSTEM,
-                EventType.RECONCILIATION_REPAIRED,
-                {
-                    "repair_type": "position_force_closed",
-                    "symbol": symbol,
-                    "positions_closed": len(pos_recs),
-                    "local_size": str(local_size),
-                },
-            )
+                for rec in pos_recs:
+                    strategy = rec.strategy
 
-        elif not pos_recs and exchange_size > position_tolerance:
-            # Exchange has asset but NO local position — attempt reconstruction
-            from datetime import datetime, timezone
+                    exit_price = current_price if current_price else rec.entry_price
+                    pnl = (exit_price - rec.entry_price) * rec.size
+                    pnl_percent = (
+                        (pnl / (rec.entry_price * rec.size)) * 100
+                        if rec.entry_price * rec.size > 0
+                        else Decimal("0")
+                    )
+                    duration_minutes = int((now - rec.entry_time).total_seconds() / 60)
 
-            has_mismatch = True
-            reconstructed = False
+                    trade_rec = TradeRecord(
+                        symbol=symbol,
+                        strategy=strategy,
+                        side=rec.side or "long",
+                        entry_price=rec.entry_price,
+                        exit_price=exit_price,
+                        size=rec.size,
+                        entry_time=rec.entry_time,
+                        exit_time=now,
+                        pnl_usdt=pnl,
+                        pnl_percent=pnl_percent,
+                        duration_minutes=duration_minutes,
+                        exit_reason="reconciliation_force_close",
+                        trading_mode="live",
+                    )
+                    session.add(trade_rec)
 
-            try:
-                trades = executor.get_my_trades(symbol, limit=50)
-            except Exception as exc:
-                logger.error(
-                    "reconcile_exchange: failed to fetch trades for reconstruction",
-                    symbol=symbol,
-                    error=str(exc),
-                )
-                trades = []
+                    session.delete(rec)
 
-            if trades:
-                # Aggregate net position from recent trades
-                net_qty = Decimal("0")
-                buy_cost = Decimal("0")
-                buy_qty = Decimal("0")
-
-                for t in trades:
-                    qty = Decimal(str(t.get("qty", "0")))
-                    price = Decimal(str(t.get("price", "0")))
-                    if t.get("side") == "BUY":
-                        net_qty += qty
-                        buy_cost += qty * price
-                        buy_qty += qty
-                    else:
-                        net_qty -= qty
-
-                # Only reconstruct if net qty matches exchange balance (within tolerance)
-                if net_qty > 0 and abs(net_qty - exchange_size) / exchange_size <= Decimal("0.05"):
-                    avg_entry_price = buy_cost / buy_qty if buy_qty > 0 else Decimal("0")
-                    # Use the timestamp of the earliest unmatched buy
-                    entry_time_ms = trades[-1].get("time", 0)
-                    for t in trades:
-                        if t.get("side") == "BUY":
-                            entry_time_ms = t["time"]
-                            break
-                    entry_time = datetime.fromtimestamp(entry_time_ms / 1000, tz=timezone.utc)
-
-                    # Determine strategy — use first non-flat strategy state for this symbol
                     state_rec = (
                         session.query(StrategyStateRecord)
-                        .filter_by(symbol=symbol)
+                        .filter_by(symbol=symbol, strategy=strategy)
                         .first()
                     )
-                    strategy_name = state_rec.strategy if state_rec else "smart_hodler"
-
-                    # Create PositionRecord
-                    new_pos = PositionRecord(
-                        symbol=symbol,
-                        strategy=strategy_name,
-                        side="long",
-                        size=exchange_size,
-                        entry_price=avg_entry_price,
-                        entry_time=entry_time,
-                        highest_close=avg_entry_price,
-                        trailing_stop_price=avg_entry_price * Decimal("0.95"),
-                        hard_stop_price=avg_entry_price * Decimal("0.97"),
-                        scale_in_count=0,
-                        buy_signal_candles=0,
-                    )
-                    session.add(new_pos)
-
-                    # Update strategy state
-                    if state_rec is not None:
-                        state_rec.state = "position"
+                    if state_rec is not None and state_rec.state in ("position", "reduced"):
+                        old_state = state_rec.state
+                        state_rec.state = "flat"
                         if state_rec.state_data:
                             state_data = dict(state_rec.state_data)
                             balance = Decimal(str(state_data.get("usdt_balance", "0")))
-                            cost = exchange_size * avg_entry_price
-                            state_data["usdt_balance"] = str(balance - cost)
+                            proceeds = exit_price * rec.size
+                            total_pnl = Decimal(str(state_data.get("total_pnl", "0")))
+                            state_data["usdt_balance"] = str(balance + proceeds)
+                            state_data["total_pnl"] = str(total_pnl + pnl)
+                            state_data["cooldown_remaining"] = 0
                             state_rec.state_data = state_data
+                        repairs.append(
+                            f"force-closed {strategy}:{symbol} from {old_state} to flat "
+                            f"(exchange has zero balance, PnL={pnl:.2f} USDT)"
+                        )
 
-                    repairs.append(
-                        f"reconstructed {strategy_name}:{symbol} position "
-                        f"(size={exchange_size}, entry={avg_entry_price:.4f}) from exchange trades"
-                    )
-                    reconstructed = True
+                    _tick_key: _WorkerStateKey = (strategy, symbol)
+                    if _tick_key in _worker_state:
+                        del _worker_state[_tick_key]
 
                     logger.warning(
-                        "reconcile_exchange: reconstructed position from trades",
+                        "reconcile_exchange: force-closed stale position",
                         symbol=symbol,
-                        strategy=strategy_name,
-                        size=str(exchange_size),
-                        entry_price=str(avg_entry_price),
+                        strategy=strategy,
+                        local_size=str(rec.size),
+                        exchange_size=str(exchange_size),
+                        pnl=str(pnl),
+                    )
+
+                checks.append({
+                    "check": f"exchange_position_{symbol}",
+                    "result": "repaired",
+                    "detail": (
+                        f"local_size={local_size} vs exchange_size={exchange_size} "
+                        f"— force-closed {len(pos_recs)} stale position(s), "
+                        f"created TradeRecord(s), reset state to flat"
+                    ),
+                })
+
+                from core.events import EventChannel, EventType, get_publisher
+                publisher = get_publisher()
+                publisher.publish(
+                    EventChannel.SYSTEM,
+                    EventType.RECONCILIATION_REPAIRED,
+                    {
+                        "repair_type": "position_force_closed",
+                        "symbol": symbol,
+                        "positions_closed": len(pos_recs),
+                        "local_size": str(local_size),
+                    },
+                )
+                publisher.publish(
+                    EventChannel.SYSTEM,
+                    EventType.POSITION_FORCE_CLOSED,
+                    {
+                        "symbol": symbol,
+                        "positions_closed": len(pos_recs),
+                        "local_size": str(local_size),
+                        "exchange_size": str(exchange_size),
+                        "severity": "critical",
+                    },
+                )
+
+        elif not pos_recs and exchange_size > position_tolerance:
+            # Exchange has asset but NO local position
+            has_mismatch = True
+            reconstructed = False
+
+            if not recover_untracked:
+                checks.append({
+                    "check": f"exchange_position_{symbol}",
+                    "result": "warning",
+                    "detail": (
+                        f"Exchange has {exchange_size} {base_asset} "
+                        f"but NO local position record. recover_untracked disabled, skipping."
+                    ),
+                })
+                logger.warning(
+                    "reconcile_exchange: untracked asset detected (repair disabled)",
+                    symbol=symbol,
+                    exchange_size=str(exchange_size),
+                )
+            else:
+                from datetime import datetime, timezone
+
+                try:
+                    trades = executor.get_my_trades(symbol, limit=50)
+                except Exception as exc:
+                    logger.error(
+                        "reconcile_exchange: failed to fetch trades for reconstruction",
+                        symbol=symbol,
+                        error=str(exc),
+                    )
+                    trades = []
+
+                if trades:
+                    net_qty = Decimal("0")
+                    buy_cost = Decimal("0")
+                    buy_qty = Decimal("0")
+
+                    for t in trades:
+                        qty = Decimal(str(t.get("qty", "0")))
+                        price = Decimal(str(t.get("price", "0")))
+                        if t.get("side") == "BUY":
+                            net_qty += qty
+                            buy_cost += qty * price
+                            buy_qty += qty
+                        else:
+                            net_qty -= qty
+
+                    if net_qty > 0 and abs(net_qty - exchange_size) / exchange_size <= Decimal("0.05"):
+                        avg_entry_price = buy_cost / buy_qty if buy_qty > 0 else Decimal("0")
+                        entry_time_ms = trades[-1].get("time", 0)
+                        for t in trades:
+                            if t.get("side") == "BUY":
+                                entry_time_ms = t["time"]
+                                break
+                        entry_time = datetime.fromtimestamp(entry_time_ms / 1000, tz=timezone.utc)
+
+                        state_rec = (
+                            session.query(StrategyStateRecord)
+                            .filter_by(symbol=symbol)
+                            .first()
+                        )
+                        strategy_name = state_rec.strategy if state_rec else "smart_hodler"
+
+                        # Infer side from recent order intents, then strategy name
+                        inferred_side = "long"
+                        from db.models import OrderRecord as _OR
+                        recent_order = (
+                            session.query(_OR)
+                            .filter_by(symbol=symbol)
+                            .filter(_OR.intent.in_(["open_long", "open_short"]))
+                            .order_by(_OR.created_at.desc())
+                            .first()
+                        )
+                        if recent_order and recent_order.intent == "open_short":
+                            inferred_side = "short"
+                        elif "bear" in strategy_name.lower():
+                            inferred_side = "short"
+
+                        new_pos = PositionRecord(
+                            symbol=symbol,
+                            strategy=strategy_name,
+                            side=inferred_side,
+                            size=exchange_size,
+                            entry_price=avg_entry_price,
+                            entry_time=entry_time,
+                            highest_close=avg_entry_price,
+                            trailing_stop_price=avg_entry_price * Decimal("0.95"),
+                            hard_stop_price=avg_entry_price * Decimal("0.97"),
+                            scale_in_count=0,
+                            buy_signal_candles=0,
+                        )
+                        session.add(new_pos)
+
+                        if state_rec is not None:
+                            state_rec.state = "position"
+                            if state_rec.state_data:
+                                state_data = dict(state_rec.state_data)
+                                balance = Decimal(str(state_data.get("usdt_balance", "0")))
+                                cost = exchange_size * avg_entry_price
+                                state_data["usdt_balance"] = str(balance - cost)
+                                state_rec.state_data = state_data
+
+                        repairs.append(
+                            f"reconstructed {strategy_name}:{symbol} {inferred_side} position "
+                            f"(size={exchange_size}, entry={avg_entry_price:.4f}) from exchange trades"
+                        )
+                        reconstructed = True
+
+                        logger.warning(
+                            "reconcile_exchange: reconstructed position from trades",
+                            symbol=symbol,
+                            strategy=strategy_name,
+                            side=inferred_side,
+                            size=str(exchange_size),
+                            entry_price=str(avg_entry_price),
+                        )
+
+                        from core.events import EventChannel, EventType, get_publisher
+                        publisher = get_publisher()
+                        publisher.publish(
+                            EventChannel.SYSTEM,
+                            EventType.RECONCILIATION_REPAIRED,
+                            {
+                                "repair_type": "position_reconstructed",
+                                "symbol": symbol,
+                                "size": str(exchange_size),
+                                "entry_price": str(avg_entry_price),
+                            },
+                        )
+                        publisher.publish(
+                            EventChannel.SYSTEM,
+                            EventType.POSITION_RECONSTRUCTED,
+                            {
+                                "symbol": symbol,
+                                "strategy": strategy_name,
+                                "size": str(exchange_size),
+                                "entry_price": str(avg_entry_price),
+                                "severity": "critical",
+                            },
+                        )
+
+                if not reconstructed:
+                    checks.append({
+                        "check": f"exchange_position_{symbol}",
+                        "result": "critical",
+                        "detail": (
+                            f"Exchange has {exchange_size} {base_asset} "
+                            f"but NO local position record. Could not reconstruct from trade history."
+                        ),
+                    })
+                    logger.critical(
+                        "reconcile_exchange: UNTRACKED ASSET on exchange",
+                        symbol=symbol,
+                        exchange_size=str(exchange_size),
+                    )
+                    from core.events import EventChannel, EventType, get_publisher
+                    publisher = get_publisher()
+                    publisher.publish(
+                        EventChannel.SYSTEM,
+                        EventType.RECONCILIATION_MISMATCH,
+                        {
+                            "severity": "critical",
+                            "source": "exchange_untracked_asset",
+                            "symbol": symbol,
+                            "exchange_size": str(exchange_size),
+                        },
+                    )
+                else:
+                    checks.append({
+                        "check": f"exchange_position_{symbol}",
+                        "result": "repaired",
+                        "detail": (
+                            f"Reconstructed position for {symbol} "
+                            f"(exchange_size={exchange_size}) from trade history"
+                        ),
+                    })
+
+        else:
+            # Size mismatch — both sides have a position but sizes differ
+            has_mismatch = True
+
+            if not auto_repair:
+                checks.append({
+                    "check": f"exchange_position_{symbol}",
+                    "result": "warning",
+                    "detail": (
+                        f"local_size={local_size} vs exchange_size={exchange_size} "
+                        f"— auto_repair disabled, skipping size adjustment"
+                    ),
+                })
+                logger.warning(
+                    "reconcile_exchange: size mismatch detected (repair disabled)",
+                    symbol=symbol,
+                    local_size=str(local_size),
+                    exchange_size=str(exchange_size),
+                )
+            else:
+                if pos_recs:
+                    largest_rec = max(pos_recs, key=lambda r: r.size)
+                    old_size = largest_rec.size
+                    adjustment = exchange_size - local_size
+                    largest_rec.size = largest_rec.size + adjustment
+
+                    repairs.append(
+                        f"adjusted {largest_rec.strategy}:{symbol} size "
+                        f"from {old_size} to {largest_rec.size} "
+                        f"(exchange={exchange_size}, delta={adjustment})"
+                    )
+
+                    logger.warning(
+                        "reconcile_exchange: auto-repaired size mismatch",
+                        symbol=symbol,
+                        strategy=largest_rec.strategy,
+                        old_size=str(old_size),
+                        new_size=str(largest_rec.size),
+                        exchange_size=str(exchange_size),
                     )
 
                     from core.events import EventChannel, EventType, get_publisher
@@ -555,100 +708,69 @@ def _reconcile_with_exchange(
                         EventChannel.SYSTEM,
                         EventType.RECONCILIATION_REPAIRED,
                         {
-                            "repair_type": "position_reconstructed",
+                            "repair_type": "size_adjusted",
                             "symbol": symbol,
-                            "size": str(exchange_size),
-                            "entry_price": str(avg_entry_price),
+                            "old_size": str(old_size),
+                            "new_size": str(largest_rec.size),
+                            "exchange_size": str(exchange_size),
                         },
                     )
 
-            if not reconstructed:
-                # Could not auto-reconstruct — leave as critical alert
-                checks.append({
-                    "check": f"exchange_position_{symbol}",
-                    "result": "critical",
-                    "detail": (
-                        f"Exchange has {exchange_size} {base_asset} "
-                        f"but NO local position record. Could not reconstruct from trade history."
-                    ),
-                })
-                logger.critical(
-                    "reconcile_exchange: UNTRACKED ASSET on exchange",
-                    symbol=symbol,
-                    exchange_size=str(exchange_size),
-                )
-                from core.events import EventChannel, EventType, get_publisher
-                publisher = get_publisher()
-                publisher.publish(
-                    EventChannel.SYSTEM,
-                    EventType.RECONCILIATION_MISMATCH,
-                    {
-                        "severity": "critical",
-                        "source": "exchange_untracked_asset",
-                        "symbol": symbol,
-                        "exchange_size": str(exchange_size),
-                    },
-                )
-            else:
                 checks.append({
                     "check": f"exchange_position_{symbol}",
                     "result": "repaired",
                     "detail": (
-                        f"Reconstructed position for {symbol} "
-                        f"(exchange_size={exchange_size}) from trade history"
+                        f"local_size={local_size} → {exchange_size} "
+                        f"(adjusted to match exchange)"
                     ),
                 })
 
-        else:
-            # Size mismatch — both sides have a position but sizes differ
-            # Auto-repair: trust exchange, adjust local to match
-            has_mismatch = True
+    # ── Check F: Margin debt vs short positions (6.6.3) ────────────────
+    short_positions = (
+        session.query(PositionRecord)
+        .filter_by(side="short")
+        .all()
+    )
+    if short_positions:
+        try:
+            margin_assets = executor.get_margin_account()
+        except Exception as exc:
+            logger.warning(
+                "reconcile_exchange: failed to fetch margin account",
+                error=str(exc),
+            )
+            margin_assets = {}
 
-            # Find the primary position record and adjust its size
-            if pos_recs:
-                # Adjust the largest position record
-                largest_rec = max(pos_recs, key=lambda r: r.size)
-                old_size = largest_rec.size
-                adjustment = exchange_size - local_size
-                largest_rec.size = largest_rec.size + adjustment
+        for pos in short_positions:
+            base_asset = pos.symbol.replace("USDT", "")
+            borrowed = Decimal("0")
+            if base_asset in margin_assets:
+                borrowed = margin_assets[base_asset].get("borrowed", Decimal("0"))
 
-                repairs.append(
-                    f"adjusted {largest_rec.strategy}:{symbol} size "
-                    f"from {old_size} to {largest_rec.size} "
-                    f"(exchange={exchange_size}, delta={adjustment})"
-                )
-
+            debt_delta = abs(pos.size - borrowed)
+            if debt_delta <= position_tolerance:
+                checks.append({
+                    "check": f"margin_debt_{pos.symbol}",
+                    "result": "ok",
+                })
+            else:
+                has_mismatch = True
+                checks.append({
+                    "check": f"margin_debt_{pos.symbol}",
+                    "result": "warning",
+                    "detail": (
+                        f"short position size={pos.size} vs "
+                        f"margin borrowed={borrowed} (delta={debt_delta})"
+                    ),
+                })
                 logger.warning(
-                    "reconcile_exchange: auto-repaired size mismatch",
-                    symbol=symbol,
-                    strategy=largest_rec.strategy,
-                    old_size=str(old_size),
-                    new_size=str(largest_rec.size),
-                    exchange_size=str(exchange_size),
+                    "reconcile_exchange: margin debt mismatch",
+                    symbol=pos.symbol,
+                    strategy=pos.strategy,
+                    position_size=str(pos.size),
+                    margin_borrowed=str(borrowed),
+                    delta=str(debt_delta),
                 )
-
-                from core.events import EventChannel, EventType, get_publisher
-                publisher = get_publisher()
-                publisher.publish(
-                    EventChannel.SYSTEM,
-                    EventType.RECONCILIATION_REPAIRED,
-                    {
-                        "repair_type": "size_adjusted",
-                        "symbol": symbol,
-                        "old_size": str(old_size),
-                        "new_size": str(largest_rec.size),
-                        "exchange_size": str(exchange_size),
-                    },
-                )
-
-            checks.append({
-                "check": f"exchange_position_{symbol}",
-                "result": "repaired",
-                "detail": (
-                    f"local_size={local_size} → {exchange_size} "
-                    f"(adjusted to match exchange)"
-                ),
-            })
 
     return {
         "status": "mismatch" if has_mismatch else "ok",
@@ -707,93 +829,94 @@ def sync_exchange_balances(self) -> Dict[str, Any]:  # noqa: ANN001
 
         # Fetch live prices for open positions to calculate real equity
         with get_session() as session:
-            pos_recs = list(session.query(PositionRecord).all())
+            from db import state_data_lock
+            with state_data_lock(session):
+                pos_recs = list(session.query(PositionRecord).all())
 
-            positions_value = Decimal("0")
-            if pos_recs:
-                symbols = list({r.symbol for r in pos_recs})
-                live_prices = executor.get_ticker_prices(symbols)
+                positions_value = Decimal("0")
+                if pos_recs:
+                    symbols = list({r.symbol for r in pos_recs})
+                    live_prices = executor.get_ticker_prices(symbols)
 
-                for rec in pos_recs:
-                    price = live_prices.get(rec.symbol, rec.entry_price)
-                    positions_value += rec.size * price
+                    for rec in pos_recs:
+                        price = live_prices.get(rec.symbol, rec.entry_price)
+                        positions_value += rec.size * price
 
-            real_equity = exchange_usdt + positions_value
+                real_equity = exchange_usdt + positions_value
 
-            # Publish events so frontend updates immediately
-            from datetime import datetime, timezone
+                from datetime import datetime, timezone
 
-            now = datetime.now(timezone.utc)
+                now = datetime.now(timezone.utc)
 
-            publisher.publish(
-                EventChannel.PORTFOLIO,
-                EventType.BALANCE_UPDATED,
-                {
-                    "usdt_balance": str(exchange_usdt),
-                    "total_pnl": "0",
-                    "open_trades_count": len(pos_recs),
-                    "source": "exchange_sync",
-                },
-            )
-
-            from core.models import PortfolioSnapshot
-
-            snapshot = PortfolioSnapshot(
-                timestamp=now,
-                usdt_balance=exchange_usdt,
-                positions_value=positions_value,
-                total_equity=real_equity,
-                total_pnl=Decimal("0"),
-                open_positions_count=len(pos_recs),
-            )
-            publisher.publish_model(
-                EventChannel.PORTFOLIO, EventType.EQUITY_UPDATED, snapshot,
-            )
-
-            # Auto-repair balance drift if above threshold
-            state_recs = list(session.query(StrategyStateRecord).all())
-            local_usdt_total = Decimal("0")
-            for rec in state_recs:
-                data = rec.state_data or {}
-                local_usdt_total += Decimal(str(data.get("usdt_balance", 0)))
-
-            usdt_drift = exchange_usdt - local_usdt_total
-
-            repaired = False
-            bal_threshold = settings.reconciliation.balance_drift_threshold
-            if abs(usdt_drift) > bal_threshold and state_recs:
-                # Distribute the drift proportionally across strategy states
-                if local_usdt_total > 0:
-                    for rec in state_recs:
-                        data = rec.state_data or {}
-                        old_bal = Decimal(str(data.get("usdt_balance", 0)))
-                        if old_bal <= 0:
-                            continue
-                        share = old_bal / local_usdt_total
-                        new_bal = old_bal + (usdt_drift * share)
-                        rec.state_data = {
-                            **data,
-                            "usdt_balance": str(new_bal),
-                            "equity": str(new_bal + positions_value),
-                        }
-                else:
-                    # All states at zero — assign evenly
-                    per_state = exchange_usdt / len(state_recs)
-                    for rec in state_recs:
-                        data = rec.state_data or {}
-                        rec.state_data = {
-                            **data,
-                            "usdt_balance": str(per_state),
-                            "equity": str(per_state),
-                        }
-                repaired = True
-
-                logger.warning(
-                    "balance_sync: auto-repaired USDT drift",
-                    local=str(local_usdt_total),
-                    exchange=str(exchange_usdt),
-                    drift=str(usdt_drift),
+                publisher.publish(
+                    EventChannel.PORTFOLIO,
+                    EventType.BALANCE_UPDATED,
+                    {
+                        "usdt_balance": str(exchange_usdt),
+                        "total_pnl": "0",
+                        "open_trades_count": len(pos_recs),
+                        "source": "exchange_sync",
+                    },
                 )
+
+                from core.models import PortfolioSnapshot
+
+                snapshot = PortfolioSnapshot(
+                    timestamp=now,
+                    usdt_balance=exchange_usdt,
+                    positions_value=positions_value,
+                    total_equity=real_equity,
+                    total_pnl=Decimal("0"),
+                    open_positions_count=len(pos_recs),
+                )
+                publisher.publish_model(
+                    EventChannel.PORTFOLIO, EventType.EQUITY_UPDATED, snapshot,
+                )
+
+                # Auto-repair balance drift if above threshold
+                state_recs = list(session.query(StrategyStateRecord).all())
+                local_usdt_total = Decimal("0")
+                for rec in state_recs:
+                    data = rec.state_data or {}
+                    local_usdt_total += Decimal(str(data.get("usdt_balance", 0)))
+
+                usdt_drift = exchange_usdt - local_usdt_total
+
+                repaired = False
+                bal_threshold = settings.reconciliation.balance_drift_threshold
+                if abs(usdt_drift) > bal_threshold and state_recs:
+                    # Distribute the drift proportionally across strategy states
+                    if local_usdt_total > 0:
+                        for rec in state_recs:
+                            data = rec.state_data or {}
+                            old_bal = Decimal(str(data.get("usdt_balance", 0)))
+                            if old_bal <= 0:
+                                continue
+                            share = old_bal / local_usdt_total
+                            new_bal = old_bal + (usdt_drift * share)
+                            rec.state_data = {
+                                **data,
+                                "usdt_balance": str(new_bal),
+                                "equity": str(new_bal + positions_value),
+                            }
+                    else:
+                        # All states at zero — assign evenly
+                        per_state = exchange_usdt / len(state_recs)
+                        for rec in state_recs:
+                            data = rec.state_data or {}
+                            rec.state_data = {
+                                **data,
+                                "usdt_balance": str(per_state),
+                                "equity": str(per_state),
+                            }
+                    repaired = True
+
+                    logger.warning(
+                        "balance_sync: auto-repaired USDT drift",
+                        local=str(local_usdt_total),
+                        exchange=str(exchange_usdt),
+                        drift=str(usdt_drift),
+                    )
 
         summary: Dict[str, Any] = {
             "status": "ok",
@@ -866,7 +989,7 @@ def _sync_open_orders(
             orphan = OrderRecord(
                 symbol=order["symbol"],
                 side=order["side"].lower(),
-                order_type=order["type"].lower()[:10],
+                order_type=order["type"].lower(),
                 amount=order["origQty"],
                 price=order.get("price"),
                 status=order.get("status", "NEW").lower(),
@@ -885,6 +1008,18 @@ def _sync_open_orders(
                 order_id=exchange_order_id,
                 side=order["side"],
                 type=order["type"],
+            )
+            from core.events import EventChannel, EventType, get_publisher
+            get_publisher().publish(
+                EventChannel.SYSTEM,
+                EventType.ORDER_ORPHAN_DETECTED,
+                {
+                    "symbol": order["symbol"],
+                    "exchange_order_id": exchange_order_id,
+                    "side": order["side"],
+                    "type": order["type"],
+                    "severity": "warning",
+                },
             )
 
     return {
@@ -972,11 +1107,33 @@ def _check_pending_stop_orders(
                 symbol=record.symbol,
                 order_id=record.exchange_order_id,
             )
+            from core.events import EventChannel, EventType, get_publisher
+            get_publisher().publish(
+                EventChannel.SYSTEM,
+                EventType.STOP_ORDER_SYNCED,
+                {
+                    "symbol": record.symbol,
+                    "exchange_order_id": record.exchange_order_id,
+                    "new_status": "FILLED",
+                    "severity": "info",
+                },
+            )
         elif exchange_status in ("CANCELED", "EXPIRED", "REJECTED"):
             record.status = "cancelled"
             record.exchange_status = exchange_status
             record.reconciliation_status = "synced"
             cancelled_stops += 1
+            from core.events import EventChannel, EventType, get_publisher
+            get_publisher().publish(
+                EventChannel.SYSTEM,
+                EventType.STOP_ORDER_SYNCED,
+                {
+                    "symbol": record.symbol,
+                    "exchange_order_id": record.exchange_order_id,
+                    "new_status": exchange_status,
+                    "severity": "info",
+                },
+            )
         elif exchange_status in ("NEW", "PARTIALLY_FILLED"):
             # Still open — no action needed
             record.reconciliation_status = "synced"
@@ -1083,25 +1240,28 @@ def _apply_fill_recovery(
     # ── Update OrderRecord with exchange fill data ────────────────────
     filled_qty = Decimal(str(exchange_data.get("executedQty", order_record.amount)))
     avg_price = Decimal(str(exchange_data.get("price", "0")))
-    # Prefer cummulativeQuoteQty / executedQty for avg price if available
-    cum_quote = exchange_data.get("cummulativeQuoteQty")
+    # Prefer cumulativeQuoteQty / executedQty for avg price if available
+    cum_quote = exchange_data.get("cumulativeQuoteQty")
     if cum_quote and filled_qty > 0:
         avg_price = Decimal(str(cum_quote)) / filled_qty
 
     order_record.status = "filled"
-    order_record.filled_amount = float(filled_qty)
-    order_record.avg_fill_price = float(avg_price)
+    order_record.filled_amount = filled_qty
+    order_record.avg_fill_price = avg_price
     order_record.exchange_status = exchange_data.get("status", "FILLED")
     order_record.reconciliation_status = "recovered"
     order_record.reconciled_at = now
 
-    # ── Determine strategy for this symbol ────────────────────────────
-    state_rec = (
-        session.query(StrategyStateRecord)
-        .filter_by(symbol=symbol)
-        .first()
-    )
-    strategy_name = state_rec.strategy if state_rec else "unknown"
+    # ── Determine strategy for this order ─────────────────────────────
+    if order_record.strategy:
+        strategy_name = order_record.strategy
+    else:
+        state_rec = (
+            session.query(StrategyStateRecord)
+            .filter_by(symbol=symbol)
+            .first()
+        )
+        strategy_name = state_rec.strategy if state_rec else "unknown"
 
     # ── Route by intent ───────────────────────────────────────────────
     if intent in ("open_long", "open_short"):
@@ -1186,13 +1346,15 @@ def _apply_fill_recovery(
         else:
             exit_reason = "manual"
 
-        # Create TradeRecord — idempotency check
-        existing_trade = (
-            session.query(TradeRecord)
-            .filter_by(symbol=symbol, strategy=strategy_name)
-            .filter(TradeRecord.exit_time >= now - timedelta(seconds=60))
-            .first()
-        )
+        # Create TradeRecord — idempotency check via exchange_order_id
+        eid = order_record.exchange_order_id
+        existing_trade = None
+        if eid:
+            existing_trade = (
+                session.query(TradeRecord)
+                .filter_by(exchange_order_id=eid)
+                .first()
+            )
         if existing_trade is None:
             trade_rec = TradeRecord(
                 symbol=symbol,
@@ -1208,6 +1370,7 @@ def _apply_fill_recovery(
                 duration_minutes=duration_minutes,
                 exit_reason=exit_reason,
                 trading_mode="live",
+                exchange_order_id=eid,
             )
             session.add(trade_rec)
 
@@ -1428,6 +1591,18 @@ def _recover_pending_orders(
                 symbol=record.symbol,
                 order_id=record.exchange_order_id,
                 description=description,
+            )
+            from core.events import EventChannel, EventType, get_publisher
+            get_publisher().publish(
+                EventChannel.SYSTEM,
+                EventType.FILL_RECOVERED,
+                {
+                    "symbol": record.symbol,
+                    "intent": record.intent,
+                    "exchange_order_id": record.exchange_order_id,
+                    "description": description,
+                    "severity": "critical",
+                },
             )
         elif exchange_status in ("CANCELED", "EXPIRED", "REJECTED"):
             record.status = "cancelled"
@@ -1754,11 +1929,16 @@ def run_reconciliation(self) -> Dict[str, Any]:  # noqa: ANN001
 
             # ── Phase 6.6: Position reconciliation v2 ────────────────────
             with get_session() as session:
-                exchange_result = _reconcile_with_exchange(
-                    session, executor, tracked_symbols,
-                    balance_tolerance=recon_cfg.balance_drift_threshold,
-                    position_tolerance=recon_cfg.size_mismatch_threshold,
-                )
+                from db import state_data_lock
+                with state_data_lock(session):
+                    exchange_result = _reconcile_with_exchange(
+                        session, executor, tracked_symbols,
+                        balance_tolerance=recon_cfg.balance_drift_threshold,
+                        position_tolerance=recon_cfg.size_mismatch_threshold,
+                        auto_repair=recon_cfg.auto_repair,
+                        force_close_orphans=recon_cfg.force_close_orphans,
+                        recover_untracked=recon_cfg.recover_untracked,
+                    )
 
             if exchange_result["status"] == "mismatch":
                 total_mismatches += 1
@@ -1829,27 +2009,60 @@ def run_reconciliation(self) -> Dict[str, Any]:  # noqa: ANN001
             summary,
         )
 
-    # ── Alert on mismatches (task 4.9) ──────────────────────────────
+    # ── Alert on mismatches (phase 6.8.2 — severity-based) ─────────
     if total_mismatches > 0 and settings.alerting.enabled:
         try:
-            from core.alerting import get_alerter
+            from core.alerting import AlertSeverity, get_alerter
 
             alerter = get_alerter()
             if alerter.enabled and settings.alerting.alert_on_reconciliation:
-                mismatch_checks = [
-                    c
-                    for d in details
-                    for c in d.get("checks", [])
-                    if c.get("result") in ("mismatch", "warning")
-                ]
-                detail_lines = [c.get("detail", c["check"]) for c in mismatch_checks[:5]]
-                if exchange_result and exchange_result.get("status") == "mismatch":
-                    for c in exchange_result.get("checks", []):
-                        if c.get("result") == "warning":
-                            detail_lines.append(c.get("detail", c["check"]))
-                alerter.alert_reconciliation_mismatch(
-                    details="\n".join(detail_lines) or f"{total_mismatches} mismatch(es) found",
-                )
+                min_sev = AlertSeverity(settings.alerting.alert_min_severity)
+
+                # Map exchange repairs to severity-based alerts
+                if exchange_result and exchange_result.get("repairs"):
+                    _REPAIR_SEVERITY = {
+                        "position_force_closed": AlertSeverity.CRITICAL,
+                        "position_reconstructed": AlertSeverity.CRITICAL,
+                        "untracked_asset": AlertSeverity.CRITICAL,
+                        "size_mismatch": AlertSeverity.WARNING,
+                        "balance_drift": AlertSeverity.WARNING,
+                    }
+                    for repair in exchange_result["repairs"]:
+                        rtype = repair.get("repair_type", "unknown")
+                        sev = _REPAIR_SEVERITY.get(rtype, AlertSeverity.WARNING)
+                        alerter.alert_reconciliation(
+                            severity=sev,
+                            event_type=rtype,
+                            details=repair.get("detail", f"{rtype}: {repair.get('symbol', '?')}"),
+                            min_severity=min_sev,
+                        )
+
+                # Map fill recovery events
+                if recovery_result and recovery_result.get("recovered", 0) > 0:
+                    alerter.alert_reconciliation(
+                        severity=AlertSeverity.CRITICAL,
+                        event_type="fill_recovered",
+                        details=f"Recovered {recovery_result['recovered']} pending fill(s)",
+                        min_severity=min_sev,
+                    )
+
+                # Fallback: generic mismatch alert if no granular events fired
+                if not (exchange_result and exchange_result.get("repairs")) and not (
+                    recovery_result and recovery_result.get("recovered", 0) > 0
+                ):
+                    mismatch_checks = [
+                        c
+                        for d in details
+                        for c in d.get("checks", [])
+                        if c.get("result") in ("mismatch", "warning")
+                    ]
+                    detail_lines = [c.get("detail", c["check"]) for c in mismatch_checks[:5]]
+                    alerter.alert_reconciliation(
+                        severity=AlertSeverity.WARNING,
+                        event_type="reconciliation_mismatch",
+                        details="\n".join(detail_lines) or f"{total_mismatches} mismatch(es) found",
+                        min_severity=min_sev,
+                    )
         except Exception:
             pass  # fire-and-forget
 

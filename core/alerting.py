@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 from decimal import Decimal
+from enum import Enum
 from typing import Any, Optional
 
 import requests
@@ -34,6 +35,20 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 _TELEGRAM_API = "https://api.telegram.org"
+
+
+class AlertSeverity(str, Enum):
+    """Severity levels for reconciliation alerts."""
+
+    INFO = "info"
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+    @classmethod
+    def meets_threshold(cls, severity: "AlertSeverity", threshold: "AlertSeverity") -> bool:
+        """Return True if *severity* is >= *threshold*."""
+        order = {cls.INFO: 0, cls.WARNING: 1, cls.CRITICAL: 2}
+        return order[severity] >= order[threshold]
 
 
 class Alerter:
@@ -154,9 +169,43 @@ class Alerter:
         *,
         details: str,
     ) -> None:
-        """Alert on reconciliation mismatch."""
+        """Alert on reconciliation mismatch (legacy)."""
         self.send(
             f"\u26a0\ufe0f <b>RECONCILIATION MISMATCH</b>\n"
+            f"{details}"
+        )
+
+    def alert_reconciliation(
+        self,
+        *,
+        severity: AlertSeverity,
+        event_type: str,
+        details: str,
+        min_severity: AlertSeverity = AlertSeverity.WARNING,
+    ) -> None:
+        """Severity-aware reconciliation alert.
+
+        Only sends to Telegram if *severity* >= *min_severity*.
+        INFO-level events are only logged, never sent.
+        """
+        if not AlertSeverity.meets_threshold(severity, min_severity):
+            logger.info(
+                "alerter.reconciliation_below_threshold",
+                severity=severity.value,
+                event_type=event_type,
+            )
+            return
+
+        if severity == AlertSeverity.CRITICAL:
+            icon = "\U0001f6a8"  # 🚨
+            header = "CRITICAL RECONCILIATION"
+        else:
+            icon = "\u26a0\ufe0f"  # ⚠️
+            header = "RECONCILIATION WARNING"
+
+        self.send(
+            f"{icon} <b>{header}</b>\n"
+            f"Event: {event_type}\n"
             f"{details}"
         )
 

@@ -159,7 +159,7 @@ O `order_records` atual já tem os campos essenciais, mas faltam:
   - Calcular USDT esperado: `sum(strategy_state.usdt_balance)` + `sum(positions * current_price)` ≈ `exchange_total_equity`
   - Se drift > threshold configurável → ajustar `usdt_balance` na strategy state para match
   - **Implementado:** `sync_exchange_balances` task (Celery Beat a cada 2 min) + auto-repair proporcional + recovery sync on startup
-- [ ] **6.6.3** **Margin debt check** (novo para shorts): consultar `GET /sapi/v1/margin/account` e verificar que `borrowed` amounts correspondem a short positions abertas no GG
+- [x] **6.6.3** **Margin debt check** (novo para shorts): consultar `GET /sapi/v1/margin/account` e verificar que `borrowed` amounts correspondem a short positions abertas no GG
 - [x] **6.6.4** Toda reparação gera um `ReconciliationEvent` com: timestamp, tipo de reparo, valores antes/depois, exchange_data de referência
 
 ---
@@ -205,19 +205,19 @@ O `order_records` atual já tem os campos essenciais, mas faltam:
 
 ### 🔴 Bugs (crash ou dados incorretos em produção)
 
-- [ ] **BUG-1** — `get_ticker_prices()` chamado sem argumento obrigatório
+- [x] **BUG-1** — `get_ticker_prices()` chamado sem argumento obrigatório
   - **Arquivo:** `core/tasks/_reconciliation.py` linha ~326
   - **Problema:** `executor.get_ticker_prices()` é chamado sem `symbols`, mas a assinatura é `get_ticker_prices(self, symbols: list[str])`. Causa `TypeError` em toda execução de `_reconcile_with_exchange` quando tenta buscar preços para calcular PnL no force-close.
   - **Impacto:** Position reconciliation v2 (6.6) falha silenciosamente — posições fantasma não são force-closed corretamente.
   - **Fix:** Passar `symbols` como argumento: `executor.get_ticker_prices(symbols)`
 
-- [ ] **BUG-2** — Typo `cummulativeQuoteQty` impede cálculo correto de avg_price no fill recovery
+- [x] **BUG-2** — Typo `cummulativeQuoteQty` impede cálculo correto de avg_price no fill recovery
   - **Arquivo:** `core/tasks/_reconciliation.py` linha ~1087
   - **Problema:** `_apply_fill_recovery` usa `exchange_data.get("cummulativeQuoteQty")` (duplo 'm'), mas `_parse_order_response` normaliza o campo como `"cumulativeQuoteQty"` (um 'm'). O campo nunca é encontrado no dict.
   - **Impacto:** O fallback usa `exchange_data.get("price", "0")` — que para MARKET orders é `"0.00000000"`. Resultado: `avg_price = 0`, posições reconstruídas com entry_price zero, PnL completamente errado.
   - **Fix:** Corrigir para `exchange_data.get("cumulativeQuoteQty")`
 
-- [ ] **BUG-3** — `filled_amount` e `avg_fill_price` atribuídos como `float` em vez de `Decimal`
+- [x] **BUG-3** — `filled_amount` e `avg_fill_price` atribuídos como `float` em vez de `Decimal`
   - **Arquivo:** `core/tasks/_reconciliation.py` linhas ~1092-1093
   - **Problema:** `order_record.filled_amount = float(filled_qty)` e `order_record.avg_fill_price = float(avg_price)` — a coluna DB é `Numeric(20,8)` (Decimal). Conversão para float introduz imprecisão de ponto flutuante em dados financeiros (e.g. `0.1` → `0.09999999...`).
   - **Impacto:** Perda de precisão em registros de fill — pode causar divergências acumulativas em PnL e balance checks.
@@ -225,25 +225,25 @@ O `order_records` atual já tem os campos essenciais, mas faltam:
 
 ### 🟡 Inconsistências (comportamento diverge da especificação/config)
 
-- [ ] **BUG-4** — Config flags `auto_repair` / `force_close_orphans` / `recover_untracked` nunca são verificados
+- [x] **BUG-4** — Config flags `auto_repair` / `force_close_orphans` / `recover_untracked` nunca são verificados
   - **Arquivo:** `core/tasks/_reconciliation.py` (todo o módulo)
   - **Problema:** `ReconciliationConfig` define `auto_repair`, `force_close_orphans` e `recover_untracked` como flags configuráveis, mas o código de reconciliação **nunca consulta esses valores** — repara incondicionalmente.
   - **Impacto:** O operador não consegue desligar auto-repair em emergência sem desligar toda a reconciliação (`enabled=False`). Comportamento misleading.
   - **Fix:** Guardar cada bloco de repair com `if recon_cfg.auto_repair:`, `if recon_cfg.force_close_orphans:`, `if recon_cfg.recover_untracked:`
 
-- [ ] **BUG-5** — `order_type` truncado a 10 caracteres corrompe dados de ordens órfãs
+- [x] **BUG-5** — `order_type` truncado a 10 caracteres corrompe dados de ordens órfãs
   - **Arquivo:** `core/tasks/_reconciliation.py` linha ~869
   - **Problema:** `order_type=order["type"].lower()[:10]` trunca tipos como `"stop_loss_limit"` (15 chars) para `"stop_loss_"`. A coluna `OrderRecord.order_type` é `String(10)`.
   - **Impacto:** Dados de ordens órfãs ficam incorretos; queries futuras por `order_type='stop_loss_limit'` nunca encontram estes registros.
   - **Fix:** Expandir a coluna para `String(20)` (migration) ou mapear para um valor curto (e.g. `"sll"` / `"sl"`)
 
-- [ ] **BUG-6** — `OrderRecord` não tem coluna `strategy` — fill recovery pode reconstruir na strategy errada
+- [x] **BUG-6** — `OrderRecord` não tem coluna `strategy` — fill recovery pode reconstruir na strategy errada
   - **Arquivo:** `core/tasks/_reconciliation.py` (múltiplas funções de recovery)
   - **Problema:** Quando fill recovery precisa determinar a strategy de uma ordem, faz `session.query(StrategyStateRecord).filter_by(symbol=symbol).first()`. Se múltiplas strategies operam o mesmo símbolo (e.g. SmartHodler + BearGuard em BTCUSDT), retorna uma arbitrária.
   - **Impacto:** Recovery pode abrir/fechar posição na strategy errada — cascata de inconsistências.
   - **Fix:** Adicionar coluna `strategy VARCHAR(50)` ao `OrderRecord` (nullable, preencher no write-ahead via `self._strategy`). Migration necessária.
 
-- [ ] **BUG-7** — `ReconciliationConfig.interval_minutes` é dead code — Beat interval hardcoded
+- [x] **BUG-7** — `ReconciliationConfig.interval_minutes` é dead code — Beat interval hardcoded
   - **Arquivo:** `core/celery_app.py` linha ~79
   - **Problema:** O `beat_schedule` usa `"schedule": 120.0` (hardcoded 2 min). O campo `interval_minutes` do `ReconciliationConfig` nunca é lido pelo Beat — alterar o valor no DB/config não tem efeito.
   - **Impacto:** Operador pensa que pode ajustar o intervalo em runtime, mas não pode.
@@ -251,25 +251,25 @@ O `order_records` atual já tem os campos essenciais, mas faltam:
 
 ### 🟠 Fraquezas (funcionam mas com riscos)
 
-- [ ] **BUG-8** — Race condition entre `sync_exchange_balances` e `run_reconciliation`
+- [x] **BUG-8** — Race condition entre `sync_exchange_balances` e `run_reconciliation`
   - **Arquivo:** `core/tasks/_reconciliation.py` (ambos tasks)
   - **Problema:** Ambos rodam a cada 2 minutos, podem sobrepor-se no tempo, e ambos lêem/escrevem em `StrategyStateRecord.state_data` (balance, equity). Sem lock ou serialização, um pode fazer stale read e sobrescrever o repair do outro.
   - **Impacto:** Reparos de balance podem ser revertidos silenciosamente; em edge cases, loop infinito de "drift detectado → reparado → sobrescrito → drift detectado de novo".
   - **Fix:** Usar `task_acks_late=True` + `solo` pool, ou adicionar `advisory lock` no DB antes de escrever state_data, ou consolidar ambos em um único task.
 
-- [ ] **BUG-9** — Position reconstruction assume `side="long"` incondicionalmente
+- [x] **BUG-9** — Position reconstruction assume `side="long"` incondicionalmente
   - **Arquivo:** `core/tasks/_reconciliation.py` linha ~535
   - **Problema:** Na reconstrução de posição (asset na exchange sem PositionRecord local), `side` é hardcoded como `"long"`. Se o asset é resultado de um short parcialmente fechado (BearGuard), a posição será reconstruída incorretamente como long.
   - **Impacto:** BearGuard shorts reconstrídos como longs terão PnL invertido e decisões de close erradas.
   - **Fix:** Inferir `side` a partir do `StrategyStateRecord` (se strategy é bear_guard → short) ou do `intent` de ordens recentes no símbolo.
 
-- [ ] **BUG-10** — Idempotency check de close usa janela de 60s — insuficiente
+- [x] **BUG-10** — Idempotency check de close usa janela de 60s — insuficiente
   - **Arquivo:** `core/tasks/_reconciliation.py` linha ~1157
   - **Problema:** O check de idempotência para `close_long`/`stop_loss` verifica `TradeRecord` com `exit_time >= now - timedelta(seconds=60)`. Mas o recovery age padrão é 120s (ordem precisa ter >2 min para entrar no recovery). Ou seja, o trade original pode ter sido criado há >60s quando o recovery roda → check não encontra → duplica.
   - **Impacto:** Trades duplicados em cenário de crash + restart lento (>60s entre fill real e recovery).
   - **Fix:** Verificar por `exchange_order_id` no `TradeRecord` (precisa adicionar campo) ou expandir janela para `recovery_age_seconds + margem`.
 
-- [ ] **BUG-11** — Startup recovery sem retry dedicado nem alerta de falha
+- [x] **BUG-11** — Startup recovery sem retry dedicado nem alerta de falha
   - **Arquivo:** `core/celery_app.py` linhas ~142-175
   - **Problema:** Se a API da Binance estiver down no momento do startup, o recovery síncrono falha (catch genérico logga warning) e depende do ciclo assíncrono de 2 min. Não há retry imediato nem alerta de que pending orders ficaram sem resolver.
   - **Impacto:** Worker inicia com estado potencialmente inconsistente. Se o primeiro tick executar antes do ciclo de 2 min resolver, pode duplicar ordens ou operar com balance errado.
@@ -282,8 +282,8 @@ O `order_records` atual já tem os campos essenciais, mas faltam:
 > Visibilidade completa do estado de reconciliação.
 > Depende de: 6.7.
 
-- [ ] **6.8.1** Novos `EventType`s: `FILL_RECOVERED`, `ORDER_ORPHAN_DETECTED`, `POSITION_FORCE_CLOSED`, `POSITION_RECONSTRUCTED`, `STOP_ORDER_SYNCED`
-- [ ] **6.8.2** Alert escalation por severidade:
+- [x] **6.8.1** Novos `EventType`s: `FILL_RECOVERED`, `ORDER_ORPHAN_DETECTED`, `POSITION_FORCE_CLOSED`, `POSITION_RECONSTRUCTED`, `STOP_ORDER_SYNCED`
+- [x] **6.8.2** Alert escalation por severidade:
   - **INFO**: sync ok, stop order status atualizado
   - **WARNING**: size mismatch corrigido, balance drift ajustado
   - **CRITICAL**: posição force-closed, asset não rastreado detectado, fill recovery executado

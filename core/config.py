@@ -75,7 +75,7 @@ class ReconciliationConfig(BaseModel):
     """Runtime-tunable reconciliation parameters (namespace ``reconciliation``)."""
 
     enabled: bool = Field(default=True, description="Master switch for reconciliation task")
-    interval_minutes: int = Field(default=2, ge=1, le=60, description="Beat interval in minutes (requires worker restart)")
+    interval_minutes: int = Field(default=2, ge=1, le=60, description="Beat interval in minutes (env GG_RECONCILIATION_INTERVAL_MIN, requires restart)")
     auto_repair: bool = Field(default=True, description="Auto-repair mismatches (positions, balances)")
     force_close_orphans: bool = Field(default=True, description="Force-close stale positions not on exchange")
     recover_untracked: bool = Field(default=True, description="Reconstruct positions found on exchange but missing locally")
@@ -473,6 +473,10 @@ class AlertingConfig(BaseModel):
     alert_on_kill_switch: bool = Field(default=True, description="Alert on kill-switch activation")
     alert_on_reconciliation: bool = Field(default=True, description="Alert on reconciliation mismatches")
     alert_on_error: bool = Field(default=False, description="Alert on task errors")
+    alert_min_severity: str = Field(
+        default="warning",
+        description="Minimum severity for reconciliation alerts: info, warning, critical",
+    )
 
 
 # ── System Configuration ──────────────────────────────────────────────────────
