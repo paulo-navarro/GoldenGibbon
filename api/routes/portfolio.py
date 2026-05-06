@@ -104,7 +104,7 @@ def get_portfolio(
     last_updated: datetime | None = None
 
     if mode == "live":
-        # Live mode: get real USDT balance from exchange
+        # Live mode: get real USDT balance and all asset values from exchange
         try:
             from core.execution.binance import BinanceExecutor
             from core.portfolio import PortfolioManager as _PM
@@ -117,6 +117,21 @@ def get_portfolio(
             balances = account.get("balances", {})
             usdt_bal = balances.get("USDT", {})
             usdt_balance = usdt_bal.get("free", Decimal("0")) + usdt_bal.get("locked", Decimal("0"))
+
+            # Calculate positions_value from ALL non-USDT exchange assets
+            # Exchange is authoritative — overrides candle-based estimate
+            positions_value = Decimal("0")
+            non_usdt_assets = {
+                asset: data["free"] + data["locked"]
+                for asset, data in balances.items()
+                if asset != "USDT" and (data["free"] + data["locked"]) > 0
+            }
+            if non_usdt_assets:
+                price_symbols = [f"{asset}USDT" for asset in non_usdt_assets]
+                live_prices = _executor.get_ticker_prices(price_symbols)
+                for asset, qty in non_usdt_assets.items():
+                    price = live_prices.get(f"{asset}USDT", Decimal("0"))
+                    positions_value += qty * price
         except Exception:
             # Fallback to latest snapshot if Binance is unreachable
             snap_stmt = (

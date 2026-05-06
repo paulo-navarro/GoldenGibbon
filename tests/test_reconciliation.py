@@ -1661,6 +1661,7 @@ class TestRecoverPendingOrders:
                 pnl_percent=Decimal("10"),
                 duration_minutes=120,
                 exit_reason="manual",
+                exchange_order_id="66666",
                 trading_mode="live",
             ))
 

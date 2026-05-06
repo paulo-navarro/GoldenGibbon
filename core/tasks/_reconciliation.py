@@ -594,6 +594,10 @@ def _reconcile_with_exchange(
                         )
                         session.add(new_pos)
 
+                        state_rec = next(
+                            (sr for sr in state_recs if sr.strategy == strategy_name),
+                            state_recs[0] if state_recs else None,
+                        )
                         if state_rec is not None:
                             state_rec.state = "position"
                             if state_rec.state_data:
@@ -844,33 +848,54 @@ def sync_exchange_balances(self) -> Dict[str, Any]:  # noqa: ANN001
         if usdt_data:
             exchange_usdt = usdt_data.get("free", Decimal("0")) + usdt_data.get("locked", Decimal("0"))
 
+        # Calculate positions value from ALL non-USDT assets on exchange
+        # This captures crypto value even if GG lost track of a position
+        non_usdt_assets = {
+            asset: data["free"] + data["locked"]
+            for asset, data in balances.items()
+            if asset != "USDT" and (data["free"] + data["locked"]) > 0
+        }
+
+        positions_value = Decimal("0")
+        if non_usdt_assets:
+            # Build USDT pair symbols for price lookup
+            price_symbols = [f"{asset}USDT" for asset in non_usdt_assets]
+            live_prices = executor.get_ticker_prices(price_symbols)
+
+            for asset, qty in non_usdt_assets.items():
+                price = live_prices.get(f"{asset}USDT", Decimal("0"))
+                positions_value += qty * price
+
+        real_equity = exchange_usdt + positions_value
+
         # Fetch live prices for open positions to calculate real equity
         with get_session() as session:
             from db import state_data_lock
             with state_data_lock(session):
                 pos_recs = list(session.query(PositionRecord).all())
 
-                positions_value = Decimal("0")
-                if pos_recs:
-                    symbols = list({r.symbol for r in pos_recs})
-                    live_prices = executor.get_ticker_prices(symbols)
-
-                    for rec in pos_recs:
-                        price = live_prices.get(rec.symbol, rec.entry_price)
-                        positions_value += rec.size * price
-
-                real_equity = exchange_usdt + positions_value
-
                 from datetime import datetime, timezone
 
                 now = datetime.now(timezone.utc)
+
+                # Compute cumulative PnL from closed trades
+                from sqlalchemy import func as sa_func, select as sa_select
+                from db.models import TradeRecord
+                total_pnl = (
+                    session.execute(
+                        sa_select(sa_func.sum(TradeRecord.pnl_usdt)).where(
+                            TradeRecord.trading_mode == "live"
+                        )
+                    ).scalar()
+                    or Decimal("0")
+                )
 
                 publisher.publish(
                     EventChannel.PORTFOLIO,
                     EventType.BALANCE_UPDATED,
                     {
                         "usdt_balance": str(exchange_usdt),
-                        "total_pnl": "0",
+                        "total_pnl": str(total_pnl),
                         "open_trades_count": len(pos_recs),
                         "source": "exchange_sync",
                     },
@@ -883,7 +908,7 @@ def sync_exchange_balances(self) -> Dict[str, Any]:  # noqa: ANN001
                     usdt_balance=exchange_usdt,
                     positions_value=positions_value,
                     total_equity=real_equity,
-                    total_pnl=Decimal("0"),
+                    total_pnl=total_pnl,
                     open_positions_count=len(pos_recs),
                 )
                 publisher.publish_model(
@@ -1317,6 +1342,13 @@ def _apply_fill_recovery(
                 return f"ambiguous strategy, recovery skipped: {symbol}"
         else:
             strategy_name = "unknown"
+
+    # Resolve the single state record for subsequent updates
+    state_rec = (
+        session.query(StrategyStateRecord)
+        .filter_by(symbol=symbol, strategy=strategy_name)
+        .first()
+    )
 
     # ── Route by intent ───────────────────────────────────────────────
     if intent in ("open_long", "open_short"):

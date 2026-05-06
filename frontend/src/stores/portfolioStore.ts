@@ -85,6 +85,7 @@ export const usePortfolioStore = create<PortfolioStore>()((set) => ({
       case 'position_opened': {
         const position: Position = {
           symbol: data.symbol as string,
+          side: (data.side as 'long' | 'short') ?? 'long',
           size: data.size as string,
           entry_price: data.entry_price as string,
           entry_time: data.entry_time as string,
@@ -113,6 +114,7 @@ export const usePortfolioStore = create<PortfolioStore>()((set) => ({
       case 'position_updated': {
         const position: Position = {
           symbol: data.symbol as string,
+          side: (data.side as 'long' | 'short') ?? 'long',
           size: data.size as string,
           entry_price: data.entry_price as string,
           entry_time: data.entry_time as string,
