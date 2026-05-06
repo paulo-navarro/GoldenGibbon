@@ -175,6 +175,8 @@ def _include_routes(application: FastAPI) -> None:
         ("api.routes.config", "/api/strategy/config", ["config"]),
         ("api.routes.symbols", "/api/config/symbols", ["symbols"]),
         ("api.routes.app_config", "/api/config", ["app-config"]),
+        ("api.routes.reconciliation", "/api/reconciliation", ["reconciliation"]),
+        ("api.routes.exchange_orders", "/api/exchange/orders", ["exchange-orders"]),
     ]
 
     for module_path, prefix, tags in route_modules:

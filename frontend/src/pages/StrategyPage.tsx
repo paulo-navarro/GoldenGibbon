@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useParams } from 'react-router-dom';
 import Accordion from '@mui/material/Accordion';
 import AccordionDetails from '@mui/material/AccordionDetails';
 import AccordionSummary from '@mui/material/AccordionSummary';
@@ -502,6 +503,8 @@ function ParameterTuning({ strategyName }: { strategyName: string }) {
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function StrategyPage() {
+  const { strategyName } = useParams<{ strategyName: string }>();
+
   const { isLoading: statesLoading, error: statesError } = useStrategyState();
   const { isLoading: signalsLoading, error: signalsError } = useStrategySignals();
 
@@ -521,7 +524,11 @@ export default function StrategyPage() {
       ]),
     );
 
-    return keys.sort((a, b) => {
+    const filtered = strategyName
+      ? keys.filter((k) => k.endsWith(`:${strategyName}`))
+      : keys;
+
+    return filtered.sort((a, b) => {
       const aEntries = getCondEntries(storeConditions[a], storeSignals[a]);
       const bEntries = getCondEntries(storeConditions[b], storeSignals[b]);
       const aMet = aEntries.filter(([, v]) => v === true).length;
@@ -529,12 +536,16 @@ export default function StrategyPage() {
       if (bMet !== aMet) return bMet - aMet;
       return a.localeCompare(b);
     });
-  }, [storeStates, storeSignals, storeConditions]);
+  }, [storeStates, storeSignals, storeConditions, strategyName]);
+
+  const title = strategyName
+    ? strategyName.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+    : 'Strategy';
 
   if (isLoading) {
     return (
       <Box sx={{ p: 2 }}>
-        <Typography variant="h5" sx={{ mb: 3 }}>Strategy</Typography>
+        <Typography variant="h5" sx={{ mb: 3 }}>{title}</Typography>
         <Skeleton variant="rounded" height={300} />
       </Box>
     );
@@ -543,7 +554,7 @@ export default function StrategyPage() {
   if (error) {
     return (
       <Box sx={{ p: 2 }}>
-        <Typography variant="h5" sx={{ mb: 3 }}>Strategy</Typography>
+        <Typography variant="h5" sx={{ mb: 3 }}>{title}</Typography>
         <Alert severity="error" variant="outlined">Failed to load strategy state</Alert>
       </Box>
     );
@@ -552,9 +563,9 @@ export default function StrategyPage() {
   if (stratKeys.length === 0) {
     return (
       <Box sx={{ p: 2 }}>
-        <Typography variant="h5" sx={{ mb: 3 }}>Strategy</Typography>
+        <Typography variant="h5" sx={{ mb: 3 }}>{title}</Typography>
         <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
-          No active strategies — start a backtest or paper-trade session to see data here.
+          No active pairs for this strategy.
         </Typography>
       </Box>
     );
@@ -562,7 +573,7 @@ export default function StrategyPage() {
 
   return (
     <Box sx={{ p: 2 }}>
-      <Typography variant="h5" sx={{ mb: 2 }}>Strategy</Typography>
+      <Typography variant="h5" sx={{ mb: 2 }}>{title}</Typography>
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
         {stratKeys.map((k) => (
           <StrategyCard key={k} stratKey={k} />

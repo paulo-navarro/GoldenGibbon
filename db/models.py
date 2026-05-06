@@ -432,6 +432,30 @@ class SymbolConfigRecord(Base):
         return f"<SymbolConfigRecord(symbol={self.symbol}, enabled={self.enabled})>"
 
 
+# ── Reconciliation Run History (task 6.8.4/6.8.5) ─────────────────────────────
+
+class ReconciliationRunRecord(Base):
+    """Persisted result of a single run_reconciliation() execution."""
+    __tablename__ = "reconciliation_runs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    pairs_checked: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    mismatches: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    repairs: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    summary: Mapped[Dict] = mapped_column(JSONB, nullable=False, default=dict)
+    events: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+
+    __table_args__ = (
+        Index("ix_reconciliation_runs_started_at", "started_at"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ReconciliationRunRecord(id={self.id}, status={self.status}, started_at={self.started_at})>"
+
+
 # ── Exports ──────────────────────────────────────────────────────────────────
 
 __all__ = [
@@ -445,4 +469,5 @@ __all__ = [
     "StrategyConfigRecord",
     "SymbolConfigRecord",
     "AppConfigRecord",
+    "ReconciliationRunRecord",
 ]

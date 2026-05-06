@@ -37,7 +37,9 @@ export const DRAWER_WIDTH = 240;
 const NAV_ITEMS = [
   { label: 'Dashboard', path: '/', icon: <DashboardIcon /> },
   { label: 'Prices', path: '/prices', icon: <PaidIcon /> },
-  { label: 'Strategy', path: '/strategy', icon: <ShowChartIcon /> },
+  { label: 'Smart Hodler', path: '/strategy/smart_hodler', icon: <ShowChartIcon /> },
+  { label: 'Mean Reversion', path: '/strategy/mean_reversion', icon: <ShowChartIcon /> },
+  { label: 'Bear Guard', path: '/strategy/bear_guard', icon: <ShowChartIcon /> },
   { label: 'Portfolio', path: '/portfolio', icon: <AccountBalanceWalletIcon /> },
   { label: 'Activity', path: '/activity', icon: <SwapHorizIcon /> },
   { label: 'Metrics', path: '/metrics', icon: <BarChartIcon /> },

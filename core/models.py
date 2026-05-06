@@ -746,6 +746,76 @@ class BacktestResult(BaseModel):
     )
 
 
+# ── Reconciliation API models (tasks 6.8.4/6.8.5) ────────────────────────────
+
+
+class ReconciliationEvent(BaseModel):
+    """Single notable event from a reconciliation run."""
+    type: str
+    severity: str
+    symbol: Optional[str] = None
+    detail: str
+
+
+class ReconciliationStatusResponse(BaseModel):
+    """Latest reconciliation snapshot — GET /api/reconciliation/status."""
+    last_run_at: Optional[datetime] = None
+    status: str = "unknown"
+    pairs_checked: int = 0
+    mismatches: int = 0
+    repairs: int = 0
+    events: List[ReconciliationEvent] = Field(default_factory=list)
+    pending_orders: int = 0
+    orphan_orders: int = 0
+    summary: Optional[Dict[str, Any]] = None
+
+    model_config = ConfigDict(
+        json_encoders={datetime: lambda v: v.isoformat()},
+    )
+
+
+class ReconciliationHistoryEntry(BaseModel):
+    """One past reconciliation run — used in GET /api/reconciliation/history."""
+    id: int
+    started_at: datetime
+    finished_at: datetime
+    status: str
+    pairs_checked: int
+    mismatches: int
+    repairs: int
+    events: List[ReconciliationEvent] = Field(default_factory=list)
+
+    model_config = ConfigDict(
+        json_encoders={datetime: lambda v: v.isoformat()},
+    )
+
+
+# ── Exchange Orders API model (task 6.8.6) ────────────────────────────────────
+
+
+class ExchangeOrder(BaseModel):
+    """Single order from the exchange-centric view."""
+    exchange_order_id: Optional[str] = None
+    symbol: str
+    side: str
+    type: str
+    status: str
+    orig_qty: Decimal
+    executed_qty: Decimal = Decimal("0")
+    price: Optional[Decimal] = None
+    stop_price: Optional[Decimal] = None
+    time: Optional[datetime] = None
+    source: str
+    intent: Optional[str] = None
+
+    model_config = ConfigDict(
+        json_encoders={
+            Decimal: lambda v: str(v),
+            datetime: lambda v: v.isoformat(),
+        },
+    )
+
+
 # ── Exports ──────────────────────────────────────────────────────────────────
 
 __all__ = [
@@ -775,4 +845,8 @@ __all__ = [
     "BacktestResult",
     "PortfolioSnapshot",
     "TimeInForce",
+    "ReconciliationEvent",
+    "ReconciliationStatusResponse",
+    "ReconciliationHistoryEntry",
+    "ExchangeOrder",
 ]

@@ -1012,6 +1012,110 @@ class TestReconcileWithExchange:
             assert trade.pnl_usdt == Decimal("5000")
 
 
+# ── Phase 6.6.3: Margin debt for shorts (6.9.18) ────────────────────────────
+
+
+class TestMarginDebtCheck:
+    """Verify Check F: margin borrowed amount vs short position size."""
+
+    def _make_executor(self, balances: dict, *, margin_account=None) -> MagicMock:
+        executor = MagicMock()
+        executor.get_account_info.return_value = {
+            "balances": balances,
+            "can_trade": True,
+        }
+        executor.get_ticker_prices.return_value = {}
+        executor.get_my_trades.return_value = []
+        if margin_account is not None:
+            executor.get_margin_account.return_value = margin_account
+        return executor
+
+    def _seed_short_position(self, symbol="BTCUSDT", size=Decimal("0.05")):
+        with get_session() as session:
+            now = datetime.now(timezone.utc)
+            session.add(
+                StrategyStateRecord(
+                    symbol=symbol,
+                    strategy="bear_guard",
+                    state="position",
+                    consecutive_buy_candles=0,
+                    state_data={
+                        "run_id": "test",
+                        "usdt_balance": "10000",
+                        "equity": "10000",
+                        "total_pnl": "0",
+                        "cooldown_remaining": 0,
+                    },
+                )
+            )
+            session.add(
+                PositionRecord(
+                    symbol=symbol,
+                    strategy="bear_guard",
+                    side="short",
+                    size=size,
+                    entry_price=Decimal("50000"),
+                    entry_time=now,
+                    highest_close=Decimal("50000"),
+                    trailing_stop_price=Decimal("52500"),
+                    hard_stop_price=Decimal("55000"),
+                    scale_in_count=0,
+                    buy_signal_candles=0,
+                )
+            )
+
+    def test_margin_debt_matches_short_position(self):
+        self._seed_short_position(size=Decimal("0.05"))
+
+        executor = self._make_executor(
+            {"USDT": {"free": Decimal("10000"), "locked": Decimal("0")}},
+            margin_account={"BTC": {"borrowed": Decimal("0.05"), "free": Decimal("0"), "locked": Decimal("0")}},
+        )
+
+        from core.tasks import _reconcile_with_exchange
+
+        with get_session() as session:
+            result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+
+        debt_check = next(c for c in result["checks"] if c["check"] == "margin_debt_BTCUSDT")
+        assert debt_check["result"] == "ok"
+
+    def test_margin_debt_mismatch_warns(self):
+        self._seed_short_position(size=Decimal("0.05"))
+
+        executor = self._make_executor(
+            {"USDT": {"free": Decimal("10000"), "locked": Decimal("0")}},
+            margin_account={"BTC": {"borrowed": Decimal("0.02"), "free": Decimal("0"), "locked": Decimal("0")}},
+        )
+
+        from core.tasks import _reconcile_with_exchange
+
+        with get_session() as session:
+            result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+
+        assert result["status"] == "mismatch"
+        debt_check = next(c for c in result["checks"] if c["check"] == "margin_debt_BTCUSDT")
+        assert debt_check["result"] == "warning"
+        assert "0.05" in debt_check["detail"]
+        assert "0.02" in debt_check["detail"]
+
+    def test_margin_api_failure_falls_back_to_warning(self):
+        self._seed_short_position(size=Decimal("0.05"))
+
+        executor = self._make_executor(
+            {"USDT": {"free": Decimal("10000"), "locked": Decimal("0")}},
+        )
+        executor.get_margin_account.side_effect = Exception("margin API down")
+
+        from core.tasks import _reconcile_with_exchange
+
+        with get_session() as session:
+            result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+
+        debt_check = next(c for c in result["checks"] if c["check"] == "margin_debt_BTCUSDT")
+        assert debt_check["result"] == "warning"
+
+
 # ── Phase 6.4: Open Order Sync ───────────────────────────────────────────────
 
 
@@ -1695,3 +1799,194 @@ class TestRecoverPendingWithoutId:
 
         assert result["orders_checked"] == 0
         executor.get_all_orders.assert_not_called()
+
+
+# ── Phase 6.8.3: Telegram alerts for reconciliation events ──────────────────
+
+
+class TestReconciliationTelegramAlerts:
+    """Verify Telegram alerts fire for order sync / fill recovery / orphan events (6.8.3)."""
+
+    def _run_with_mocked_results(
+        self,
+        *,
+        recovery_result=None,
+        lost_result=None,
+        sync_result=None,
+        stop_result=None,
+        orphan_stop_result=None,
+        exchange_result=None,
+        alerting_enabled=True,
+        alert_min_severity="warning",
+    ):
+        """
+        Run run_reconciliation with live_trading.enabled=True but all
+        exchange sub-functions mocked to return preset results.
+        """
+        from core.config import AlertingConfig, get_settings
+
+        settings = get_settings()
+        alert_cfg = AlertingConfig(
+            enabled=alerting_enabled,
+            alert_on_reconciliation=True,
+            alert_min_severity=alert_min_severity,
+        )
+        orig_alerting = settings.alerting
+        orig_live = settings.live_trading.enabled
+        settings.alerting = alert_cfg
+        settings.live_trading.enabled = True
+
+        defaults = {
+            "recovery": recovery_result or {"status": "ok", "recovered": 0, "cancelled": 0, "still_open": 0, "orders_checked": 0},
+            "lost": lost_result or {"status": "ok", "lost": 0, "matched": 0, "orders_checked": 0},
+            "sync": sync_result or {"status": "ok", "orphans_found": 0, "orders_synced": 0},
+            "stop": stop_result or {"status": "ok", "filled_stops": 0, "cancelled_stops": 0, "expired_stops": 0, "pending_stops_checked": 0},
+            "orphan_stop": orphan_stop_result or {"status": "ok", "orphan_stops_cancelled": 0, "stop_orders_checked": 0},
+            "exchange": exchange_result or {"status": "ok", "checks": [], "repairs": []},
+        }
+
+        mock_executor = MagicMock()
+        mock_executor.get_open_orders.return_value = []
+
+        try:
+            with (
+                patch("core.tasks._reconciliation._recover_pending_orders", return_value=defaults["recovery"]),
+                patch("core.tasks._reconciliation._recover_pending_orders_without_id", return_value=defaults["lost"]),
+                patch("core.tasks._reconciliation._sync_open_orders", return_value=defaults["sync"]),
+                patch("core.tasks._reconciliation._check_pending_stop_orders", return_value=defaults["stop"]),
+                patch("core.tasks._reconciliation._cancel_orphan_stop_orders", return_value=defaults["orphan_stop"]),
+                patch("core.tasks._reconciliation._reconcile_with_exchange", return_value=defaults["exchange"]),
+                patch("core.execution.binance.BinanceExecutor.from_settings", return_value=mock_executor),
+                patch("core.alerting.requests.post") as mock_post,
+                patch("core.alerting._alerter", None),
+            ):
+                mock_post.return_value = MagicMock(ok=True)
+
+                from core.alerting import init_alerter
+                if alerting_enabled:
+                    init_alerter("123:ABC", "456")
+                else:
+                    init_alerter("", "")
+
+                from core.tasks import run_reconciliation
+                run_reconciliation.apply()
+
+                return mock_post
+        finally:
+            settings.alerting = orig_alerting
+            settings.live_trading.enabled = orig_live
+            from core.alerting import reset_alerter
+            reset_alerter()
+
+    def test_orphan_orders_trigger_warning_alert(self):
+        """Orphan orders detected → WARNING Telegram alert."""
+        mock_post = self._run_with_mocked_results(
+            sync_result={"status": "ok", "orphans_found": 2, "orders_synced": 3},
+        )
+        mock_post.assert_called()
+        texts = [c[1]["json"]["text"] for c in mock_post.call_args_list]
+        assert any("orphan order" in t for t in texts)
+
+    def test_filled_stops_trigger_critical_alert(self):
+        """Stop orders found filled → CRITICAL Telegram alert."""
+        mock_post = self._run_with_mocked_results(
+            stop_result={"status": "ok", "filled_stops": 1, "cancelled_stops": 0, "expired_stops": 0, "pending_stops_checked": 1},
+        )
+        mock_post.assert_called()
+        texts = [c[1]["json"]["text"] for c in mock_post.call_args_list]
+        assert any("stop order" in t.lower() for t in texts)
+        assert any("CRITICAL" in t for t in texts)
+
+    def test_orphan_stops_cancelled_trigger_warning(self):
+        """Orphan stops cancelled → WARNING Telegram alert.
+
+        The orchestrator only calls _cancel_orphan_stop_orders when
+        executor.get_open_orders() returns a non-empty list, so we
+        override the mock executor's return value for this test.
+        """
+        from core.config import AlertingConfig, get_settings
+
+        settings = get_settings()
+        alert_cfg = AlertingConfig(
+            enabled=True,
+            alert_on_reconciliation=True,
+            alert_min_severity="warning",
+        )
+        orig_alerting = settings.alerting
+        orig_live = settings.live_trading.enabled
+        settings.alerting = alert_cfg
+        settings.live_trading.enabled = True
+
+        mock_executor = MagicMock()
+        mock_executor.get_open_orders.return_value = [
+            {"orderId": 1, "symbol": "BTCUSDT", "type": "STOP_LOSS_LIMIT", "side": "SELL"},
+        ]
+
+        orphan_stop_ret = {"status": "ok", "orphan_stops_cancelled": 3, "stop_orders_checked": 5}
+
+        try:
+            with (
+                patch("core.tasks._reconciliation._recover_pending_orders", return_value={"status": "ok", "recovered": 0, "cancelled": 0, "still_open": 0, "orders_checked": 0}),
+                patch("core.tasks._reconciliation._recover_pending_orders_without_id", return_value={"status": "ok", "lost": 0, "matched": 0, "orders_checked": 0}),
+                patch("core.tasks._reconciliation._sync_open_orders", return_value={"status": "ok", "orphans_found": 0, "orders_synced": 0}),
+                patch("core.tasks._reconciliation._check_pending_stop_orders", return_value={"status": "ok", "filled_stops": 0, "cancelled_stops": 0, "expired_stops": 0, "pending_stops_checked": 0}),
+                patch("core.tasks._reconciliation._cancel_orphan_stop_orders", return_value=orphan_stop_ret),
+                patch("core.tasks._reconciliation._reconcile_with_exchange", return_value={"status": "ok", "checks": [], "repairs": []}),
+                patch("core.execution.binance.BinanceExecutor.from_settings", return_value=mock_executor),
+                patch("core.alerting.requests.post") as mock_post,
+                patch("core.alerting._alerter", None),
+            ):
+                mock_post.return_value = MagicMock(ok=True)
+                from core.alerting import init_alerter
+                init_alerter("123:ABC", "456")
+
+                from core.tasks import run_reconciliation
+                run_reconciliation.apply()
+
+                mock_post.assert_called()
+                texts = [c[1]["json"]["text"] for c in mock_post.call_args_list]
+                assert any("orphan stop" in t.lower() for t in texts)
+        finally:
+            settings.alerting = orig_alerting
+            settings.live_trading.enabled = orig_live
+            from core.alerting import reset_alerter
+            reset_alerter()
+
+    def test_lost_orders_trigger_warning(self):
+        """Lost orders → WARNING Telegram alert."""
+        mock_post = self._run_with_mocked_results(
+            lost_result={"status": "ok", "lost": 2, "matched": 0, "orders_checked": 2},
+        )
+        mock_post.assert_called()
+        texts = [c[1]["json"]["text"] for c in mock_post.call_args_list]
+        assert any("LOST" in t for t in texts)
+
+    def test_fill_recovery_triggers_critical_alert(self):
+        """Fill recovery → CRITICAL Telegram alert."""
+        mock_post = self._run_with_mocked_results(
+            recovery_result={"status": "ok", "recovered": 1, "cancelled": 0, "still_open": 0, "orders_checked": 1},
+        )
+        mock_post.assert_called()
+        texts = [c[1]["json"]["text"] for c in mock_post.call_args_list]
+        assert any("CRITICAL" in t and "fill_recovered" in t for t in texts)
+
+    def test_no_events_no_alerts(self):
+        """Clean reconciliation → no Telegram alerts."""
+        mock_post = self._run_with_mocked_results()
+        mock_post.assert_not_called()
+
+    def test_min_severity_critical_filters_warnings(self):
+        """With min_severity=critical, WARNING events don't trigger alerts."""
+        mock_post = self._run_with_mocked_results(
+            sync_result={"status": "ok", "orphans_found": 2, "orders_synced": 0},
+            alert_min_severity="critical",
+        )
+        mock_post.assert_not_called()
+
+    def test_alerting_disabled_no_alerts(self):
+        """Alerting disabled → no Telegram calls even with events."""
+        mock_post = self._run_with_mocked_results(
+            recovery_result={"status": "ok", "recovered": 3, "cancelled": 0, "still_open": 0, "orders_checked": 3},
+            alerting_enabled=False,
+        )
+        mock_post.assert_not_called()

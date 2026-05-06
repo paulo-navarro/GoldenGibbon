@@ -13,7 +13,7 @@ import { fetchApi, postApi, patchApi, deleteApi } from './client';
 import type { Candle, PriceResponse } from '../types/market';
 import type { ExitProximityResponse, PortfolioResponse, PortfolioSnapshot } from '../types/portfolio';
 import type { Trade, TradeStatsResponse } from '../types/trades';
-import type { Order } from '../types/orders';
+import type { Order, ExchangeOrder } from '../types/orders';
 import type {
   StrategyStateResponse,
   StrategySignalSnapshot,
@@ -257,6 +257,30 @@ export function useOrders(params: UseOrdersParams = {}) {
   }, [query.data]);
 
   return query;
+}
+
+// ── Exchange Orders ─────────────────────────────────────────────────────────
+
+export interface UseExchangeOrdersParams {
+  source?: string;
+  symbol?: string;
+  status?: string;
+  limit?: number;
+}
+
+export function useExchangeOrders(params: UseExchangeOrdersParams = {}) {
+  const { source, symbol, status, limit } = params;
+
+  return useQuery({
+    queryKey: ['exchange-orders', source, symbol, status, limit],
+    queryFn: () =>
+      fetchApi<ExchangeOrder[]>('/api/exchange/orders/', {
+        source,
+        symbol,
+        status,
+        limit,
+      }),
+  });
 }
 
 // ── Strategy ─────────────────────────────────────────────────────────────────

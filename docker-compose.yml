@@ -225,6 +225,9 @@ services:
       context: ./frontend
       target: dev
     container_name: trade-frontend
+    environment:
+      VITE_API_TARGET: "http://api:8000"
+      VITE_WS_TARGET: "ws://api:8000"
     volumes:
       - ./frontend:/app
       - /app/node_modules

@@ -287,19 +287,20 @@ O `order_records` atual já tem os campos essenciais, mas faltam:
   - **INFO**: sync ok, stop order status atualizado
   - **WARNING**: size mismatch corrigido, balance drift ajustado
   - **CRITICAL**: posição force-closed, asset não rastreado detectado, fill recovery executado
-- [ ] **6.8.3** Telegram alert para eventos CRITICAL (integração com alerter existente)
-- [ ] **6.8.4** API endpoint `GET /api/reconciliation/status` — último resultado de reconciliação, ordens pending, divergências ativas
-- [ ] **6.8.5** API endpoint `GET /api/reconciliation/history` — histórico de reparos com filtro por tipo e severidade
-- [ ] **6.8.6** API endpoint `GET /api/exchange/orders` — lista **todas** as ordens da conta na exchange (abertas + recentes do DB), cada uma com campo `source`:
+- [x] **6.8.3** Telegram alert para eventos CRITICAL (integração com alerter existente)
+- [x] **6.8.4** API endpoint `GET /api/reconciliation/status` — último resultado de reconciliação, ordens pending, divergências ativas
+- [x] **6.8.5** API endpoint `GET /api/reconciliation/history` — histórico de reparos com filtro por tipo e severidade
+- [x] **6.8.6** API endpoint `GET /api/exchange/orders` — lista **todas** as ordens da conta na exchange (abertas + recentes do DB), cada uma com campo `source`:
   - `source: "gg"` — ordem criada pelo GoldenGibbon (tem `intent` preenchido)
   - `source: "orphan"` — ordem detectada na exchange sem correspondência no GG
   - Response inclui: `exchange_order_id`, `symbol`, `side`, `type`, `status`, `origQty`, `executedQty`, `price`, `stopPrice`, `time`, `source`, `intent`
-- [ ] **6.8.7** Frontend — página/tab **Exchange Orders**:
+- [x] **6.8.7** Frontend — at Activities page **Orders**, must reflect only exchange orders:
   - Tabela com todas as ordens (GG + órfãs) ordenadas por timestamp
   - Ordens órfãs destacadas com badge visual (ex: tag "ORPHAN" em amarelo/laranja) para identificação imediata
   - Filtros: por source (GG / Orphan / All), por symbol, por status (open / filled / cancelled)
   - Ordens GG mostram o `intent` (OPEN_LONG, STOP_LOSS, etc.); órfãs mostram "—"
-- [ ] **6.8.8** Frontend — no painel de posições existente, indicador de ordens abertas associadas (ex: "1 stop order ativa") com link para a tab de Exchange Orders
+  - Break "strategies" page in 3, one for each strategy, left menu must show the estrategy name
+
 
 ---
 
@@ -308,41 +309,126 @@ O `order_records` atual já tem os campos essenciais, mas faltam:
 > Depende de: tudo.
 
 ### Exchange Query Layer (6.1)
-- [ ] **6.9.1** Test: `get_open_orders()` retorna lista formatada corretamente (mock da API)
-- [ ] **6.9.2** Test: `get_open_orders()` sem symbol retorna todas
-- [ ] **6.9.3** Test: `get_order_status()` para ordem FILLED, NEW, CANCELED
-- [ ] **6.9.4** Test: `cancel_order()` quando ordem já foi executada → retorna graciosamente
+- [x] **6.9.1** Test: `get_open_orders()` retorna lista formatada corretamente (mock da API)
+- [x] **6.9.2** Test: `get_open_orders()` sem symbol retorna todas
+- [x] **6.9.3** Test: `get_order_status()` para ordem FILLED, NEW, CANCELED
+- [x] **6.9.4** Test: `cancel_order()` quando ordem já foi executada → retorna graciosamente
 
 ### Crash-Safe Order Flow (6.3)
-- [ ] **6.9.5** Test: `_place_and_fill()` grava OrderRecord PENDING antes de chamar API
-- [ ] **6.9.6** Test: se API falha, OrderRecord fica REJECTED (não PENDING infinito)
-- [ ] **6.9.7** Test: `exchange_order_id` é persistido após fill
+- [x] **6.9.5** Test: `_place_and_fill()` grava OrderRecord PENDING antes de chamar API
+- [x] **6.9.6** Test: se API falha, OrderRecord fica REJECTED (não PENDING infinito)
+- [x] **6.9.7** Test: `exchange_order_id` é persistido após fill
 
 ### Open Order Sync (6.4)
-- [ ] **6.9.8** Test: stop order executada na exchange → detectada e marcada para recovery
-- [ ] **6.9.9** Test: ordem órfã na exchange → criada como ORPHAN no DB
-- [ ] **6.9.10** Test: stop order sem posição correspondente → cancelada
+- [x] **6.9.8** Test: stop order executada na exchange → detectada e marcada para recovery
+- [x] **6.9.9** Test: ordem órfã na exchange → criada como ORPHAN no DB
+- [x] **6.9.10** Test: stop order sem posição correspondente → cancelada
 
 ### Fill Recovery (6.5)
-- [ ] **6.9.11** Test: ordem PENDING com fill na exchange → posição criada no GG
-- [ ] **6.9.12** Test: recovery idempotente — rodar duas vezes não duplica posição
-- [ ] **6.9.13** Test: ordem PENDING sem exchange_order_id → match por heurística (symbol, side, qty, time)
-- [ ] **6.9.14** Test: ordem PENDING sem match na exchange → marcada como LOST
+- [x] **6.9.11** Test: ordem PENDING com fill na exchange → posição criada no GG
+- [x] **6.9.12** Test: recovery idempotente — rodar duas vezes não duplica posição
+- [x] **6.9.13** Test: ordem PENDING sem exchange_order_id → match por heurística (symbol, side, qty, time)
+- [x] **6.9.14** Test: ordem PENDING sem match na exchange → marcada como LOST
 
 ### Position Reconciliation v2 (6.6)
-- [ ] **6.9.15** Test: asset na exchange sem posição no GG → posição reconstruída
-- [ ] **6.9.16** Test: posição no GG sem asset na exchange → force close com TradeRecord
-- [ ] **6.9.17** Test: size mismatch → PositionRecord ajustado
-- [ ] **6.9.18** Test: margin debt check para shorts
+- [x] **6.9.15** Test: asset na exchange sem posição no GG → posição reconstruída
+- [x] **6.9.16** Test: posição no GG sem asset na exchange → force close com TradeRecord
+- [x] **6.9.17** Test: size mismatch → PositionRecord ajustado
+- [x] **6.9.18** Test: margin debt check para shorts
 
 ### Orchestrator (6.7)
-- [ ] **6.9.19** Test: fluxo completo — pending recovery → open order sync → position reconciliation
-- [ ] **6.9.20** Test: startup recovery roda antes do primeiro tick
+- [x] **6.9.19** Test: fluxo completo — pending recovery → open order sync → position reconciliation
+- [x] **6.9.20** Test: startup recovery roda antes do primeiro tick
 
 ### Exchange Orders API & Frontend (6.8)
-- [ ] **6.9.21** Test: `GET /api/exchange/orders` retorna ordens GG com `source="gg"` e intent preenchido
-- [ ] **6.9.22** Test: `GET /api/exchange/orders` retorna ordens órfãs com `source="orphan"` e intent nulo
-- [ ] **6.9.23** Test: filtro por source funciona (`?source=orphan` retorna só órfãs)
+- [x] **6.9.21** Test: `GET /api/exchange/orders` retorna ordens GG com `source="gg"` e intent preenchido
+- [x] **6.9.22** Test: `GET /api/exchange/orders` retorna ordens órfãs com `source="orphan"` e intent nulo
+- [x] **6.9.23** Test: filtro por source funciona (`?source=orphan` retorna só órfãs)
+
+---
+
+## BUGS v2 — Second Code Review (Post-fix audit)
+
+> Bugs, inconsistências e fraquezas detectados na segunda revisão após os fixes de BUG-1 a BUG-11.
+> Numerados a partir de BUG-12 para continuidade.
+
+### 🔴 Bugs (crash ou dados incorretos em produção)
+
+- [ ] **BUG-12** — `stop_price` field mapping errado no endpoint de exchange orders
+  - **Arquivo:** `api/routes/exchange_orders.py` linha ~47
+  - **Problema:** `_to_exchange_order()` mapeia `stop_price=rec.limit_price`. Para ordens STOP_LOSS_LIMIT, `limit_price` é o preço-limite de execução *após* o stop trigger — não é o preço de trigger (stopPrice). O `OrderRecord` não tem coluna `stop_price`.
+  - **Impacto:** Dashboard mostra preços de stop incorretos; operador não consegue verificar seus níveis de proteção.
+  - **Fix:** Adicionar coluna `stop_price Numeric(20,8)` ao `OrderRecord`, popular no write-ahead (de `order["stopPrice"]`) e na criação de órfãs. Migration necessária.
+
+- [ ] **BUG-13** — Multi-strategy symbol resolution ainda não-determinística em `_apply_fill_recovery`
+  - **Arquivo:** `core/tasks/_reconciliation.py` linha ~1261
+  - **Problema:** Quando `order_record.strategy` é NULL (órfã ou ordem legada), fallback usa `.filter_by(symbol=symbol).first()` no `StrategyStateRecord`. Se SmartHodler + BearGuard operam BTCUSDT, retorna resultado arbitrário (DB sort order).
+  - **Impacto:** Recovery pode reconstruir na strategy errada → PnL invertido, decisões de close erradas.
+  - **Fix:** Usar a mesma lógica de inferência do 6.6 (checar intents recentes, checar strategy name), ou rejeitar recovery quando ambiguidade existe e alertar.
+
+- [ ] **BUG-14** — `OrderIntent` enum nunca é validado no write-ahead
+  - **Arquivo:** `core/execution/binance.py` linha ~312, `db/models.py` linha ~199
+  - **Problema:** `OrderIntent` enum existe em `core/models.py`, mas `OrderRecord.intent` é `String(20)` sem validação. O write-ahead passa `intent=intent` como string raw — typos passam silenciosamente.
+  - **Impacto:** Fill recovery roteia por intent string; um typo resulta em no-op silencioso (ordem nunca recuperada).
+  - **Fix:** Validar intent contra `OrderIntent` enum antes de persistir, ou usar um CHECK constraint na coluna.
+
+- [ ] **BUG-15** — Sem unique constraint em `exchange_order_id` — idempotência frágil
+  - **Arquivo:** `db/models.py` linha ~224
+  - **Problema:** Índice `ix_order_records_exchange_order_id` existe mas **não é UNIQUE**. Paper mode pode ter mesmo `exchange_order_id` que live mode. Idempotency check (`filter_by(exchange_order_id=eid).first()`) pode retornar record errado.
+  - **Impacto:** Fill recovery pode duplicar trades ou associar fill ao record errado se IDs colidirem entre modos.
+  - **Fix:** `UniqueConstraint("exchange_order_id", "trading_mode", name="uq_order_exchange_id_mode")`. Migration necessária.
+
+### 🟡 Inconsistências (comportamento diverge da especificação)
+
+- [ ] **BUG-16** — Orphan orders criadas sem `filled_at` mesmo quando exchange reporta FILLED
+  - **Arquivo:** `core/tasks/_reconciliation.py` linha ~989
+  - **Problema:** Criação de `OrderRecord` órfã nunca seta `filled_at` — mesmo se `order.get("status") == "FILLED"`.
+  - **Impacto:** Audit trail incompleto; dashboard não pode ordenar/filtrar órfãs por fill time.
+  - **Fix:** `filled_at=datetime.now(timezone.utc) if order.get("status") == "FILLED" else None`
+
+- [ ] **BUG-17** — Position reconstruction usa stop percentages hardcoded (5%/3%)
+  - **Arquivo:** `core/tasks/_reconciliation.py` linhas ~573-574
+  - **Problema:** `trailing_stop_price=avg_entry_price * Decimal("0.95")`, `hard_stop_price=avg_entry_price * Decimal("0.97")`. Valores hardcoded em vez de ler do `RiskConfig` da strategy correspondente.
+  - **Impacto:** Posição reconstruída pode ter stops incompatíveis com a strategy real — stopped out cedo ou tarde demais.
+  - **Fix:** Ler `trailing_stop_pct` e `hard_stop_pct` do `RiskConfig` associado à strategy, com fallback para os valores atuais.
+
+- [ ] **BUG-18** — `reconciliation_status="recovered"` usado no código mas ausente do enum
+  - **Arquivo:** `core/tasks/_reconciliation.py` linha ~1253, `core/models.py` linha ~96
+  - **Problema:** `ReconciliationStatus` enum define `PENDING_SYNC`, `SYNCED`, `ORPHAN` — mas o código seta `"recovered"` como quarto estado sem declará-lo.
+  - **Impacto:** Queries que filtram por enum values não encontram records recovered; inconsistência de schema.
+  - **Fix:** Adicionar `RECOVERED = "recovered"` ao `ReconciliationStatus` enum.
+
+- [ ] **BUG-19** — Beat interval de `sync_exchange_balances` hardcoded — não respeita config
+  - **Arquivo:** `core/celery_app.py` linha ~87
+  - **Problema:** `sync-exchange-balances-2m` usa `"schedule": 120.0` hardcoded. Se operador ajusta `reconciliation.interval_minutes` via config/ENV, este task não muda junto. Ambos tasks (reconciliation + balance sync) rodam no mesmo intervalo, competem pelo advisory lock.
+  - **Impacto:** Worker slot desperdiçado bloqueando no lock; configuração confusa.
+  - **Fix:** Usar offset (ex: balance sync = reconciliation_interval / 2), ou consolidar ambos em um único task.
+
+### 🟠 Fraquezas (funcionam mas com riscos)
+
+- [ ] **BUG-20** — Tolerância de timestamp matching (30s) pode causar match errado
+  - **Arquivo:** `core/tasks/_reconciliation.py` linha ~1215
+  - **Problema:** `_TIME_MATCH_TOLERANCE_MS = 30_000`. No recovery de ordens sem `exchange_order_id`, se duas ordens para mesmo symbol/side/qty existirem dentro de 30s, pode associar à errada.
+  - **Impacto:** Baixa probabilidade, mas em cenários de high-frequency ou testes automatizados, fill associado à ordem errada.
+  - **Fix:** Reduzir para 10s, adicionar score de confiança (qty match + price proximity), ou exigir confirmação quando múltiplos matches existem.
+
+- [ ] **BUG-21** — Sem rate-limit awareness nas queries de reconciliação
+  - **Arquivo:** `core/execution/binance.py` (múltiplos métodos), `core/tasks/_reconciliation.py`
+  - **Problema:** Reconciliação chama `get_open_orders()`, `get_all_orders(symbol)` por símbolo, `get_order_status()`, `get_my_trades()`, `get_ticker_prices()`, `get_account_info()` — potencialmente dezenas de chamadas por ciclo. Sem tracking de weight usado ou backoff em 429.
+  - **Impacto:** Se Binance rate-limita, reconciliação falha no meio — estado parcial persistido como se fosse completo.
+  - **Fix:** Implementar request coalescing, batch por símbolo, ou tracking de peso com pausa preventiva.
+
+- [ ] **BUG-22** — Margin debt mismatch detectado mas trading não é pausado
+  - **Arquivo:** `core/tasks/_reconciliation.py` linhas ~743-760
+  - **Problema:** Detecta que `borrowed` na exchange não bate com position size do GG, loga warning, mas strategy continua operando normalmente.
+  - **Impacto:** Se borrowed < position size real, próxima operação pode triggerar liquidação.
+  - **Fix:** Marcar posição como `reconciliation_suspect`, bloquear scale-in enquanto debt mismatch persiste.
+
+- [ ] **BUG-23** — Position reconstruction subtrai custo do balance sem verificar suficiência
+  - **Arquivo:** `core/tasks/_reconciliation.py` linha ~583
+  - **Problema:** `state_data["usdt_balance"] = str(balance - cost)` — se `balance < cost`, fica negativo.
+  - **Impacto:** Balance negativo pode causar comportamento inesperado em allocation e risk checks subsequentes.
+  - **Fix:** Se balance insuficiente, setar para zero e logar warning (a posição já está financiada na exchange).
 
 ---
 

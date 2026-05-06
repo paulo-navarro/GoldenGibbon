@@ -13,6 +13,7 @@ export {
   useTradeStats,
   // Orders
   useOrders,
+  useExchangeOrders,
   // Strategy
   useStrategyState,
   useStrategySignals,
@@ -49,6 +50,7 @@ export type {
   UseEquityCurveParams,
   UseTradesParams,
   UseOrdersParams,
+  UseExchangeOrdersParams,
   UseStrategyParams,
   UseLogsParams,
   UseCompareParams,

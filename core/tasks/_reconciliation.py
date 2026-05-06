@@ -1771,11 +1771,14 @@ def run_reconciliation(self) -> Dict[str, Any]:  # noqa: ANN001
         Summary dict ``{"pairs_checked": N, "mismatches": M,
         "repairs": R, "details": [...]}``.
     """
+    from datetime import datetime as _dt, timezone as _tz
+
     from core.config import get_settings
     from core.events import EventChannel, EventType, get_publisher
     from db import get_session
 
     settings = get_settings()
+    run_started_at = _dt.now(_tz.utc)
 
     if not settings.reconciliation.enabled:
         logger.info("run_reconciliation: disabled via config")
@@ -2009,8 +2012,8 @@ def run_reconciliation(self) -> Dict[str, Any]:  # noqa: ANN001
             summary,
         )
 
-    # ── Alert on mismatches (phase 6.8.2 — severity-based) ─────────
-    if total_mismatches > 0 and settings.alerting.enabled:
+    # ── Telegram alerts (phase 6.8.3 — CRITICAL + severity-based) ──
+    if settings.alerting.enabled:
         try:
             from core.alerting import AlertSeverity, get_alerter
 
@@ -2037,7 +2040,7 @@ def run_reconciliation(self) -> Dict[str, Any]:  # noqa: ANN001
                             min_severity=min_sev,
                         )
 
-                # Map fill recovery events
+                # Fill recovery — per-fill detail
                 if recovery_result and recovery_result.get("recovered", 0) > 0:
                     alerter.alert_reconciliation(
                         severity=AlertSeverity.CRITICAL,
@@ -2046,8 +2049,46 @@ def run_reconciliation(self) -> Dict[str, Any]:  # noqa: ANN001
                         min_severity=min_sev,
                     )
 
-                # Fallback: generic mismatch alert if no granular events fired
-                if not (exchange_result and exchange_result.get("repairs")) and not (
+                # Lost orders (crashed before exchange response, no match)
+                if lost_result and lost_result.get("lost", 0) > 0:
+                    alerter.alert_reconciliation(
+                        severity=AlertSeverity.WARNING,
+                        event_type="orders_lost",
+                        details=f"{lost_result['lost']} order(s) marked LOST — never reached exchange",
+                        min_severity=min_sev,
+                    )
+
+                # Orphan orders on exchange (no local record)
+                if sync_result and sync_result.get("orphans_found", 0) > 0:
+                    alerter.alert_reconciliation(
+                        severity=AlertSeverity.WARNING,
+                        event_type="order_orphan_detected",
+                        details=f"{sync_result['orphans_found']} orphan order(s) on exchange without local record",
+                        min_severity=min_sev,
+                    )
+
+                # Stop orders found filled on exchange (GG didn't see the trigger)
+                if stop_result and stop_result.get("filled_stops", 0) > 0:
+                    alerter.alert_reconciliation(
+                        severity=AlertSeverity.CRITICAL,
+                        event_type="stop_order_filled",
+                        details=f"{stop_result['filled_stops']} stop order(s) executed on exchange — fill recovery will process",
+                        min_severity=min_sev,
+                    )
+
+                # Orphan stop orders cancelled (no matching position)
+                if orphan_stop_result and orphan_stop_result.get("orphan_stops_cancelled", 0) > 0:
+                    alerter.alert_reconciliation(
+                        severity=AlertSeverity.WARNING,
+                        event_type="orphan_stops_cancelled",
+                        details=f"{orphan_stop_result['orphan_stops_cancelled']} orphan stop order(s) cancelled — no matching position",
+                        min_severity=min_sev,
+                    )
+
+                # Fallback: DB-level mismatches not covered by granular events
+                if total_mismatches > 0 and not (
+                    exchange_result and exchange_result.get("repairs")
+                ) and not (
                     recovery_result and recovery_result.get("recovered", 0) > 0
                 ):
                     mismatch_checks = [
@@ -2065,6 +2106,76 @@ def run_reconciliation(self) -> Dict[str, Any]:  # noqa: ANN001
                     )
         except Exception:
             pass  # fire-and-forget
+
+    # ── Persist run to reconciliation_runs (6.8.4/6.8.5) ────────────
+    try:
+        run_events: list[dict] = []
+
+        if exchange_result and exchange_result.get("repairs"):
+            _REPAIR_SEV = {
+                "position_force_closed": "critical",
+                "position_reconstructed": "critical",
+                "untracked_asset": "critical",
+                "size_mismatch": "warning",
+                "balance_drift": "warning",
+            }
+            for repair in exchange_result["repairs"]:
+                rtype = repair.get("repair_type", repair if isinstance(repair, str) else "unknown")
+                run_events.append({
+                    "type": rtype,
+                    "severity": _REPAIR_SEV.get(rtype, "warning"),
+                    "symbol": repair.get("symbol") if isinstance(repair, dict) else None,
+                    "detail": repair.get("detail", str(repair)) if isinstance(repair, dict) else str(repair),
+                })
+
+        if recovery_result and recovery_result.get("recovered", 0) > 0:
+            run_events.append({
+                "type": "fill_recovered",
+                "severity": "critical",
+                "detail": f"Recovered {recovery_result['recovered']} pending fill(s)",
+            })
+        if lost_result and lost_result.get("lost", 0) > 0:
+            run_events.append({
+                "type": "orders_lost",
+                "severity": "warning",
+                "detail": f"{lost_result['lost']} order(s) marked LOST",
+            })
+        if sync_result and sync_result.get("orphans_found", 0) > 0:
+            run_events.append({
+                "type": "order_orphan_detected",
+                "severity": "warning",
+                "detail": f"{sync_result['orphans_found']} orphan order(s) on exchange",
+            })
+        if stop_result and stop_result.get("filled_stops", 0) > 0:
+            run_events.append({
+                "type": "stop_order_filled",
+                "severity": "critical",
+                "detail": f"{stop_result['filled_stops']} stop order(s) executed on exchange",
+            })
+        if orphan_stop_result and orphan_stop_result.get("orphan_stops_cancelled", 0) > 0:
+            run_events.append({
+                "type": "orphan_stops_cancelled",
+                "severity": "warning",
+                "detail": f"{orphan_stop_result['orphan_stops_cancelled']} orphan stop(s) cancelled",
+            })
+
+        run_status = "ok" if total_mismatches == 0 and not run_events else "mismatch"
+
+        from db.models import ReconciliationRunRecord
+
+        with get_session() as session:
+            session.add(ReconciliationRunRecord(
+                started_at=run_started_at,
+                finished_at=_dt.now(_tz.utc),
+                status=run_status,
+                pairs_checked=pairs_checked,
+                mismatches=total_mismatches,
+                repairs=total_repairs,
+                summary=summary,
+                events=run_events,
+            ))
+    except Exception:
+        logger.warning("run_reconciliation: failed to persist run record", exc_info=True)
 
     logger.info("run_reconciliation: complete", **summary, task_id=self.request.id)
     return summary

@@ -11,11 +11,10 @@ export default defineConfig({
     },
     proxy: {
       '/api': {
-        target: 'http://api:8000',
-        changeOrigin: true,
+        target: process.env.VITE_API_TARGET || 'http://localhost:8000',
       },
       '/ws': {
-        target: 'ws://api:8000',
+        target: process.env.VITE_WS_TARGET || 'ws://localhost:8000',
         ws: true,
       },
     },

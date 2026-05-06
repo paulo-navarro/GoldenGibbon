@@ -21,3 +21,19 @@ export interface Order {
   updated_at: string | null;
   filled_at: string | null;
 }
+
+/** Exchange order (GET /api/exchange/orders). */
+export interface ExchangeOrder {
+  exchange_order_id: string | null;
+  symbol: string;
+  side: string;
+  type: string;
+  status: string;
+  orig_qty: string | null;
+  executed_qty: string | null;
+  price: string | null;
+  stop_price: string | null;
+  time: string | null;
+  source: 'gg' | 'orphan';
+  intent: string | null;
+}
