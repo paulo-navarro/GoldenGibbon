@@ -109,7 +109,7 @@ def get_portfolio(
             from core.execution.binance import BinanceExecutor
             from core.portfolio import PortfolioManager as _PM
 
-            _pm = _PM(initial_capital=Decimal("0"))
+            _pm = _PM(initial_capital=Decimal("1"))
             _executor = BinanceExecutor.from_settings(
                 strategy_name="_portfolio_query", portfolio_manager=_pm,
             )

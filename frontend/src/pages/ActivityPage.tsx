@@ -180,7 +180,7 @@ function ExchangeOrderTable({ orders }: { orders: ExchangeOrder[] }) {
 // ── Orders section ──────────────────────────────────────────────────────────
 
 function OrdersSection() {
-  const [filters, setFilters] = useState<ExchangeOrderFiltersState>({ source: '', symbol: '', status: '' });
+  const [filters, setFilters] = useState<ExchangeOrderFiltersState>({ source: '', symbol: '', status: 'open' });
 
   const { data: orders = [], isLoading, error } = useExchangeOrders({
     source: filters.source || undefined,
