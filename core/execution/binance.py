@@ -437,7 +437,7 @@ class BinanceExecutor(_OrdersMixin, _ActionsMixin):
         try:
             resp = self._session.get(
                 f"{self._base_url}/api/v3/ticker/price",
-                params={"symbols": _json.dumps(symbols)},
+                params={"symbols": _json.dumps(symbols, separators=(",", ":"))},
                 timeout=10,
             )
             resp.raise_for_status()
