@@ -8,6 +8,7 @@ DB persistence — dispatched per (strategy, symbol) pair.
 
 from __future__ import annotations
 
+import time as _time
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict
@@ -118,6 +119,37 @@ def _get_enabled_strategy_pairs() -> list[tuple[str, str, dict]]:
 # ── Capital allocation ───────────────────────────────────────────────────────
 
 
+_cached_exchange_capital: tuple[Decimal, float] | None = None
+_CAPITAL_CACHE_TTL = 300  # 5 minutes
+
+
+def _get_live_total_capital(settings) -> Decimal:  # noqa: ANN001
+    """Fetch total USDT from the exchange, cached for 5 minutes."""
+    global _cached_exchange_capital
+    now = _time.monotonic()
+    if _cached_exchange_capital and (now - _cached_exchange_capital[1]) < _CAPITAL_CACHE_TTL:
+        return _cached_exchange_capital[0]
+    try:
+        from core.execution.binance import BinanceExecutor
+        from core.portfolio import PortfolioManager as _PM
+
+        executor = BinanceExecutor.from_settings(
+            strategy_name="_allocation",
+            portfolio_manager=_PM(initial_capital=Decimal("1")),
+        )
+        account = executor.get_account_info()
+        usdt = account["balances"].get("USDT", {})
+        total = usdt.get("free", Decimal("0")) + usdt.get("locked", Decimal("0"))
+        _cached_exchange_capital = (total, now)
+        logger.info("allocation: fetched exchange capital", exchange_usdt=str(total))
+        return total
+    except Exception as exc:
+        logger.warning("allocation: failed to fetch exchange capital", error=str(exc))
+        if _cached_exchange_capital:
+            return _cached_exchange_capital[0]
+        return Decimal(str(settings.live_trading.max_order_size_usdt))
+
+
 def _resolve_allocated_capital(
     strategy_name: str,
     symbol: str,
@@ -133,11 +165,10 @@ def _resolve_allocated_capital(
     """
     from core.allocation import compute_allocations
 
-    total_capital = Decimal(str(
-        settings.live_trading.max_order_size_usdt
-        if settings.live_trading.enabled
-        else settings.paper_trading.initial_capital
-    ))
+    if settings.live_trading.enabled:
+        total_capital = _get_live_total_capital(settings)
+    else:
+        total_capital = Decimal(str(settings.paper_trading.initial_capital))
 
     registry = _get_strategy_registry()
     pairs = _get_enabled_strategy_pairs()
