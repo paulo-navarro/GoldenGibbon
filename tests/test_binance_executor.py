@@ -661,26 +661,17 @@ def _binance_margin_fill_response(
     return {
         "symbol": symbol,
         "orderId": order_id,
-        "clientOrderId": "margin_abc123",
+        "clientOrderId": "futures_abc123",
         "transactTime": 1713348000000,
         "price": "0.00000000",
         "origQty": qty,
         "executedQty": qty,
-        "cumulativeQuoteQty": str(Decimal(price) * Decimal(qty)),
+        "cumQuote": str(Decimal(price) * Decimal(qty)),
+        "avgPrice": price,
         "status": "FILLED",
         "timeInForce": "GTC",
         "type": "MARKET",
         "side": side,
-        "isIsolated": True,
-        "fills": [
-            {
-                "price": price,
-                "qty": qty,
-                "commission": "0.00010000",
-                "commissionAsset": "BTC",
-                "tradeId": 88888,
-            }
-        ],
     }
 
 
@@ -688,7 +679,6 @@ def _mock_shorts_enabled():
     """Context manager that mocks get_settings().shorts.enabled = True."""
     mock_settings = MagicMock()
     mock_settings.return_value.shorts.enabled = True
-    mock_settings.return_value.strategies.bear_guard.margin_type = "isolated"
     return patch("core.config.get_settings", mock_settings)
 
 
@@ -706,26 +696,25 @@ def _mock_shorts_disabled():
 class TestMarginShortOpen:
     """OPEN with side=SHORT should route to margin API."""
 
-    def test_open_short_calls_margin_api(self, mock_pub):
+    def test_open_short_calls_futures_api(self, mock_pub):
         mock_pub.return_value = MagicMock()
         ex = _executor()
         decision = _open_short_decision()
         response = _binance_margin_fill_response(side="SELL")
 
         with _mock_shorts_enabled(), \
-             patch.object(ex, "_signed_request", return_value=response) as mock_req:
+             patch.object(ex, "_futures_signed_request", return_value=response) as mock_req:
             result = ex.execute(decision, T0)
 
         assert result is not None
         assert result.order.status == OrderStatus.FILLED
-        # Verify call to margin endpoint
         call_args = mock_req.call_args
         assert call_args[0][0] == "POST"
-        assert call_args[0][1] == "/sapi/v1/margin/order"
+        assert call_args[0][1] == "/fapi/v1/order"
         params = call_args[0][2]
         assert params["side"] == "SELL"
-        assert params["sideEffectType"] == "MARGIN_BUY"
-        assert params["isIsolated"] == "TRUE"
+        assert "sideEffectType" not in params
+        assert "isIsolated" not in params
 
     def test_open_short_creates_position(self, mock_pub):
         mock_pub.return_value = MagicMock()
@@ -734,7 +723,7 @@ class TestMarginShortOpen:
         response = _binance_margin_fill_response(side="SELL")
 
         with _mock_shorts_enabled(), \
-             patch.object(ex, "_signed_request", return_value=response):
+             patch.object(ex, "_futures_signed_request", return_value=response):
             result = ex.execute(decision, T0)
 
         assert result.position is not None
@@ -751,7 +740,7 @@ class TestMarginShortOpen:
         stop_response = {"orderId": 99999, "status": "NEW"}
 
         with _mock_shorts_enabled(), \
-             patch.object(ex, "_signed_request", side_effect=[fill_response, stop_response]):
+             patch.object(ex, "_futures_signed_request", side_effect=[fill_response, stop_response]):
             result = ex.execute(decision, T0)
 
         assert result is not None
@@ -759,13 +748,13 @@ class TestMarginShortOpen:
         pos = pm.get_position("BTCUSDT")
         assert pos.exchange_stop_order_id == "99999"
 
-    def test_open_short_margin_api_error_returns_none(self, mock_pub):
+    def test_open_short_futures_api_error_returns_none(self, mock_pub):
         mock_pub.return_value = MagicMock()
         ex = _executor()
         decision = _open_short_decision()
 
         with _mock_shorts_enabled(), \
-             patch.object(ex, "_signed_request", side_effect=BinanceAPIError(-3007, "Margin not enabled")):
+             patch.object(ex, "_futures_signed_request", side_effect=BinanceAPIError(-3007, "Futures error")):
             result = ex.execute(decision, T0)
 
         assert result is None
@@ -783,10 +772,10 @@ class TestMarginShortClose:
         decision = _open_short_decision()
         response = _binance_margin_fill_response(side="SELL")
         with _mock_shorts_enabled(), \
-             patch.object(ex, "_signed_request", return_value=response):
+             patch.object(ex, "_futures_signed_request", return_value=response):
             ex.execute(decision, T0)
 
-    def test_close_short_calls_margin_auto_repay(self, mock_pub):
+    def test_close_short_calls_futures_buy(self, mock_pub):
         mock_pub.return_value = MagicMock()
         pm = _pm()
         ex = _executor(pm=pm)
@@ -798,16 +787,15 @@ class TestMarginShortClose:
         )
 
         with _mock_shorts_enabled(), \
-             patch.object(ex, "_signed_request", return_value=close_response) as mock_req:
+             patch.object(ex, "_futures_signed_request", return_value=close_response) as mock_req:
             result = ex.execute(decision, T0)
 
         assert result is not None
         assert result.trade is not None
-        # Verify margin endpoint called with AUTO_REPAY
         call_args = mock_req.call_args
         params = call_args[0][2]
         assert params["side"] == "BUY"
-        assert params["sideEffectType"] == "AUTO_REPAY"
+        assert "sideEffectType" not in params
 
     def test_close_short_does_not_clamp_to_balance(self, mock_pub):
         """Short close should NOT call _get_available_balance."""
@@ -822,7 +810,7 @@ class TestMarginShortClose:
         )
 
         with _mock_shorts_enabled(), \
-             patch.object(ex, "_signed_request", return_value=close_response), \
+             patch.object(ex, "_futures_signed_request", return_value=close_response), \
              patch.object(ex, "_get_available_balance") as mock_balance:
             ex.execute(decision, T0)
 
@@ -841,10 +829,10 @@ class TestMarginShortReduce:
         decision = _open_short_decision()
         response = _binance_margin_fill_response(side="SELL")
         with _mock_shorts_enabled(), \
-             patch.object(ex, "_signed_request", return_value=response):
+             patch.object(ex, "_futures_signed_request", return_value=response):
             ex.execute(decision, T0)
 
-    def test_reduce_short_calls_margin_auto_repay(self, mock_pub):
+    def test_reduce_short_calls_futures_buy(self, mock_pub):
         mock_pub.return_value = MagicMock()
         pm = _pm()
         ex = _executor(pm=pm)
@@ -856,7 +844,7 @@ class TestMarginShortReduce:
         )
 
         with _mock_shorts_enabled(), \
-             patch.object(ex, "_signed_request", return_value=reduce_response) as mock_req:
+             patch.object(ex, "_futures_signed_request", return_value=reduce_response) as mock_req:
             result = ex.execute(decision, T0)
 
         assert result is not None
@@ -864,7 +852,7 @@ class TestMarginShortReduce:
         call_args = mock_req.call_args
         params = call_args[0][2]
         assert params["side"] == "BUY"
-        assert params["sideEffectType"] == "AUTO_REPAY"
+        assert "sideEffectType" not in params
 
     def test_reduce_short_does_not_clamp_to_balance(self, mock_pub):
         """Short reduce should NOT call _get_available_balance."""
@@ -879,14 +867,14 @@ class TestMarginShortReduce:
         )
 
         with _mock_shorts_enabled(), \
-             patch.object(ex, "_signed_request", return_value=reduce_response), \
+             patch.object(ex, "_futures_signed_request", return_value=reduce_response), \
              patch.object(ex, "_get_available_balance") as mock_balance:
             ex.execute(decision, T0)
 
         mock_balance.assert_not_called()
 
     def test_reduce_short_with_exchange_stop_replacement(self, mock_pub):
-        """After reduce, remaining position should get a margin stop order."""
+        """After reduce, remaining position should get a futures stop order."""
         mock_pub.return_value = MagicMock()
         pm = _pm()
         ex = _executor(pm=pm)
@@ -897,20 +885,20 @@ class TestMarginShortReduce:
         fill_response = _binance_margin_fill_response(side="SELL")
         stop_response = {"orderId": 77777, "status": "NEW"}
         with _mock_shorts_enabled(), \
-             patch.object(ex, "_signed_request", side_effect=[fill_response, stop_response]):
+             patch.object(ex, "_futures_signed_request", side_effect=[fill_response, stop_response]):
             ex.execute(decision, T0)
 
-        # Reduce 50%
+        # Reduce 50%: cancel old stop + reduce fill + place new stop = 3 calls
         reduce_decision = _reduce_short_decision()
+        cancel_response = {"orderId": 77777, "status": "CANCELED"}
         reduce_response = _binance_margin_fill_response(
             side="BUY", price="48000.00", qty="0.05000",
         )
-        cancel_response = {}
         new_stop_response = {"orderId": 88888, "status": "NEW"}
 
         with _mock_shorts_enabled(), \
              patch.object(
-                 ex, "_signed_request",
+                 ex, "_futures_signed_request",
                  side_effect=[cancel_response, reduce_response, new_stop_response],
              ):
             result = ex.execute(reduce_decision, T0)
@@ -942,9 +930,9 @@ class TestShortsDisabledGate:
 
 @patch("core.execution.binance.get_publisher")
 class TestMarginStopOrder:
-    """Margin stop orders are placed via /sapi/v1/margin/order with STOP_LOSS_LIMIT."""
+    """Futures stop orders are placed via /fapi/v1/order with STOP_MARKET."""
 
-    def test_margin_stop_uses_buy_side(self, mock_pub):
+    def test_futures_stop_uses_buy_side(self, mock_pub):
         mock_pub.return_value = MagicMock()
         pm = _pm()
         ex = _executor(pm=pm)
@@ -955,39 +943,35 @@ class TestMarginStopOrder:
         stop_response = {"orderId": 55555, "status": "NEW"}
 
         with _mock_shorts_enabled(), \
-             patch.object(ex, "_signed_request", side_effect=[fill_response, stop_response]) as mock_req:
+             patch.object(ex, "_futures_signed_request", side_effect=[fill_response, stop_response]) as mock_req:
             ex.execute(decision, T0)
 
-        # The second call should be the stop order
         stop_call = mock_req.call_args_list[1]
         params = stop_call[0][2]
         assert params["side"] == "BUY"
-        assert params["type"] == "STOP_LOSS_LIMIT"
-        assert params["sideEffectType"] == "AUTO_REPAY"
-        assert stop_call[0][1] == "/sapi/v1/margin/order"
+        assert params["type"] == "STOP_MARKET"
+        assert "sideEffectType" not in params
+        assert stop_call[0][1] == "/fapi/v1/order"
 
-    def test_margin_stop_limit_price_above_stop(self, mock_pub):
-        """For shorts, limit price should be stop × (1 + slippage)."""
+    def test_futures_stop_market_has_stop_price(self, mock_pub):
+        """Futures STOP_MARKET should have stopPrice but no limit price."""
         mock_pub.return_value = MagicMock()
         pm = _pm()
         ex = _executor(pm=pm)
         ex._exchange_stops_enabled = True
-        ex._stop_slippage = Decimal("0.01")  # 1% slippage
 
         decision = _open_short_decision()  # hard_stop = 52500
         fill_response = _binance_margin_fill_response(side="SELL")
         stop_response = {"orderId": 55555, "status": "NEW"}
 
         with _mock_shorts_enabled(), \
-             patch.object(ex, "_signed_request", side_effect=[fill_response, stop_response]) as mock_req:
+             patch.object(ex, "_futures_signed_request", side_effect=[fill_response, stop_response]) as mock_req:
             ex.execute(decision, T0)
 
         stop_call = mock_req.call_args_list[1]
         params = stop_call[0][2]
-        stop_price = Decimal(params["stopPrice"])
-        limit_price = Decimal(params["price"])
-        # limit should be > stop for BUY side
-        assert limit_price > stop_price
+        assert "stopPrice" in params
+        assert "price" not in params
 
 
 # ── Exchange Query Layer (phase 6.1) ────────────────────────────────────────
@@ -1225,22 +1209,22 @@ class TestGetMyTrades:
                 ex.get_my_trades("BTCUSDT")
 
 
-# ── get_margin_open_orders (phase 6.1.4) ─────────────────────────────────────
+# ── get_futures_open_orders (phase 6.1.4) ─────────────────────────────────────
 
 
 @patch("core.execution.binance.get_publisher")
-class TestGetMarginOpenOrders:
-    """Tests for BinanceExecutor.get_margin_open_orders() — phase 6.1.4."""
+class TestGetFuturesOpenOrders:
+    """Tests for BinanceExecutor.get_futures_open_orders()."""
 
     def test_with_symbol(self, mock_pub):
         mock_pub.return_value = MagicMock()
         ex = _executor()
 
-        with patch.object(ex, "_signed_request", return_value=[_OPEN_ORDER_RAW]) as mock_req:
-            result = ex.get_margin_open_orders(symbol="BTCUSDT")
+        with patch.object(ex, "_futures_signed_request", return_value=[_OPEN_ORDER_RAW]) as mock_req:
+            result = ex.get_futures_open_orders(symbol="BTCUSDT")
 
         mock_req.assert_called_once_with(
-            "GET", "/sapi/v1/margin/openOrders", {"symbol": "BTCUSDT"}
+            "GET", "/fapi/v1/openOrders", {"symbol": "BTCUSDT"}
         )
         assert len(result) == 1
         assert result[0]["orderId"] == 12345
@@ -1249,20 +1233,20 @@ class TestGetMarginOpenOrders:
         mock_pub.return_value = MagicMock()
         ex = _executor()
 
-        with patch.object(ex, "_signed_request", return_value=[]) as mock_req:
-            ex.get_margin_open_orders()
+        with patch.object(ex, "_futures_signed_request", return_value=[]) as mock_req:
+            ex.get_futures_open_orders()
 
-        mock_req.assert_called_once_with("GET", "/sapi/v1/margin/openOrders", None)
+        mock_req.assert_called_once_with("GET", "/fapi/v1/openOrders", None)
 
     def test_api_error_propagates(self, mock_pub):
         mock_pub.return_value = MagicMock()
         ex = _executor()
 
         with patch.object(
-            ex, "_signed_request", side_effect=BinanceAPIError(-3003, "Margin account not exist")
+            ex, "_futures_signed_request", side_effect=BinanceAPIError(-3003, "Futures API error")
         ):
             with pytest.raises(BinanceAPIError):
-                ex.get_margin_open_orders()
+                ex.get_futures_open_orders()
 
 
 # ── get_order_status (phase 6.1.5) ───────────────────────────────────────────

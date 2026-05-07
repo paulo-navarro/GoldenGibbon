@@ -386,7 +386,7 @@ class TestBearGuardConfig:
         assert config.lockin_trigger_pct == 0.04
         assert config.lockin_stop_pct == 0.01
         assert config.cooldown_candles == 16
-        assert config.margin_type == "cross"
+        assert config.margin_type == "futures"
         assert config.max_borrow_rate_pct == 0.003
 
     def test_custom_overrides(self):
@@ -394,12 +394,12 @@ class TestBearGuardConfig:
             adx_threshold=30,
             hard_stop_pct=0.08,
             position_size_pct=0.40,
-            margin_type="isolated",
+            margin_type="futures",
         )
         assert config.adx_threshold == 30
         assert config.hard_stop_pct == 0.08
         assert config.position_size_pct == 0.40
-        assert config.margin_type == "isolated"
+        assert config.margin_type == "futures"
 
     def test_percentage_bounds(self):
         """Test that bounded floats reject invalid values."""
@@ -425,7 +425,7 @@ class TestBearGuardConfig:
         settings = Settings(symbols=[])
         assert settings.shorts.enabled is False
         assert settings.strategies.bear_guard.hard_stop_pct == 0.05
-        assert settings.strategies.bear_guard.margin_type == "cross"
+        assert settings.strategies.bear_guard.margin_type == "futures"
 
 
 # ── Reconciliation Config Tests ───────────────────────────────────────────────

@@ -109,6 +109,8 @@ class BinanceExecutor(_OrdersMixin, _ActionsMixin):
 
     _PROD_BASE = "https://api.binance.com"
     _TESTNET_BASE = "https://testnet.binance.vision"
+    _FUTURES_PROD_BASE = "https://fapi.binance.com"
+    _FUTURES_TESTNET_BASE = "https://testnet.binancefuture.com"
 
     # ── Construction ─────────────────────────────────────────────────────
 
@@ -131,6 +133,7 @@ class BinanceExecutor(_OrdersMixin, _ActionsMixin):
         self._api_key = api_key
         self._api_secret = api_secret.encode("utf-8")
         self._base_url = self._TESTNET_BASE if use_testnet else self._PROD_BASE
+        self._futures_base_url = self._FUTURES_TESTNET_BASE if use_testnet else self._FUTURES_PROD_BASE
         self._max_order_size_usdt = Decimal(str(max_order_size_usdt))
         self._order_timeout = order_timeout
         self._exchange_stops_enabled = exchange_stop_orders_enabled
@@ -158,6 +161,7 @@ class BinanceExecutor(_OrdersMixin, _ActionsMixin):
 
         # Exchange filters cache: symbol → {lot_step, price_step, min_notional}
         self._filters: Dict[str, Dict[str, Decimal]] = {}
+        self._futures_filters: Dict[str, Dict[str, Decimal]] = {}
 
         # Rate-limit tracking (Binance weight-based)
         self._used_weight: int = 0
@@ -214,6 +218,37 @@ class BinanceExecutor(_OrdersMixin, _ActionsMixin):
         logger.info(
             "binance.exchange_filters_loaded",
             symbols_count=len(self._filters),
+        )
+
+    def load_futures_exchange_filters(self, symbols: Optional[List[str]] = None) -> None:
+        """Fetch LOT_SIZE / PRICE_FILTER for USDT-M futures and cache per symbol."""
+        url = f"{self._futures_base_url}/fapi/v1/exchangeInfo"
+        resp = self._session.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+
+        for sym_info in data.get("symbols", []):
+            symbol = sym_info["symbol"]
+            if symbols and symbol not in symbols:
+                continue
+            filters: Dict[str, Decimal] = {}
+            for f in sym_info.get("filters", []):
+                if f["filterType"] == "LOT_SIZE":
+                    filters["lot_step"] = Decimal(f["stepSize"])
+                    filters["lot_min"] = Decimal(f["minQty"])
+                    filters["lot_max"] = Decimal(f["maxQty"])
+                elif f["filterType"] == "PRICE_FILTER":
+                    filters["price_step"] = Decimal(f["tickSize"])
+                elif f["filterType"] in ("NOTIONAL", "MIN_NOTIONAL"):
+                    filters["min_notional"] = Decimal(
+                        f.get("minNotional", f.get("notional", "10"))
+                    )
+            if filters:
+                self._futures_filters[symbol] = filters
+
+        logger.info(
+            "binance.futures_filters_loaded",
+            symbols_count=len(self._futures_filters),
         )
 
     # ── Main entry point ─────────────────────────────────────────────────
@@ -632,6 +667,34 @@ class BinanceExecutor(_OrdersMixin, _ActionsMixin):
 
         return result
 
+    def get_futures_positions(self) -> Dict[str, Dict[str, Decimal]]:
+        """
+        Fetch USDT-M futures positions via ``GET /fapi/v2/positionRisk``.
+
+        Returns a dict keyed by symbol for positions with non-zero size::
+
+            {"ETHUSDT": {"positionAmt": Decimal("-0.05"), "entryPrice": Decimal("2300")}, ...}
+        """
+        data = self._futures_signed_request("GET", "/fapi/v2/positionRisk")
+        result: Dict[str, Dict[str, Decimal]] = {}
+        for item in data:
+            pos_amt = Decimal(item.get("positionAmt", "0"))
+            if pos_amt != 0:
+                result[item["symbol"]] = {
+                    "positionAmt": pos_amt,
+                    "entryPrice": Decimal(item.get("entryPrice", "0")),
+                    "unrealizedProfit": Decimal(item.get("unRealizedProfit", "0")),
+                }
+        return result
+
+    def get_futures_open_orders(self, symbol: str | None = None) -> list[dict]:
+        """Fetch open orders on USDT-M futures via ``GET /fapi/v1/openOrders``."""
+        params: Dict[str, Any] = {}
+        if symbol is not None:
+            params["symbol"] = symbol
+        data = self._futures_signed_request("GET", "/fapi/v1/openOrders", params or None)
+        return [self._parse_order_response(item) for item in data]
+
     def get_order_status(self, symbol: str, order_id: int) -> dict:
         """
         Query the status of a specific order via ``GET /api/v3/order``.
@@ -758,6 +821,57 @@ class BinanceExecutor(_OrdersMixin, _ActionsMixin):
         data = resp.json()
 
         if "code" in data and data["code"] < 0:
+            raise BinanceAPIError(code=data["code"], msg=data.get("msg", ""))
+
+        return data
+
+    def _futures_signed_request(
+        self,
+        method: str,
+        path: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """Send a signed request to Binance USDT-M Futures API."""
+        self._check_rate_limit()
+
+        params = dict(params or {})
+        params["timestamp"] = int(_time.time() * 1000)
+        params["recvWindow"] = 5000
+
+        query_string = urlencode(params)
+        signature = hmac.new(
+            self._api_secret,
+            query_string.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        params["signature"] = signature
+
+        url = f"{self._futures_base_url}{path}"
+
+        if method == "GET":
+            resp = self._session.get(url, params=params, timeout=10)
+        elif method == "POST":
+            resp = self._session.post(url, params=params, timeout=10)
+        elif method == "DELETE":
+            resp = self._session.delete(url, params=params, timeout=10)
+        else:
+            raise ValueError(f"Unsupported HTTP method: {method}")
+
+        self._update_rate_limit(resp)
+
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", "60"))
+            logger.error(
+                "binance.futures_rate_limited",
+                retry_after=retry_after,
+                used_weight=self._used_weight,
+            )
+            _time.sleep(min(retry_after, 120))
+            raise BinanceAPIError(code=-1015, msg="Rate limited (429)")
+
+        data = resp.json()
+
+        if isinstance(data, dict) and "code" in data and data["code"] < 0:
             raise BinanceAPIError(code=data["code"], msg=data.get("msg", ""))
 
         return data

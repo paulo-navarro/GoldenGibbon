@@ -362,6 +362,7 @@ def _get_or_create_components(
                 portfolio_manager=pm,
             )
             executor.load_exchange_filters([symbol])
+            executor.load_futures_exchange_filters([symbol])
 
             # Sync portfolio with real Binance balances
             try:

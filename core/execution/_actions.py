@@ -46,7 +46,10 @@ class _ActionsMixin:
         if pos is None or not pos.exchange_stop_order_id:
             return None
 
-        info = self._check_stop_order_status(symbol, pos.exchange_stop_order_id)
+        if pos.side == PositionSide.SHORT:
+            info = self._check_futures_order_status(symbol, pos.exchange_stop_order_id)
+        else:
+            info = self._check_stop_order_status(symbol, pos.exchange_stop_order_id)
         if info is None:
             return None
 
@@ -96,7 +99,7 @@ class _ActionsMixin:
         if is_short:
             self._assert_shorts_enabled()
             order = self._place_margin_order(
-                decision, OrderSide.SELL, "MARGIN_BUY", intent="open_short"
+                decision, OrderSide.SELL, intent="open_short"
             )
         else:
             order = self._place_and_fill(decision, OrderSide.BUY, intent="open_long")
@@ -212,9 +215,9 @@ class _ActionsMixin:
         is_short = pos is not None and pos.side == PositionSide.SHORT
 
         if is_short:
-            # Short close: margin BUY with AUTO_REPAY — no spot balance needed
+            # Short close: futures BUY — no spot balance needed
             order = self._place_margin_order(
-                decision, OrderSide.BUY, "AUTO_REPAY", intent="close_short"
+                decision, OrderSide.BUY, intent="close_short"
             )
         else:
             # Long close: spot SELL with balance clamping
@@ -293,7 +296,10 @@ class _ActionsMixin:
         if self._exchange_stops_enabled:
             pos = self._pm.get_position(decision.symbol)
             if pos and pos.exchange_stop_order_id:
-                self._cancel_stop_order(decision.symbol, pos.exchange_stop_order_id)
+                if is_short:
+                    self._cancel_futures_order(decision.symbol, pos.exchange_stop_order_id)
+                else:
+                    self._cancel_stop_order(decision.symbol, pos.exchange_stop_order_id)
                 self._pm.update_stop_order_id(decision.symbol, None)
 
         fill_price = order.avg_fill_price or decision.price
@@ -352,7 +358,10 @@ class _ActionsMixin:
 
         if self._exchange_stops_enabled:
             if pos and pos.exchange_stop_order_id:
-                self._cancel_stop_order(decision.symbol, pos.exchange_stop_order_id)
+                if is_short:
+                    self._cancel_futures_order(decision.symbol, pos.exchange_stop_order_id)
+                else:
+                    self._cancel_stop_order(decision.symbol, pos.exchange_stop_order_id)
                 self._pm.update_stop_order_id(decision.symbol, None)
 
         # decision.size is the FULL position size from the risk engine.
@@ -362,9 +371,9 @@ class _ActionsMixin:
         decision = decision.model_copy(update={"size": sell_qty})
 
         if is_short:
-            # Short reduce: margin BUY with AUTO_REPAY — no spot balance needed
+            # Short reduce: futures BUY — no spot balance needed
             order = self._place_margin_order(
-                decision, OrderSide.BUY, "AUTO_REPAY", intent="reduce"
+                decision, OrderSide.BUY, intent="reduce"
             )
         else:
             # Long reduce: spot SELL with balance clamping

@@ -754,58 +754,57 @@ def _reconcile_with_exchange(
                     ),
                 })
 
-    # ── Check F: Margin debt vs short positions (6.6.3) ────────────────
+    # ── Check F: Futures position vs local short positions (6.6.3) ──────
     short_positions = (
         session.query(PositionRecord)
         .filter_by(side="short")
         .all()
     )
     if short_positions:
-        margin_api_ok = True
+        futures_api_ok = True
         try:
-            margin_assets = executor.get_margin_account()
+            futures_positions = executor.get_futures_positions()
         except Exception as exc:
             logger.warning(
-                "reconcile_exchange: failed to fetch margin account",
+                "reconcile_exchange: failed to fetch futures positions",
                 error=str(exc),
             )
-            margin_assets = {}
-            margin_api_ok = False
+            futures_positions = {}
+            futures_api_ok = False
 
         for pos in short_positions:
-            base_asset = pos.symbol.replace("USDT", "")
-            borrowed = Decimal("0")
-            if base_asset in margin_assets:
-                borrowed = margin_assets[base_asset].get("borrowed", Decimal("0"))
+            exchange_size = Decimal("0")
+            if pos.symbol in futures_positions:
+                exchange_size = abs(futures_positions[pos.symbol].get("positionAmt", Decimal("0")))
 
-            debt_delta = abs(pos.size - borrowed)
-            if debt_delta <= position_tolerance:
+            size_delta = abs(pos.size - exchange_size)
+            if size_delta <= position_tolerance:
                 checks.append({
-                    "check": f"margin_debt_{pos.symbol}",
+                    "check": f"futures_position_{pos.symbol}",
                     "result": "ok",
                 })
             else:
                 has_mismatch = True
-                result_level = "critical" if margin_api_ok else "warning"
+                result_level = "critical" if futures_api_ok else "warning"
                 checks.append({
-                    "check": f"margin_debt_{pos.symbol}",
+                    "check": f"futures_position_{pos.symbol}",
                     "result": result_level,
                     "detail": (
                         f"short position size={pos.size} vs "
-                        f"margin borrowed={borrowed} (delta={debt_delta})"
+                        f"futures size={exchange_size} (delta={size_delta})"
                     ),
                 })
                 logger.error(
-                    "reconcile_exchange: margin debt mismatch",
+                    "reconcile_exchange: futures position mismatch",
                     symbol=pos.symbol,
                     strategy=pos.strategy,
                     position_size=str(pos.size),
-                    margin_borrowed=str(borrowed),
-                    delta=str(debt_delta),
-                    margin_api_ok=margin_api_ok,
+                    futures_size=str(exchange_size),
+                    delta=str(size_delta),
+                    futures_api_ok=futures_api_ok,
                 )
 
-                if margin_api_ok:
+                if futures_api_ok:
                     state_rec = (
                         session.query(StrategyStateRecord)
                         .filter_by(symbol=pos.symbol, strategy=pos.strategy)
@@ -815,13 +814,13 @@ def _reconcile_with_exchange(
                         state_data = dict(state_rec.state_data or {})
                         state_data["kill_switch_triggered"] = True
                         state_data["kill_switch_reason"] = (
-                            f"margin debt mismatch: position={pos.size}, "
-                            f"borrowed={borrowed}, delta={debt_delta}"
+                            f"futures position mismatch: local={pos.size}, "
+                            f"exchange={exchange_size}, delta={size_delta}"
                         )
                         state_rec.state_data = state_data
                         repairs.append(
                             f"kill switch activated for {pos.strategy}:{pos.symbol} "
-                            f"due to margin debt mismatch (delta={debt_delta})"
+                            f"due to futures position mismatch (delta={size_delta})"
                         )
 
     return {

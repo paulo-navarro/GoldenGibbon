@@ -1027,10 +1027,10 @@ class TestReconcileWithExchange:
 # ── Phase 6.6.3: Margin debt for shorts (6.9.18) ────────────────────────────
 
 
-class TestMarginDebtCheck:
-    """Verify Check F: margin borrowed amount vs short position size."""
+class TestFuturesPositionCheck:
+    """Verify Check F: futures position size vs local short position size."""
 
-    def _make_executor(self, balances: dict, *, margin_account=None) -> MagicMock:
+    def _make_executor(self, balances: dict, *, futures_positions=None) -> MagicMock:
         executor = MagicMock()
         executor.get_account_info.return_value = {
             "balances": balances,
@@ -1038,8 +1038,8 @@ class TestMarginDebtCheck:
         }
         executor.get_ticker_prices.return_value = {}
         executor.get_my_trades.return_value = []
-        if margin_account is not None:
-            executor.get_margin_account.return_value = margin_account
+        if futures_positions is not None:
+            executor.get_futures_positions.return_value = futures_positions
         return executor
 
     def _seed_short_position(self, symbol="BTCUSDT", size=Decimal("0.05")):
@@ -1076,12 +1076,12 @@ class TestMarginDebtCheck:
                 )
             )
 
-    def test_margin_debt_matches_short_position(self):
+    def test_futures_position_matches_short(self):
         self._seed_short_position(size=Decimal("0.05"))
 
         executor = self._make_executor(
             {"USDT": {"free": Decimal("10000"), "locked": Decimal("0")}},
-            margin_account={"BTC": {"borrowed": Decimal("0.05"), "free": Decimal("0"), "locked": Decimal("0")}},
+            futures_positions={"BTCUSDT": {"positionAmt": Decimal("-0.05")}},
         )
 
         from core.tasks import _reconcile_with_exchange
@@ -1089,15 +1089,15 @@ class TestMarginDebtCheck:
         with get_session() as session:
             result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
 
-        debt_check = next(c for c in result["checks"] if c["check"] == "margin_debt_BTCUSDT")
-        assert debt_check["result"] == "ok"
+        check = next(c for c in result["checks"] if c["check"] == "futures_position_BTCUSDT")
+        assert check["result"] == "ok"
 
-    def test_margin_debt_mismatch_activates_kill_switch(self):
+    def test_futures_position_mismatch_activates_kill_switch(self):
         self._seed_short_position(size=Decimal("0.05"))
 
         executor = self._make_executor(
             {"USDT": {"free": Decimal("10000"), "locked": Decimal("0")}},
-            margin_account={"BTC": {"borrowed": Decimal("0.02"), "free": Decimal("0"), "locked": Decimal("0")}},
+            futures_positions={"BTCUSDT": {"positionAmt": Decimal("-0.02")}},
         )
 
         from core.tasks import _reconcile_with_exchange
@@ -1106,27 +1106,27 @@ class TestMarginDebtCheck:
             result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
 
         assert result["status"] == "mismatch"
-        debt_check = next(c for c in result["checks"] if c["check"] == "margin_debt_BTCUSDT")
-        assert debt_check["result"] == "critical"
-        assert "0.05" in debt_check["detail"]
-        assert "0.02" in debt_check["detail"]
+        check = next(c for c in result["checks"] if c["check"] == "futures_position_BTCUSDT")
+        assert check["result"] == "critical"
+        assert "0.05" in check["detail"]
+        assert "0.02" in check["detail"]
         assert any("kill switch activated" in r for r in result["repairs"])
 
-    def test_margin_api_failure_warns_without_kill_switch(self):
+    def test_futures_api_failure_warns_without_kill_switch(self):
         self._seed_short_position(size=Decimal("0.05"))
 
         executor = self._make_executor(
             {"USDT": {"free": Decimal("10000"), "locked": Decimal("0")}},
         )
-        executor.get_margin_account.side_effect = Exception("margin API down")
+        executor.get_futures_positions.side_effect = Exception("futures API down")
 
         from core.tasks import _reconcile_with_exchange
 
         with get_session() as session:
             result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
 
-        debt_check = next(c for c in result["checks"] if c["check"] == "margin_debt_BTCUSDT")
-        assert debt_check["result"] == "warning"
+        check = next(c for c in result["checks"] if c["check"] == "futures_position_BTCUSDT")
+        assert check["result"] == "warning"
         assert not any("kill switch" in r for r in result["repairs"])
 
 

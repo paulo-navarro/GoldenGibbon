@@ -483,28 +483,40 @@ def run_single_strategy_tick(
             if hasattr(comp.executor, "_exchange_stops_enabled") and comp.executor._exchange_stops_enabled:
                 updated_pos = comp.pm.get_position(symbol)
                 if updated_pos:
+                    from core.models import PositionSide as _PosSide
+                    _is_short = updated_pos.side == _PosSide.SHORT
+
                     new_effective_stop = max(
                         updated_pos.hard_stop_price,
                         updated_pos.trailing_stop_price,
                     )
+
+                    def _place_stop() -> str | None:
+                        if _is_short:
+                            return comp.executor._place_margin_stop_order(
+                                symbol, updated_pos.size, new_effective_stop,
+                            )
+                        return comp.executor._place_stop_order(
+                            symbol, updated_pos.size,
+                            new_effective_stop, comp.executor._stop_slippage,
+                        )
+
+                    def _cancel_stop(oid: str) -> bool:
+                        if _is_short:
+                            return comp.executor._cancel_futures_order(symbol, oid)
+                        return comp.executor._cancel_stop_order(symbol, oid)
+
                     if not updated_pos.exchange_stop_order_id and new_effective_stop > 0:
-                        # Position opened before exchange stops were enabled — place now
                         log.info(
                             "single_tick: placing missing exchange stop order",
                             symbol=symbol, stop_price=str(new_effective_stop),
                         )
-                        new_stop_id = comp.executor._place_stop_order(
-                            symbol, updated_pos.size,
-                            new_effective_stop, comp.executor._stop_slippage,
-                        )
+                        new_stop_id = _place_stop()
                         if new_stop_id:
                             comp.pm.update_stop_order_id(symbol, new_stop_id)
                     elif new_effective_stop > old_effective_stop and updated_pos.exchange_stop_order_id:
-                        if comp.executor._cancel_stop_order(symbol, updated_pos.exchange_stop_order_id):
-                            new_stop_id = comp.executor._place_stop_order(
-                                symbol, updated_pos.size,
-                                new_effective_stop, comp.executor._stop_slippage,
-                            )
+                        if _cancel_stop(updated_pos.exchange_stop_order_id):
+                            new_stop_id = _place_stop()
                             comp.pm.update_stop_order_id(symbol, new_stop_id)
 
         # ── 3. Strategy decision ─────────────────────────────

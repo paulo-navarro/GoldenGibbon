@@ -272,7 +272,7 @@ class BearGuardConfig(BaseModel):
     session_dead_zones: List[SessionDeadZone] = Field(default_factory=list)
 
     # Margin
-    margin_type: str = Field(default="cross")
+    margin_type: str = Field(default="futures")
     max_borrow_rate_pct: float = Field(default=0.003, ge=0, le=0.1)
 
     @field_validator("ema_fast", "ema_slow")
@@ -287,8 +287,8 @@ class BearGuardConfig(BaseModel):
     @classmethod
     def validate_margin_type(cls, v: str) -> str:
         """Validate margin type."""
-        if v not in {"cross", "isolated"}:
-            raise ValueError(f"Invalid margin_type: {v}. Must be 'cross' or 'isolated'")
+        if v not in {"cross", "isolated", "futures"}:
+            raise ValueError(f"Invalid margin_type: {v}. Must be 'cross', 'isolated', or 'futures'")
         return v
 
 

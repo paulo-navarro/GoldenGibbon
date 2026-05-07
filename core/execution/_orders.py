@@ -32,7 +32,7 @@ logger = structlog.get_logger(__name__)
 class _OrdersMixin:
     """Order placement, polling, parsing, formatting, and cancellation."""
 
-    # ── Private: margin order placement (Phase 5.6) ──────────────────────
+    # ── Private: futures order placement (shorts via USDT-M Futures) ────
 
     @staticmethod
     def _assert_shorts_enabled() -> None:
@@ -45,27 +45,17 @@ class _OrdersMixin:
                 "This code path should not have been reached."
             )
 
-    def _get_margin_type(self) -> str:
-        """Read margin_type from BearGuard config ('cross' or 'isolated')."""
-        from core.config import get_settings
-
-        return get_settings().strategies.bear_guard.margin_type
-
     def _place_margin_order(
         self,
         decision: RiskDecision,
         side: OrderSide,
-        side_effect_type: str,
         intent: Optional[str] = None,
     ) -> Optional[Order]:
         """
-        Place an order on Binance Margin and wait for fill.
+        Place a USDT-M Futures order on Binance.
 
-        Args:
-            decision: Risk decision with symbol, size, price.
-            side: BUY or SELL.
-            side_effect_type: "MARGIN_BUY" (borrow+sell) or "AUTO_REPAY" (buy+repay).
-            intent: Order intent for write-ahead (e.g. "open_short", "close_short").
+        Used for short positions (open, close, reduce). Long/spot orders
+        continue to use ``_place_and_fill()``.
 
         Returns a filled Order on success, or an Order with REJECTED status
         on failure. Returns None only on unexpected errors.
@@ -73,13 +63,12 @@ class _OrdersMixin:
         from core.execution.binance import BinanceAPIError
 
         symbol = decision.symbol
-        qty = self._format_quantity(symbol, decision.size)
+        qty = self._format_quantity(symbol, decision.size, futures=True)
 
         if qty <= 0:
-            logger.error("binance.margin_zero_quantity", symbol=symbol)
+            logger.error("binance.futures_zero_quantity", symbol=symbol)
             return None
 
-        # Write-ahead: persist PENDING record before calling exchange
         effective_intent = intent
         if effective_intent is None:
             effective_intent = "open_short"
@@ -98,19 +87,13 @@ class _OrdersMixin:
             intent=effective_intent,
         )
 
-        margin_type = self._get_margin_type()
-        is_isolated = "TRUE" if margin_type == "isolated" else "FALSE"
-
         params: Dict[str, Any] = {
             "symbol": symbol,
             "side": side.value.upper(),
             "type": "MARKET",
             "quantity": str(qty),
-            "sideEffectType": side_effect_type,
-            "isIsolated": is_isolated,
         }
 
-        # Publish ORDER_CREATED event
         publisher = get_publisher()
         pending_order = Order(
             symbol=symbol,
@@ -126,20 +109,19 @@ class _OrdersMixin:
 
         try:
             response = with_retry(
-                fn=lambda: self._signed_request(
-                    "POST", "/sapi/v1/margin/order", params
+                fn=lambda: self._futures_signed_request(
+                    "POST", "/fapi/v1/order", params
                 ),
                 config=self._retry_config,
                 retryable=(requests.ConnectionError, requests.Timeout),
-                label=f"binance.place_margin_order({symbol})",
+                label=f"binance.place_futures_order({symbol})",
             )
         except BinanceAPIError as exc:
             logger.error(
-                "binance.margin_order_rejected",
+                "binance.futures_order_rejected",
                 symbol=symbol,
                 code=exc.code,
                 msg=exc.msg,
-                side_effect=side_effect_type,
             )
             self._update_order_record(
                 record_id,
@@ -160,7 +142,7 @@ class _OrdersMixin:
             )
         except RetryExhausted as exc:
             logger.error(
-                "binance.margin_order_retry_exhausted",
+                "binance.futures_order_retry_exhausted",
                 symbol=symbol,
                 error=str(exc.last_error),
             )
@@ -181,12 +163,10 @@ class _OrdersMixin:
             )
         except Exception:
             logger.exception(
-                "binance.margin_order_unexpected_error", symbol=symbol
+                "binance.futures_order_unexpected_error", symbol=symbol
             )
-            # Leave as PENDING — fill recovery will handle it
             return None
 
-        # Parse the fill response (same format as spot)
         order = self._parse_fill_response(
             response=response,
             decision=decision,
@@ -216,58 +196,46 @@ class _OrdersMixin:
         stop_price: Decimal,
         slippage_pct: Decimal = Decimal("0.005"),
     ) -> Optional[str]:
-        """Place a margin stop-loss order for a short position (BUY side)."""
+        """Place a USDT-M Futures STOP_MARKET order for a short position (BUY side)."""
         from core.execution.binance import BinanceAPIError
 
-        qty = self._format_quantity(symbol, quantity)
+        qty = self._format_quantity(symbol, quantity, futures=True)
         if qty <= 0:
-            logger.error("binance.margin_stop_zero_qty", symbol=symbol)
+            logger.error("binance.futures_stop_zero_qty", symbol=symbol)
             return None
 
-        formatted_stop = self._format_price(symbol, stop_price)
-        # For shorts, stop is ABOVE entry — limit gives room above the stop
-        limit_price = self._format_price(
-            symbol, stop_price * (1 + slippage_pct),
-        )
+        formatted_stop = self._format_price(symbol, stop_price, futures=True)
 
-        # Write-ahead: persist stop order as PENDING
         record_id = self._write_ahead_order(
             symbol=symbol,
             side="buy",
-            order_type="stop_loss_limit",
+            order_type="stop_market",
             amount=qty,
-            price=limit_price,
+            price=formatted_stop,
             stop_price=formatted_stop,
             intent="stop_loss",
         )
 
-        margin_type = self._get_margin_type()
-        is_isolated = "TRUE" if margin_type == "isolated" else "FALSE"
-
         params: Dict[str, Any] = {
             "symbol": symbol,
             "side": "BUY",
-            "type": "STOP_LOSS_LIMIT",
+            "type": "STOP_MARKET",
             "quantity": str(qty),
             "stopPrice": str(formatted_stop),
-            "price": str(limit_price),
-            "timeInForce": "GTC",
-            "sideEffectType": "AUTO_REPAY",
-            "isIsolated": is_isolated,
         }
 
         try:
             response = with_retry(
-                fn=lambda: self._signed_request(
-                    "POST", "/sapi/v1/margin/order", params
+                fn=lambda: self._futures_signed_request(
+                    "POST", "/fapi/v1/order", params
                 ),
                 config=self._retry_config,
                 retryable=(requests.ConnectionError, requests.Timeout),
-                label=f"binance.place_margin_stop({symbol})",
+                label=f"binance.place_futures_stop({symbol})",
             )
         except (BinanceAPIError, RetryExhausted) as exc:
             logger.error(
-                "binance.margin_stop_order_failed",
+                "binance.futures_stop_order_failed",
                 symbol=symbol,
                 stop_price=str(formatted_stop),
                 error=str(exc),
@@ -280,21 +248,18 @@ class _OrdersMixin:
             )
             return None
         except Exception:
-            logger.exception("binance.margin_stop_unexpected", symbol=symbol)
-            # Leave as PENDING for recovery
+            logger.exception("binance.futures_stop_unexpected", symbol=symbol)
             return None
 
         order_id = str(response["orderId"])
         logger.info(
-            "binance.margin_stop_placed",
+            "binance.futures_stop_placed",
             symbol=symbol,
             stop_price=str(formatted_stop),
-            limit_price=str(limit_price),
             quantity=str(qty),
             order_id=order_id,
         )
 
-        # Update record with exchange_order_id (stop is still "pending" until triggered)
         self._update_order_record(
             record_id,
             exchange_order_id=order_id,
@@ -609,10 +574,15 @@ class _OrdersMixin:
             if side == OrderSide.BUY and base_commission > 0:
                 total_qty -= base_commission
         else:
-            # Fallback: use cumulativeQuoteQty / executedQty
+            # Fallback: futures may provide avgPrice directly, or cumQuote
             exec_qty = Decimal(response.get("executedQty", str(qty)))
-            cum_quote = Decimal(response.get("cumulativeQuoteQty", "0"))
-            avg_price = (cum_quote / exec_qty) if exec_qty > 0 else decision.price
+            if response.get("avgPrice") and Decimal(response["avgPrice"]) > 0:
+                avg_price = Decimal(response["avgPrice"])
+            else:
+                cum_quote = Decimal(
+                    response.get("cumulativeQuoteQty", response.get("cumQuote", "0"))
+                )
+                avg_price = (cum_quote / exec_qty) if exec_qty > 0 else decision.price
             total_qty = exec_qty
             total_fee = Decimal("0")
 
@@ -687,14 +657,15 @@ class _OrdersMixin:
 
     # ── Private: quantity / price formatting ─────────────────────────────
 
-    def _format_quantity(self, symbol: str, qty: Decimal) -> Decimal:
+    def _format_quantity(self, symbol: str, qty: Decimal, *, futures: bool = False) -> Decimal:
         """
         Round quantity down to the exchange's LOT_SIZE step.
 
         If no filters are cached for this symbol, returns qty rounded to
         8 decimal places (safe default).
         """
-        filters = self._filters.get(symbol)
+        source = self._futures_filters if futures else self._filters
+        filters = source.get(symbol)
         if not filters or "lot_step" not in filters:
             return qty.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
 
@@ -720,9 +691,10 @@ class _OrdersMixin:
 
         return formatted
 
-    def _format_price(self, symbol: str, price: Decimal) -> Decimal:
+    def _format_price(self, symbol: str, price: Decimal, *, futures: bool = False) -> Decimal:
         """Round price to the exchange's PRICE_FILTER tick size."""
-        filters = self._filters.get(symbol)
+        source = self._futures_filters if futures else self._filters
+        filters = source.get(symbol)
         if not filters or "price_step" not in filters:
             return price.quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
 
@@ -878,6 +850,77 @@ class _OrdersMixin:
         except Exception:
             logger.exception(
                 "binance.stop_order_status_unexpected",
+                symbol=symbol,
+                order_id=order_id,
+            )
+            return None
+
+    # ── Private: futures cancel / status ──────────────────────────────────
+
+    def _cancel_futures_order(self, symbol: str, order_id: str) -> bool:
+        """Cancel a futures order via ``DELETE /fapi/v1/order``."""
+        from core.execution.binance import BinanceAPIError
+
+        try:
+            self._futures_signed_request(
+                "DELETE", "/fapi/v1/order",
+                {"symbol": symbol, "orderId": order_id},
+            )
+            logger.info(
+                "binance.futures_order_cancelled",
+                symbol=symbol,
+                order_id=order_id,
+            )
+            return True
+        except BinanceAPIError as exc:
+            if exc.code == -2011:
+                logger.info(
+                    "binance.futures_order_already_gone",
+                    symbol=symbol,
+                    order_id=order_id,
+                )
+                return True
+            logger.error(
+                "binance.futures_order_cancel_failed",
+                symbol=symbol,
+                order_id=order_id,
+                code=exc.code,
+                msg=exc.msg,
+            )
+            return False
+        except Exception:
+            logger.exception(
+                "binance.futures_order_cancel_unexpected",
+                symbol=symbol,
+                order_id=order_id,
+            )
+            return False
+
+    def _check_futures_order_status(
+        self, symbol: str, order_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Check a futures order status via ``GET /fapi/v1/order``."""
+        from core.execution.binance import BinanceAPIError
+
+        try:
+            return self._futures_signed_request(
+                "GET", "/fapi/v1/order",
+                {"symbol": symbol, "orderId": order_id},
+            )
+        except BinanceAPIError as exc:
+            if exc.code == -2011:
+                return {"status": "UNKNOWN", "orderId": order_id}
+            logger.error(
+                "binance.futures_order_status_failed",
+                symbol=symbol,
+                order_id=order_id,
+                code=exc.code,
+                msg=exc.msg,
+            )
+            return None
+        except Exception:
+            logger.exception(
+                "binance.futures_order_status_unexpected",
                 symbol=symbol,
                 order_id=order_id,
             )
