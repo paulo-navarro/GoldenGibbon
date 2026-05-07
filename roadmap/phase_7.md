@@ -2,7 +2,7 @@
 
 > **Goal:** Substituir o modelo de capital isolado por par/estratégia por uma pool comum de USDT, com limite de posições simultâneas configurável.
 > **Motivação:** Com capital pequeno (~$50), dividir por estratégia × símbolo fragmenta demais — ordens ficam abaixo do mínimo da Binance ($5–10). O modelo de pool compartilhada é mais simples e eficiente.
-> **Status:** Planning
+> **Status:** Complete
 
 ---
 
@@ -20,7 +20,7 @@
 
 ## Tarefas
 
-### [ ] 7.1 — Config: `max_concurrent_positions`
+### [x] 7.1 — Config: `max_concurrent_positions`
 
 **Arquivo:** `core/config.py` — `RiskConfig`
 
@@ -40,7 +40,7 @@ max_concurrent_positions: int = Field(default=4, ge=1, le=20)
 
 ---
 
-### [ ] 7.2 — `Portfolio.available_capital` → pool compartilhada
+### [x] 7.2 — `Portfolio.available_capital` → pool compartilhada
 
 **Arquivo:** `core/models.py` — `Portfolio`
 
@@ -73,7 +73,7 @@ E injetado no PortfolioManager antes de cada tick. Assim o risk engine chama `po
 
 ---
 
-### [ ] 7.3 — Guard: limite de posições simultâneas
+### [x] 7.3 — Guard: limite de posições simultâneas
 
 **Arquivo:** `core/risk/_sizing.py` ou `core/risk/engine.py`
 
@@ -93,7 +93,7 @@ Se atingiu o limite, `evaluate()` retorna `RiskDecision(action=REJECT, reason="m
 
 ---
 
-### [ ] 7.4 — Tick: simplificar `_resolve_allocated_capital()`
+### [x] 7.4 — Tick: simplificar `_resolve_allocated_capital()`
 
 **Arquivo:** `core/tasks/_tick.py`
 
@@ -125,7 +125,7 @@ Manter:
 
 ---
 
-### [ ] 7.5 — Remover código morto
+### [x] 7.5 — Remover código morto
 
 **Deletar:**
 - `core/allocation.py` (200 linhas)
@@ -148,7 +148,7 @@ Manter:
 
 ---
 
-### [ ] 7.6 — Backtest: adaptar para slot model
+### [x] 7.6 — Backtest: adaptar para slot model
 
 **Arquivos:** `core/backtest/compare.py`, `core/backtest/multi_strategy.py`
 
@@ -164,7 +164,7 @@ E distribuir `slot_capital` igualmente para cada (strategy, symbol) pair no back
 
 ---
 
-### [ ] 7.7 — Testes de integração
+### [x] 7.7 — Testes de integração
 
 **Verificar fluxo completo:**
 1. Exchange tem $50 USDT, `max_concurrent_positions = 4`

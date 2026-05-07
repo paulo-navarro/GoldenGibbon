@@ -245,11 +245,6 @@ function StrategyToggles() {
                     variant={s.enabled ? 'filled' : 'outlined'}
                   />
                 </Box>
-                {s.allocation_pct != null && (
-                  <Typography variant="caption" color="text.secondary">
-                    Allocation: {(s.allocation_pct * 100).toFixed(0)}%
-                  </Typography>
-                )}
               </CardContent>
               <CardActions sx={{ px: 2, pb: 1.5, justifyContent: 'flex-end' }}>
                 <Switch

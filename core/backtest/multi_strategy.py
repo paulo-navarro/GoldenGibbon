@@ -20,7 +20,6 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 import structlog
 
-from core.allocation import compute_allocations
 from core.backtest import BacktestRunner
 from core.backtest.metrics import compute_metrics
 from core.models import BacktestMetrics, PortfolioSnapshot
@@ -63,20 +62,19 @@ def run_multi_strategy_backtest(
     symbols: List[str] | None = None,
     days: int = 90,
     strategy_names: List[str] | None = None,
-    regime_shift_pct: float | None = None,
 ) -> MultiStrategyResult:
     """
-    Run all strategies on the same data window with regime-based allocation.
+    Run all strategies on the same data window, producing a combined equity
+    curve and per-strategy breakdown.
 
-    Each strategy gets its own ``BacktestRunner`` with allocated capital.
-    The combined equity curve sums all strategies' equity at each timestamp.
-    A regime timeline is computed from the primary symbol's ADX.
+    Each strategy pair gets ``total_capital / max_concurrent_positions`` as
+    its slot capital.  A regime timeline is computed from the primary
+    symbol's ADX.
 
     Args:
         symbols: Trading pairs. Defaults to all enabled.
         days: Lookback window in days.
         strategy_names: Strategies to include. Defaults to all registered.
-        regime_shift_pct: Override for regime shift percentage. None = use config.
     """
     from core.config import get_settings
     from core.data.binance_client import BinanceClient
@@ -92,9 +90,6 @@ def run_multi_strategy_backtest(
 
     if symbols is None:
         symbols = [s.symbol for s in settings.enabled_symbols]
-
-    if regime_shift_pct is None:
-        regime_shift_pct = regime_cfg.regime_shift_pct
 
     result = MultiStrategyResult(days=days)
     total_capital = Decimal(str(settings.backtest.initial_capital))
@@ -181,17 +176,9 @@ def run_multi_strategy_backtest(
 
     result.regime_timeline = regime_timeline
 
-    # Compute allocations with regime adjustment
-    allocations = compute_allocations(
-        total_capital=total_capital,
-        enabled_strategies=valid_strategies,
-        strategy_configs=strategy_configs,
-        symbols=symbols,
-        regime=regime_for_alloc,
-        regime_confidence=regime_confidence,
-        regime_shift_pct=regime_shift_pct,
-        strategy_regime_map=regime_cfg.strategy_regime_map,
-    )
+    # Slot capital: total / max_concurrent_positions
+    max_pos = settings.risk.max_concurrent_positions
+    slot_capital = total_capital / max_pos
 
     # Run each strategy independently
     all_equity_curves: Dict[str, List[PortfolioSnapshot]] = {}
@@ -204,8 +191,7 @@ def run_multi_strategy_backtest(
 
         for symbol in symbols:
             key = f"{strategy_name}:{symbol}"
-            alloc_key = (strategy_name, symbol)
-            allocated = allocations.get(alloc_key, total_capital / len(valid_strategies) / len(symbols))
+            allocated = slot_capital
 
             try:
                 strategy = strategy_cls(strategy_config)

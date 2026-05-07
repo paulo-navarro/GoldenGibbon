@@ -199,7 +199,7 @@ from core.tasks._tick import (  # noqa: E402, F401
     _acquire_tick_lock,
     _get_enabled_strategy_pairs,
     _resolve_allocated_capital,
-    _fetch_latest_adx,
+    _count_global_open_positions,
     _peek_latest_candle_time,
     run_single_strategy_tick,
     run_strategy_tick,

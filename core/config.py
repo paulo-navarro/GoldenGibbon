@@ -100,7 +100,6 @@ class SmartHodlerConfig(BaseModel):
 
     enabled: bool = Field(default=True)
     description: Optional[str] = None
-    allocation_pct: Optional[float] = Field(default=None, ge=0, le=1, description="Capital allocation weight (0–1). None = equal split.")
 
     # Timeframes
     timeframe_primary: str = Field(default="15m")
@@ -165,7 +164,6 @@ class MeanReversionStrategyConfig(BaseModel):
 
     enabled: bool = Field(default=True)
     description: Optional[str] = None
-    allocation_pct: Optional[float] = Field(default=None, ge=0, le=1, description="Capital allocation weight (0–1). None = equal split.")
 
     # Timeframes
     timeframe_primary: str = Field(default="15m")
@@ -228,7 +226,6 @@ class BearGuardConfig(BaseModel):
 
     enabled: bool = Field(default=False, description="Disabled by default — short strategies are opt-in")
     description: Optional[str] = None
-    allocation_pct: Optional[float] = Field(default=None, ge=0, le=1, description="Capital allocation weight (0–1). None = equal split.")
 
     # Timeframes
     timeframe_primary: str = Field(default="15m")
@@ -329,6 +326,7 @@ class RiskConfig(BaseModel):
     max_daily_loss_pct: float = Field(default=0.10, gt=0, le=1)
     max_trade_size_usdt: Optional[float] = Field(default=None, gt=0)
     max_symbol_exposure_usdt: Optional[float] = Field(default=None, gt=0)
+    max_concurrent_positions: int = Field(default=4, ge=1, le=20, description="Max simultaneous open positions across all strategies")
 
 
 # ── Execution Configuration ───────────────────────────────────────────────────

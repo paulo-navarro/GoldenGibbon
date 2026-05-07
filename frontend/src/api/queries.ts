@@ -510,7 +510,6 @@ export interface StrategyListResponse {
 export interface StrategySummary {
   name: string;
   enabled: boolean;
-  allocation_pct: number | null;
 }
 
 export interface StrategyOverviewResponse {

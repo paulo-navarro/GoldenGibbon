@@ -472,10 +472,13 @@ class Portfolio(BaseModel):
     open_trades_count: int = 0
     trade_history: List['Trade'] = Field(default_factory=list)
     equity_curve: List['PortfolioSnapshot'] = Field(default_factory=list)
-    
+    slot_capital: Decimal = Decimal("0")
+
     @property
     def available_capital(self) -> Decimal:
-        """Calculate available capital for new positions."""
+        """Capital available per slot (total / max_concurrent_positions)."""
+        if self.slot_capital > 0:
+            return self.slot_capital
         return self.usdt_balance
     
     @property

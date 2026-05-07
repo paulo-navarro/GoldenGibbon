@@ -79,7 +79,7 @@ def _get_strategy_model(name: str):
 
 def _group_for_field(name: str) -> str:
     """Assign a field to a UI group based on its name."""
-    if name in ("enabled", "description", "allocation_pct"):
+    if name in ("enabled", "description"):
         return "General"
     if "timeframe" in name:
         return "Timeframes"
@@ -127,7 +127,6 @@ class StrategyListResponse(BaseModel):
 class StrategySummary(BaseModel):
     name: str
     enabled: bool
-    allocation_pct: Optional[float] = None
 
 
 class StrategyOverviewResponse(BaseModel):
@@ -162,17 +161,10 @@ def strategy_overview() -> StrategyOverviewResponse:
         if cfg is None:
             continue
         if isinstance(cfg, dict):
-            summaries.append(StrategySummary(
-                name=field_name,
-                enabled=cfg.get("enabled", False),
-                allocation_pct=cfg.get("allocation_pct"),
-            ))
+            enabled = cfg.get("enabled", False)
         else:
-            summaries.append(StrategySummary(
-                name=field_name,
-                enabled=getattr(cfg, "enabled", False),
-                allocation_pct=getattr(cfg, "allocation_pct", None),
-            ))
+            enabled = getattr(cfg, "enabled", False)
+        summaries.append(StrategySummary(name=field_name, enabled=enabled))
 
     return StrategyOverviewResponse(strategies=summaries)
 

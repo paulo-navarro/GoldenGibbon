@@ -78,21 +78,9 @@ def compare_strategies(
 
     result = ComparisonResult(days=days)
 
-    # Compute capital allocations (task 5.4a)
-    from core.allocation import compute_allocations
-
     total_capital = Decimal(str(settings.backtest.initial_capital))
-    configs_for_alloc: Dict[str, dict] = {}
-    for sname in strategy_names:
-        cfg = settings.strategies.get_strategy_config(sname)
-        if cfg is not None:
-            configs_for_alloc[sname] = cfg if isinstance(cfg, dict) else cfg.model_dump()
-    allocations = compute_allocations(
-        total_capital=total_capital,
-        enabled_strategies=[s for s in strategy_names if s in registry],
-        strategy_configs=configs_for_alloc,
-        symbols=symbols,
-    )
+    max_pos = settings.risk.max_concurrent_positions
+    slot_capital = total_capital / max_pos
 
     for strategy_name in strategy_names:
         if strategy_name not in registry:
@@ -121,9 +109,7 @@ def compare_strategies(
                 strategy = strategy_cls(strategy_config)
 
                 bt_config = settings.backtest.model_dump()
-                alloc_key = (strategy_name, symbol)
-                if alloc_key in allocations:
-                    bt_config["initial_capital"] = float(allocations[alloc_key])
+                bt_config["initial_capital"] = float(slot_capital)
 
                 runner = BacktestRunner(
                     strategy=strategy,

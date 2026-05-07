@@ -162,7 +162,6 @@ def multi_strategy_backtest(
     symbols: Optional[str] = Query(None, description="Comma-separated symbols"),
     days: int = Query(90, ge=7, le=730, description="Lookback window in days"),
     strategies: Optional[str] = Query(None, description="Comma-separated strategy names"),
-    regime_shift_pct: Optional[float] = Query(None, ge=0, le=0.5, description="Regime shift override"),
 ) -> MultiStrategyResponse:
     from core.backtest.multi_strategy import run_multi_strategy_backtest
 
@@ -173,7 +172,6 @@ def multi_strategy_backtest(
         symbols=symbol_list,
         days=days,
         strategy_names=strategy_list,
-        regime_shift_pct=regime_shift_pct,
     )
 
     per_strategy = []

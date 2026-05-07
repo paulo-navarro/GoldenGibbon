@@ -150,120 +150,28 @@ def _get_live_total_capital(settings) -> Decimal:  # noqa: ANN001
         return Decimal(str(settings.live_trading.max_order_size_usdt))
 
 
-def _resolve_allocated_capital(
-    strategy_name: str,
-    symbol: str,
-    strategy_config: dict,
-    settings,  # noqa: ANN001
-) -> float:
-    """
-    Resolve the capital allocated to a (strategy, symbol) pair.
-
-    Uses the allocation model (task 5.4a) to distribute the total
-    capital pool based on per-strategy ``allocation_pct`` weights.
-    Falls back to the old behavior if allocation cannot be computed.
-    """
-    from core.allocation import compute_allocations
-
+def _resolve_allocated_capital(settings) -> float:  # noqa: ANN001
+    """Return per-slot capital: total_capital / max_concurrent_positions."""
     if settings.live_trading.enabled:
         total_capital = _get_live_total_capital(settings)
     else:
         total_capital = Decimal(str(settings.paper_trading.initial_capital))
 
-    registry = _get_strategy_registry()
-    pairs = _get_enabled_strategy_pairs()
-    enabled_strategies = list(dict.fromkeys(s for s, _, _ in pairs))
-    symbols = list(dict.fromkeys(sym for _, sym, _ in pairs))
-
-    configs: dict[str, dict] = {}
-    for sname in enabled_strategies:
-        cfg = settings.strategies.get_strategy_config(sname)
-        if cfg is not None:
-            configs[sname] = cfg if isinstance(cfg, dict) else cfg.model_dump()
-
-    # Regime-based rebalancing (task 5.4c)
-    regime_kwargs: dict = {}
-    regime_cfg = settings.regime
-    if regime_cfg.rebalance_enabled:
-        try:
-            from core.regime import RegimeDetector
-
-            detector = RegimeDetector(
-                trending_threshold=regime_cfg.adx_trending_threshold,
-                ranging_threshold=regime_cfg.adx_ranging_threshold,
-                smoothing_window=regime_cfg.smoothing_window,
-            )
-            adx_indicators = _fetch_latest_adx(symbols[0] if symbols else "BTCUSDT")
-            classification = detector.detect(adx_indicators)
-            regime_kwargs = {
-                "regime": classification.regime.value,
-                "regime_confidence": classification.confidence,
-                "regime_shift_pct": regime_cfg.regime_shift_pct,
-                "strategy_regime_map": regime_cfg.strategy_regime_map,
-            }
-            logger.debug(
-                "allocation: regime adjustment",
-                regime=classification.regime.value,
-                confidence=classification.confidence,
-                adx=classification.smoothed_adx,
-            )
-        except Exception as exc:
-            logger.warning("allocation: regime detection failed, using base weights", error=str(exc))
-
-    allocations = compute_allocations(
-        total_capital=total_capital,
-        enabled_strategies=enabled_strategies,
-        strategy_configs=configs,
-        symbols=symbols,
-        **regime_kwargs,
-    )
-
-    key = (strategy_name, symbol)
-    if key in allocations:
-        return float(allocations[key])
-
-    return strategy_config.get(
-        "initial_capital", settings.paper_trading.initial_capital,
-    )
+    max_pos = settings.risk.max_concurrent_positions
+    slot = total_capital / max_pos
+    logger.debug("allocation: slot capital", total=str(total_capital), max_pos=max_pos, slot=str(slot))
+    return float(slot)
 
 
+def _count_global_open_positions() -> int:
+    """Count open positions across all cached worker-state entries."""
+    count = 0
+    for comp in _worker_state.values():
+        if comp.pm.portfolio.positions:
+            count += len(comp.pm.portfolio.positions)
+    return count
 
-def _fetch_latest_adx(symbol: str, lookback: int = 50) -> Dict[str, Any]:
-    """
-    Fetch recent ADX values from cached candles for regime detection.
 
-    Returns a dict suitable for ``RegimeDetector.detect()``.
-    """
-    import pandas as pd
-
-    try:
-        from core.data.binance_client import BinanceClient
-        from core.data.loader import DataLoader
-        from core.indicators.technical import calculate_adx
-        from db import get_session
-
-        with get_session() as session:
-            client = BinanceClient()
-            loader = DataLoader(session, client)
-            md = loader.get_market_data(
-                symbol=symbol,
-                timeframe="15m",
-                lookback_days=7,
-            )
-
-        if md.candles.empty or len(md.candles) < 20:
-            return {}
-
-        adx = calculate_adx(
-            md.candles["high"],
-            md.candles["low"],
-            md.candles["close"],
-        )
-        return {"adx": adx}
-
-    except Exception as exc:
-        logger.warning("_fetch_latest_adx: failed", error=str(exc))
-        return {}
 
 
 
@@ -356,9 +264,7 @@ def run_single_strategy_tick(
         del _worker_state[_tick_key]
 
     try:
-        initial_capital = _resolve_allocated_capital(
-            strategy_name, symbol, strategy_config, settings,
-        )
+        initial_capital = _resolve_allocated_capital(settings)
 
         comp = _get_or_create_components(
             strategy_name=strategy_name,
@@ -370,6 +276,9 @@ def run_single_strategy_tick(
             initial_capital=initial_capital,
             trading_mode=trading_mode,
         )
+
+        # Update slot_capital every tick (exchange balance changes over time)
+        comp.pm.portfolio.slot_capital = Decimal(str(initial_capital))
 
         # ── 0b. Sync exchange stop config from live settings ──
         if hasattr(comp.executor, "_exchange_stops_enabled"):
@@ -642,6 +551,20 @@ def run_single_strategy_tick(
                         "gate_blocked": gate_blocked,
                     },
                 )
+
+            # ── 3c. Max concurrent positions guard ──────────
+            if (
+                signal in (Signal.BUY, Signal.SHORT)
+                and not comp.pm.has_position(symbol)
+                and _count_global_open_positions() >= settings.risk.max_concurrent_positions
+            ):
+                log.info(
+                    "max_positions_reached",
+                    symbol=symbol,
+                    max=settings.risk.max_concurrent_positions,
+                    current=_count_global_open_positions(),
+                )
+                signal = Signal.HOLD
 
             # ── 4. Risk evaluation ───────────────────────────
             decision = comp.risk_engine.evaluate(
