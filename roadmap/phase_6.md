@@ -380,25 +380,25 @@ O `order_records` atual já tem os campos essenciais, mas faltam:
 
 ### 🟡 Inconsistências (comportamento diverge da especificação)
 
-- [ ] **BUG-16** — Orphan orders criadas sem `filled_at` mesmo quando exchange reporta FILLED
+- [x] **BUG-16** — Orphan orders criadas sem `filled_at` mesmo quando exchange reporta FILLED
   - **Arquivo:** `core/tasks/_reconciliation.py` linha ~989
   - **Problema:** Criação de `OrderRecord` órfã nunca seta `filled_at` — mesmo se `order.get("status") == "FILLED"`.
   - **Impacto:** Audit trail incompleto; dashboard não pode ordenar/filtrar órfãs por fill time.
   - **Fix:** `filled_at=datetime.now(timezone.utc) if order.get("status") == "FILLED" else None`
 
-- [ ] **BUG-17** — Position reconstruction usa stop percentages hardcoded (5%/3%)
+- [x] **BUG-17** — Position reconstruction usa stop percentages hardcoded (5%/3%)
   - **Arquivo:** `core/tasks/_reconciliation.py` linhas ~573-574
   - **Problema:** `trailing_stop_price=avg_entry_price * Decimal("0.95")`, `hard_stop_price=avg_entry_price * Decimal("0.97")`. Valores hardcoded em vez de ler do `RiskConfig` da strategy correspondente.
   - **Impacto:** Posição reconstruída pode ter stops incompatíveis com a strategy real — stopped out cedo ou tarde demais.
   - **Fix:** Ler `trailing_stop_pct` e `hard_stop_pct` do `RiskConfig` associado à strategy, com fallback para os valores atuais.
 
-- [ ] **BUG-18** — `reconciliation_status="recovered"` usado no código mas ausente do enum
+- [x] **BUG-18** — `reconciliation_status="recovered"` usado no código mas ausente do enum
   - **Arquivo:** `core/tasks/_reconciliation.py` linha ~1253, `core/models.py` linha ~96
   - **Problema:** `ReconciliationStatus` enum define `PENDING_SYNC`, `SYNCED`, `ORPHAN` — mas o código seta `"recovered"` como quarto estado sem declará-lo.
   - **Impacto:** Queries que filtram por enum values não encontram records recovered; inconsistência de schema.
   - **Fix:** Adicionar `RECOVERED = "recovered"` ao `ReconciliationStatus` enum.
 
-- [ ] **BUG-19** — Beat interval de `sync_exchange_balances` hardcoded — não respeita config
+- [x] **BUG-19** — Beat interval de `sync_exchange_balances` hardcoded — não respeita config
   - **Arquivo:** `core/celery_app.py` linha ~87
   - **Problema:** `sync-exchange-balances-2m` usa `"schedule": 120.0` hardcoded. Se operador ajusta `reconciliation.interval_minutes` via config/ENV, este task não muda junto. Ambos tasks (reconciliation + balance sync) rodam no mesmo intervalo, competem pelo advisory lock.
   - **Impacto:** Worker slot desperdiçado bloqueando no lock; configuração confusa.

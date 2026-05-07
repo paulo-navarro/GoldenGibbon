@@ -569,6 +569,7 @@ def run_single_strategy_tick(
 
         # ── 3. Strategy decision ─────────────────────────────
         signal = Signal.HOLD
+        pre_decide_state = comp.strategy.state
         if not stop_result.stop_hit:
             signal = comp.strategy.evaluate(market_data, comp.pm.portfolio)
 
@@ -596,7 +597,6 @@ def run_single_strategy_tick(
                             adx=classification.adx_value,
                         )
                         signal = Signal.HOLD
-                        comp.strategy._state = StrategyState.FLAT
                         gate_blocked = True
 
                 publisher.publish(
@@ -619,6 +619,10 @@ def run_single_strategy_tick(
 
             # ── 5. Execute ───────────────────────────────────
             execution_result = comp.executor.execute(decision, candle_time)
+
+            # ── 5b. Rollback state if execution didn't happen ─
+            if execution_result is None and comp.strategy.state != pre_decide_state:
+                comp.strategy._state = pre_decide_state
 
         # ── 6. Equity snapshot ───────────────────────────────
         snapshot = comp.pm.take_snapshot(candle_time, {symbol: close})

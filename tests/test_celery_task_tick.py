@@ -665,3 +665,51 @@ class TestTradingModeSwitch:
         assert _worker_state[key].trading_mode == "live", (
             "stale paper entry was not evicted; worker kept using PaperExecutor"
         )
+
+
+class TestStateRollbackOnFailedExecution:
+    """Strategy state must not change when execution is blocked."""
+
+    @patch(_PATCH_PUBLISH)
+    @patch(_PATCH_KLINES, return_value=[])
+    @patch(_PATCH_LOADER)
+    def test_state_stays_flat_when_risk_rejects_buy(
+        self, mock_loader, mock_klines, mock_publish
+    ):
+        """BUY signal blocked by risk engine → state stays FLAT, not POSITION."""
+        mock_loader.return_value = _make_market_data()
+
+        from core.tasks import run_single_strategy_tick
+        import core.tasks as tasks_mod
+
+        # 1. Run a tick to build cached worker components
+        run_single_strategy_tick.apply(args=["smart_hodler", "BTCUSDT"])
+        comp = tasks_mod._worker_state[("smart_hodler", "BTCUSDT")]
+
+        # Confirm starting state is flat
+        assert comp.strategy.state == StrategyState.FLAT
+
+        # 2. Patch strategy.evaluate to signal BUY (and flip state to POSITION
+        #    like the real decide() does)
+        original_evaluate = comp.strategy.evaluate
+
+        def fake_evaluate(market_data, portfolio):
+            comp.strategy._state = StrategyState.POSITION
+            return Signal.BUY
+
+        comp.strategy.evaluate = fake_evaluate
+
+        # 3. Patch executor.execute to return None (simulating risk rejection)
+        comp.executor.execute = MagicMock(return_value=None)
+
+        # 4. Run second tick — BUY signaled but not executed
+        mock_loader.return_value = _make_market_data()
+        result = run_single_strategy_tick.apply(args=["smart_hodler", "BTCUSDT"])
+
+        # 5. State must be rolled back to FLAT
+        assert comp.strategy.state == StrategyState.FLAT, (
+            "strategy state stuck in POSITION after failed execution"
+        )
+
+        # Restore
+        comp.strategy.evaluate = original_evaluate

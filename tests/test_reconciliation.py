@@ -957,6 +957,10 @@ class TestReconcileWithExchange:
             assert pos is not None
             assert pos.size == Decimal("1.0")
             assert pos.entry_price == Decimal("50000")
+            # Stops should use SmartHodler's hard_stop_pct (0.03), not hardcoded 5%/3%
+            expected_hard = Decimal("50000") * (1 - Decimal("0.03"))
+            assert pos.hard_stop_price == expected_hard
+            assert pos.trailing_stop_price == expected_hard
 
     def test_size_mismatch_auto_repaired(self, _seed_state):
         """Local size=1.5, exchange=1.2 → PositionRecord.size adjusted to 1.2."""
@@ -1208,6 +1212,36 @@ class TestSyncOpenOrders:
             assert record.reconciliation_status == "orphan"
             assert record.symbol == "ETHUSDT"
             assert record.side == "sell"
+            assert record.filled_at is None
+
+    def test_orphan_filled_order_has_filled_at(self):
+        """An orphan order with status FILLED gets filled_at set."""
+        from core.tasks import _sync_open_orders
+
+        executor = MagicMock()
+        executor.get_open_orders.return_value = [
+            {
+                "orderId": 88888,
+                "symbol": "BTCUSDT",
+                "side": "BUY",
+                "type": "MARKET",
+                "status": "FILLED",
+                "origQty": "0.5",
+                "price": "60000",
+                "executedQty": "0.5",
+            }
+        ]
+
+        with get_session() as session:
+            result = _sync_open_orders(session, executor)
+
+        assert result["orphans_found"] == 1
+
+        with get_session() as session:
+            record = session.query(OrderRecord).filter_by(exchange_order_id="88888").first()
+            assert record is not None
+            assert record.reconciliation_status == "orphan"
+            assert record.filled_at is not None
 
     def test_api_error_returns_error_status(self):
         """Exchange API failure → graceful error return."""

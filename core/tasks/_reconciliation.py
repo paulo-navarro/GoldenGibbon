@@ -579,6 +579,14 @@ def _reconcile_with_exchange(
                         elif "bear" in strategy_name.lower():
                             inferred_side = "short"
 
+                        from core.config import get_settings
+                        strat_cfg = get_settings().strategies.get_strategy_config(strategy_name)
+                        hard_stop_pct = Decimal(str(getattr(strat_cfg, "hard_stop_pct", 0.03)))
+                        if inferred_side == "short":
+                            hard_stop = avg_entry_price * (1 + hard_stop_pct)
+                        else:
+                            hard_stop = avg_entry_price * (1 - hard_stop_pct)
+
                         new_pos = PositionRecord(
                             symbol=symbol,
                             strategy=strategy_name,
@@ -587,8 +595,8 @@ def _reconcile_with_exchange(
                             entry_price=avg_entry_price,
                             entry_time=entry_time,
                             highest_close=avg_entry_price,
-                            trailing_stop_price=avg_entry_price * Decimal("0.95"),
-                            hard_stop_price=avg_entry_price * Decimal("0.97"),
+                            trailing_stop_price=hard_stop,
+                            hard_stop_price=hard_stop,
                             scale_in_count=0,
                             buy_signal_candles=0,
                         )
@@ -1041,6 +1049,7 @@ def _sync_open_orders(
                 exchange_status=order.get("status", "NEW"),
                 reconciliation_status="orphan",
                 reconciled_at=now,
+                filled_at=now if order.get("status") == "FILLED" else None,
                 trading_mode="live",
             )
             session.add(orphan)

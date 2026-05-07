@@ -83,9 +83,11 @@ app.conf.update(
         },
         "sync-exchange-balances-2m": {
             "task": "core.tasks.sync_exchange_balances",
-            # Every 2 minutes — keeps dashboard USDT balance and equity
-            # in sync with the exchange between strategy ticks.
-            "schedule": 120.0,
+            # Half the reconciliation interval — avoids advisory lock
+            # contention by running between reconciliation cycles.
+            "schedule": float(
+                int(os.environ.get("GG_RECONCILIATION_INTERVAL_MIN", "2")) * 60 // 2
+            ),
         },
         "heartbeat-60s": {
             "task": "core.tasks.emit_heartbeat",
