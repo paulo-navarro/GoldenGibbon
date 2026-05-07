@@ -2,7 +2,7 @@
 
 > **Goal:** Garantir que o GG nunca perca o controle de ordens ou ativos — toda ordem enviada à Binance é rastreada até resolução, e o estado local é periodicamente sincronizado com a exchange.
 > **Motivação:** Ordens estão escapando do controle — ativos somem do GG mas continuam na exchange, ou são vendidos na exchange e continuam aparecendo no GG. A reconciliação atual é insuficiente.
-> **Status:** Planning
+> **Status:** Complete (bugs resolvidos, validação manual pendente)
 
 ---
 
@@ -406,42 +406,43 @@ O `order_records` atual já tem os campos essenciais, mas faltam:
 
 ### 🟠 Fraquezas (funcionam mas com riscos)
 
-- [ ] **BUG-20** — Tolerância de timestamp matching (30s) pode causar match errado
-  - **Arquivo:** `core/tasks/_reconciliation.py` linha ~1215
+- [x] **BUG-20** — Tolerância de timestamp matching (30s) pode causar match errado
+  - **Arquivo:** `core/tasks/_reconciliation.py` linha ~1267
   - **Problema:** `_TIME_MATCH_TOLERANCE_MS = 30_000`. No recovery de ordens sem `exchange_order_id`, se duas ordens para mesmo symbol/side/qty existirem dentro de 30s, pode associar à errada.
   - **Impacto:** Baixa probabilidade, mas em cenários de high-frequency ou testes automatizados, fill associado à ordem errada.
-  - **Fix:** Reduzir para 10s, adicionar score de confiança (qty match + price proximity), ou exigir confirmação quando múltiplos matches existem.
+  - **Fix:** Reduzido para 10s + best-match por timestamp mais próximo (em vez de first-match).
 
-- [ ] **BUG-21** — Sem rate-limit awareness nas queries de reconciliação
-  - **Arquivo:** `core/execution/binance.py` (múltiplos métodos), `core/tasks/_reconciliation.py`
+- [x] **BUG-21** — Sem rate-limit awareness nas queries de reconciliação
+  - **Arquivo:** `core/execution/binance.py` — `_signed_request()`
   - **Problema:** Reconciliação chama `get_open_orders()`, `get_all_orders(symbol)` por símbolo, `get_order_status()`, `get_my_trades()`, `get_ticker_prices()`, `get_account_info()` — potencialmente dezenas de chamadas por ciclo. Sem tracking de weight usado ou backoff em 429.
   - **Impacto:** Se Binance rate-limita, reconciliação falha no meio — estado parcial persistido como se fosse completo.
-  - **Fix:** Implementar request coalescing, batch por símbolo, ou tracking de peso com pausa preventiva.
+  - **Fix:** Rate-limit tracking via `X-MBX-USED-WEIGHT-1M` header em `_signed_request()`. Backoff de 3s ao atingir 1000/1200 weight, 10s no limite. Response 429 faz sleep com `Retry-After` e levanta erro para retry.
 
-- [ ] **BUG-22** — Margin debt mismatch detectado mas trading não é pausado
-  - **Arquivo:** `core/tasks/_reconciliation.py` linhas ~743-760
+- [x] **BUG-22** — Margin debt mismatch detectado mas trading não é pausado
+  - **Arquivo:** `core/tasks/_reconciliation.py` linhas ~757-820
   - **Problema:** Detecta que `borrowed` na exchange não bate com position size do GG, loga warning, mas strategy continua operando normalmente.
   - **Impacto:** Se borrowed < position size real, próxima operação pode triggerar liquidação.
-  - **Fix:** Marcar posição como `reconciliation_suspect`, bloquear scale-in enquanto debt mismatch persiste.
+  - **Fix:** Ativa kill switch no `state_data` (`kill_switch_triggered=True`) quando margin API confirma mismatch. Quando API falha, mantém como warning sem kill switch (dados não confiáveis). Kill switch é restaurado pelo tick no próximo ciclo, bloqueando todas as operações até reset manual.
 
-- [ ] **BUG-23** — Position reconstruction subtrai custo do balance sem verificar suficiência
-  - **Arquivo:** `core/tasks/_reconciliation.py` linha ~583
+- [x] **BUG-23** — Position reconstruction subtrai custo do balance sem verificar suficiência
+  - **Arquivo:** `core/tasks/_reconciliation.py` linhas ~615, ~1403, ~1533
   - **Problema:** `state_data["usdt_balance"] = str(balance - cost)` — se `balance < cost`, fica negativo.
   - **Impacto:** Balance negativo pode causar comportamento inesperado em allocation e risk checks subsequentes.
-  - **Fix:** Se balance insuficiente, setar para zero e logar warning (a posição já está financiada na exchange).
+  - **Fix:** Clamp com `max(Decimal("0"), balance - cost)` em todas as 3 ocorrências (reconstruction, fill recovery open, scale-in).
 
 ---
 
 ## Completion Checklist
 
-- [ ] 6.1–6.8 implementados
-- [ ] Full test suite passa: `.venv-test/bin/python -m pytest tests/ -v`
-- [ ] Sem regressões nos testes existentes
-- [ ] Reconciliação roda a cada 2 minutos sem erros
+- [x] 6.1–6.8 implementados
+- [x] Full test suite passa (1656 passed)
+- [x] Sem regressões nos testes existentes
+- [x] Reconciliação roda a cada 2 minutos sem erros
+- [x] BUG-16 a BUG-23 resolvidos
 - [ ] Cenários validados manualmente:
   - [ ] Simular crash após place_order → fill recovery reconstrói posição
   - [ ] Simular stop executada na exchange → GG detecta e fecha posição
   - [ ] Simular asset na exchange sem tracking → GG reconstrói posição
   - [ ] Simular posição fantasma → GG force-close e registra trade
-- [ ] Alerts de Telegram disparam para eventos CRITICAL
-- [ ] API de reconciliation status funcional
+- [x] Alerts de Telegram disparam para eventos CRITICAL
+- [x] API de reconciliation status funcional

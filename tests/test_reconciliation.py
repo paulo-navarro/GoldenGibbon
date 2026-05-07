@@ -1092,7 +1092,7 @@ class TestMarginDebtCheck:
         debt_check = next(c for c in result["checks"] if c["check"] == "margin_debt_BTCUSDT")
         assert debt_check["result"] == "ok"
 
-    def test_margin_debt_mismatch_warns(self):
+    def test_margin_debt_mismatch_activates_kill_switch(self):
         self._seed_short_position(size=Decimal("0.05"))
 
         executor = self._make_executor(
@@ -1107,11 +1107,12 @@ class TestMarginDebtCheck:
 
         assert result["status"] == "mismatch"
         debt_check = next(c for c in result["checks"] if c["check"] == "margin_debt_BTCUSDT")
-        assert debt_check["result"] == "warning"
+        assert debt_check["result"] == "critical"
         assert "0.05" in debt_check["detail"]
         assert "0.02" in debt_check["detail"]
+        assert any("kill switch activated" in r for r in result["repairs"])
 
-    def test_margin_api_failure_falls_back_to_warning(self):
+    def test_margin_api_failure_warns_without_kill_switch(self):
         self._seed_short_position(size=Decimal("0.05"))
 
         executor = self._make_executor(
@@ -1126,6 +1127,7 @@ class TestMarginDebtCheck:
 
         debt_check = next(c for c in result["checks"] if c["check"] == "margin_debt_BTCUSDT")
         assert debt_check["result"] == "warning"
+        assert not any("kill switch" in r for r in result["repairs"])
 
 
 # ── Phase 6.4: Open Order Sync ───────────────────────────────────────────────

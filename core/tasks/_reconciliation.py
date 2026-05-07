@@ -612,7 +612,7 @@ def _reconcile_with_exchange(
                                 state_data = dict(state_rec.state_data)
                                 balance = Decimal(str(state_data.get("usdt_balance", "0")))
                                 cost = exchange_size * avg_entry_price
-                                state_data["usdt_balance"] = str(balance - cost)
+                                state_data["usdt_balance"] = str(max(Decimal("0"), balance - cost))
                                 state_rec.state_data = state_data
 
                         repairs.append(
@@ -761,6 +761,7 @@ def _reconcile_with_exchange(
         .all()
     )
     if short_positions:
+        margin_api_ok = True
         try:
             margin_assets = executor.get_margin_account()
         except Exception as exc:
@@ -769,6 +770,7 @@ def _reconcile_with_exchange(
                 error=str(exc),
             )
             margin_assets = {}
+            margin_api_ok = False
 
         for pos in short_positions:
             base_asset = pos.symbol.replace("USDT", "")
@@ -784,22 +786,43 @@ def _reconcile_with_exchange(
                 })
             else:
                 has_mismatch = True
+                result_level = "critical" if margin_api_ok else "warning"
                 checks.append({
                     "check": f"margin_debt_{pos.symbol}",
-                    "result": "warning",
+                    "result": result_level,
                     "detail": (
                         f"short position size={pos.size} vs "
                         f"margin borrowed={borrowed} (delta={debt_delta})"
                     ),
                 })
-                logger.warning(
+                logger.error(
                     "reconcile_exchange: margin debt mismatch",
                     symbol=pos.symbol,
                     strategy=pos.strategy,
                     position_size=str(pos.size),
                     margin_borrowed=str(borrowed),
                     delta=str(debt_delta),
+                    margin_api_ok=margin_api_ok,
                 )
+
+                if margin_api_ok:
+                    state_rec = (
+                        session.query(StrategyStateRecord)
+                        .filter_by(symbol=pos.symbol, strategy=pos.strategy)
+                        .first()
+                    )
+                    if state_rec is not None:
+                        state_data = dict(state_rec.state_data or {})
+                        state_data["kill_switch_triggered"] = True
+                        state_data["kill_switch_reason"] = (
+                            f"margin debt mismatch: position={pos.size}, "
+                            f"borrowed={borrowed}, delta={debt_delta}"
+                        )
+                        state_rec.state_data = state_data
+                        repairs.append(
+                            f"kill switch activated for {pos.strategy}:{pos.symbol} "
+                            f"due to margin debt mismatch (delta={debt_delta})"
+                        )
 
     return {
         "status": "mismatch" if has_mismatch else "ok",
@@ -1264,7 +1287,7 @@ def _cancel_orphan_stop_orders(
 
 _RECOVERY_AGE_SECONDS = 120  # 2 minutes before considering an order stale
 _LOST_AGE_SECONDS = 300      # 5 minutes before marking an order as lost
-_TIME_MATCH_TOLERANCE_MS = 30_000  # ±30 seconds for timestamp matching
+_TIME_MATCH_TOLERANCE_MS = 10_000  # ±10 seconds for timestamp matching
 
 
 def _apply_fill_recovery(
@@ -1400,7 +1423,7 @@ def _apply_fill_recovery(
             state_rec.state = "position"
             state_data = dict(state_rec.state_data or {})
             balance = Decimal(state_data.get("usdt_balance", "0"))
-            state_data["usdt_balance"] = str(balance - cost - fee)
+            state_data["usdt_balance"] = str(max(Decimal("0"), balance - cost - fee))
             state_rec.state_data = state_data
             state_rec.updated_at = now
 
@@ -1530,7 +1553,7 @@ def _apply_fill_recovery(
         if state_rec is not None:
             state_data = dict(state_rec.state_data or {})
             balance = Decimal(state_data.get("usdt_balance", "0"))
-            state_data["usdt_balance"] = str(balance - cost - fee)
+            state_data["usdt_balance"] = str(max(Decimal("0"), balance - cost - fee))
             state_rec.state_data = state_data
             state_rec.updated_at = now
 
@@ -1772,18 +1795,17 @@ def _recover_pending_orders_without_id(
         order_time_ms = int(record.created_at.timestamp() * 1000)
 
         match_found = None
+        best_time_diff = _TIME_MATCH_TOLERANCE_MS + 1
         for ex_order in exchange_orders:
             if ex_order.get("side") != order_side:
                 continue
             ex_qty = Decimal(str(ex_order.get("origQty", "0")))
-            # Qty within 1% tolerance
             if order_qty > 0 and abs(ex_qty - order_qty) / order_qty > Decimal("0.01"):
                 continue
-            # Timestamp within tolerance
             ex_time = ex_order.get("time", 0)
-            if abs(ex_time - order_time_ms) > _TIME_MATCH_TOLERANCE_MS:
+            time_diff = abs(ex_time - order_time_ms)
+            if time_diff > _TIME_MATCH_TOLERANCE_MS:
                 continue
-            # Check it's not already claimed by another OrderRecord
             ex_id = str(ex_order["orderId"])
             existing = (
                 session.query(OrderRecord)
@@ -1792,8 +1814,9 @@ def _recover_pending_orders_without_id(
             )
             if existing is not None:
                 continue
-            match_found = ex_order
-            break
+            if time_diff < best_time_diff:
+                best_time_diff = time_diff
+                match_found = ex_order
 
         if match_found is not None:
             # Associate the exchange_order_id and process

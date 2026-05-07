@@ -159,6 +159,11 @@ class BinanceExecutor(_OrdersMixin, _ActionsMixin):
         # Exchange filters cache: symbol → {lot_step, price_step, min_notional}
         self._filters: Dict[str, Dict[str, Decimal]] = {}
 
+        # Rate-limit tracking (Binance weight-based)
+        self._used_weight: int = 0
+        self._weight_limit: int = 1200
+        self._weight_warn_threshold: int = 1000
+
     # ── Properties ───────────────────────────────────────────────────────
 
     @property
@@ -683,6 +688,24 @@ class BinanceExecutor(_OrdersMixin, _ActionsMixin):
 
     # ── Private: signed HTTP requests ────────────────────────────────────
 
+    def _update_rate_limit(self, resp: requests.Response) -> None:
+        """Track Binance rate-limit weight from response headers."""
+        weight_str = resp.headers.get("X-MBX-USED-WEIGHT-1M", "")
+        if weight_str.isdigit():
+            self._used_weight = int(weight_str)
+
+    def _check_rate_limit(self) -> None:
+        """Pause if approaching the Binance weight limit."""
+        if self._used_weight >= self._weight_warn_threshold:
+            wait = 10 if self._used_weight >= self._weight_limit else 3
+            logger.warning(
+                "binance.rate_limit_backoff",
+                used_weight=self._used_weight,
+                limit=self._weight_limit,
+                wait_seconds=wait,
+            )
+            _time.sleep(wait)
+
     def _signed_request(
         self,
         method: str,
@@ -693,7 +716,10 @@ class BinanceExecutor(_OrdersMixin, _ActionsMixin):
         Send a signed request to Binance.
 
         Adds ``timestamp`` and ``signature`` (HMAC-SHA256) to every request.
+        Tracks rate-limit weight and backs off when approaching the limit.
         """
+        self._check_rate_limit()
+
         params = dict(params or {})
         params["timestamp"] = int(_time.time() * 1000)
         params["recvWindow"] = 5000
@@ -717,9 +743,20 @@ class BinanceExecutor(_OrdersMixin, _ActionsMixin):
         else:
             raise ValueError(f"Unsupported HTTP method: {method}")
 
+        self._update_rate_limit(resp)
+
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", "60"))
+            logger.error(
+                "binance.rate_limited",
+                retry_after=retry_after,
+                used_weight=self._used_weight,
+            )
+            _time.sleep(min(retry_after, 120))
+            raise BinanceAPIError(code=-1015, msg="Rate limited (429)")
+
         data = resp.json()
 
-        # Check for Binance error response
         if "code" in data and data["code"] < 0:
             raise BinanceAPIError(code=data["code"], msg=data.get("msg", ""))
 
