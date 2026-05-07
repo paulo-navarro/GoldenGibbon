@@ -339,8 +339,8 @@ class TestRunStrategyTickDispatcher:
         result = run_strategy_tick.apply()
         summary = result.result
 
-        # 3 strategies × 2 test symbols = 6
-        assert summary["dispatched"] == 6
+        # 2 enabled strategies × 2 test symbols = 4 (bear_guard disabled by default)
+        assert summary["dispatched"] == 4
 
     @patch(_PATCH_PUBLISH)
     @patch(_PATCH_KLINES, return_value=[])
@@ -360,8 +360,8 @@ class TestRunStrategyTickDispatcher:
         assert "smart_hodler:ETHUSDT" in pairs
         assert "mean_reversion:BTCUSDT" in pairs
         assert "mean_reversion:ETHUSDT" in pairs
-        assert "bear_guard:BTCUSDT" in pairs
-        assert "bear_guard:ETHUSDT" in pairs
+        assert "bear_guard:BTCUSDT" not in pairs
+        assert "bear_guard:ETHUSDT" not in pairs
 
 
 # ── Worker state caching ─────────────────────────────────────────────────────
@@ -411,8 +411,6 @@ class TestWorkerStateCaching:
             ("smart_hodler", "ETHUSDT"),
             ("mean_reversion", "BTCUSDT"),
             ("mean_reversion", "ETHUSDT"),
-            ("bear_guard", "BTCUSDT"),
-            ("bear_guard", "ETHUSDT"),
         }
         assert set(tasks_mod._worker_state.keys()) == expected_keys
 
@@ -470,13 +468,10 @@ class TestTickErrorIsolation:
         result = run_strategy_tick.apply()
         summary = result.result
 
-        # Dispatcher still reports all 6 dispatched
-        assert summary["dispatched"] == 6
+        # Dispatcher still reports all 4 dispatched (bear_guard disabled)
+        assert summary["dispatched"] == 4
 
-        # 3 of 4 worker state entries should exist (1 failed before creating)
-        # The failed pair still gets a worker state entry since the error
-        # happens after component creation — check that we have all 4
-        # (error is caught inside the task, not raised)
+        # At least 3 of 4 worker state entries should exist (1 may fail)
         assert len(tasks_mod._worker_state) >= 3
 
     @patch(_PATCH_PUBLISH)

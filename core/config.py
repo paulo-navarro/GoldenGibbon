@@ -226,7 +226,7 @@ class MeanReversionStrategyConfig(BaseModel):
 class BearGuardConfig(BaseModel):
     """Configuration for the BearGuard (bear trend short) strategy."""
 
-    enabled: bool = Field(default=True)
+    enabled: bool = Field(default=False, description="Disabled by default — short strategies are opt-in")
     description: Optional[str] = None
     allocation_pct: Optional[float] = Field(default=None, ge=0, le=1, description="Capital allocation weight (0–1). None = equal split.")
 

@@ -507,10 +507,40 @@ export interface StrategyListResponse {
   strategies: string[];
 }
 
+export interface StrategySummary {
+  name: string;
+  enabled: boolean;
+  allocation_pct: number | null;
+}
+
+export interface StrategyOverviewResponse {
+  strategies: StrategySummary[];
+}
+
 export function useStrategyList() {
   return useQuery({
     queryKey: ['strategy-list'],
     queryFn: () => fetchApi<StrategyListResponse>('/api/strategy/config/strategies'),
+  });
+}
+
+export function useStrategyOverview() {
+  return useQuery({
+    queryKey: ['strategy-overview'],
+    queryFn: () => fetchApi<StrategyOverviewResponse>('/api/strategy/config/overview'),
+  });
+}
+
+export function useToggleStrategy() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) =>
+      patchApi<StrategyConfigResponse>(`/api/strategy/config/${name}`, { enabled }),
+    onSuccess: (_data, { name }) => {
+      queryClient.invalidateQueries({ queryKey: ['strategy-overview'] });
+      queryClient.invalidateQueries({ queryKey: ['strategy-config', name] });
+    },
   });
 }
 

@@ -124,6 +124,16 @@ class StrategyListResponse(BaseModel):
     strategies: List[str]
 
 
+class StrategySummary(BaseModel):
+    name: str
+    enabled: bool
+    allocation_pct: Optional[float] = None
+
+
+class StrategyOverviewResponse(BaseModel):
+    strategies: List[StrategySummary]
+
+
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 
@@ -139,6 +149,32 @@ def list_strategies() -> StrategyListResponse:
         if name not in names:
             names.append(name)
     return StrategyListResponse(strategies=sorted(names))
+
+
+@router.get("/overview", response_model=StrategyOverviewResponse)
+def strategy_overview() -> StrategyOverviewResponse:
+    """Return enabled status and allocation weight for every strategy."""
+    settings = get_settings()
+    summaries: List[StrategySummary] = []
+
+    for field_name in settings.strategies.model_fields:
+        cfg = settings.strategies.get_strategy_config(field_name)
+        if cfg is None:
+            continue
+        if isinstance(cfg, dict):
+            summaries.append(StrategySummary(
+                name=field_name,
+                enabled=cfg.get("enabled", False),
+                allocation_pct=cfg.get("allocation_pct"),
+            ))
+        else:
+            summaries.append(StrategySummary(
+                name=field_name,
+                enabled=getattr(cfg, "enabled", False),
+                allocation_pct=getattr(cfg, "allocation_pct", None),
+            ))
+
+    return StrategyOverviewResponse(strategies=summaries)
 
 
 @router.get("/{name}", response_model=StrategyConfigResponse)

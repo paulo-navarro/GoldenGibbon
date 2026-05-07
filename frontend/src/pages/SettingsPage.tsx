@@ -13,14 +13,20 @@ import {
   Chip,
   Skeleton,
   Alert,
+  Card,
+  CardContent,
+  CardActions,
 } from '@mui/material';
 import SettingsIcon from '@mui/icons-material/Settings';
+import ShowChartIcon from '@mui/icons-material/ShowChart';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useNamespaceList,
   useNamespaceConfig,
   useUpdateNamespaceConfig,
   useResetNamespaceConfig,
+  useStrategyOverview,
+  useToggleStrategy,
 } from '../api';
 import type { NamespaceFieldMeta } from '../api';
 
@@ -209,6 +215,62 @@ function TradingModeEditor() {
   );
 }
 
+function StrategyToggles() {
+  const { data, isLoading, error } = useStrategyOverview();
+  const toggle = useToggleStrategy();
+
+  if (isLoading) return <Skeleton variant="rounded" height={80} />;
+  if (error) return <Alert severity="error" variant="outlined">Failed to load strategies</Alert>;
+  if (!data) return null;
+
+  return (
+    <Box sx={{ mb: 3 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+        <ShowChartIcon color="primary" />
+        <Typography variant="h6">Strategies</Typography>
+      </Box>
+      <Grid container spacing={2}>
+        {data.strategies.map((s) => (
+          <Grid size={{ xs: 12, sm: 6, md: 4 }} key={s.name}>
+            <Card variant="outlined">
+              <CardContent sx={{ pb: 0 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+                    {labelFromKey(s.name)}
+                  </Typography>
+                  <Chip
+                    label={s.enabled ? 'Active' : 'Disabled'}
+                    size="small"
+                    color={s.enabled ? 'success' : 'default'}
+                    variant={s.enabled ? 'filled' : 'outlined'}
+                  />
+                </Box>
+                {s.allocation_pct != null && (
+                  <Typography variant="caption" color="text.secondary">
+                    Allocation: {(s.allocation_pct * 100).toFixed(0)}%
+                  </Typography>
+                )}
+              </CardContent>
+              <CardActions sx={{ px: 2, pb: 1.5, justifyContent: 'flex-end' }}>
+                <Switch
+                  checked={s.enabled}
+                  disabled={toggle.isPending}
+                  onChange={(_, checked) => toggle.mutate({ name: s.name, enabled: checked })}
+                />
+              </CardActions>
+            </Card>
+          </Grid>
+        ))}
+      </Grid>
+      {toggle.isError && (
+        <Alert severity="error" variant="outlined" sx={{ mt: 1 }}>
+          Failed to toggle strategy
+        </Alert>
+      )}
+    </Box>
+  );
+}
+
 export default function SettingsPage() {
   const { data: listData, isLoading } = useNamespaceList();
   const [selected, setSelected] = useState('');
@@ -245,6 +307,8 @@ export default function SettingsPage() {
         <SettingsIcon color="primary" />
         <Typography variant="h5">Settings</Typography>
       </Box>
+
+      <StrategyToggles />
 
       <Grid container spacing={2}>
         <Grid size={{ xs: 12, md: 3 }}>

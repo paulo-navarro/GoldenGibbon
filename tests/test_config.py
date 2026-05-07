@@ -366,7 +366,7 @@ class TestBearGuardConfig:
     def test_default_values(self):
         """Test that all defaults match strategy spec § 10."""
         config = BearGuardConfig()
-        assert config.enabled is True
+        assert config.enabled is False
         assert config.timeframe_primary == "15m"
         assert config.timeframe_confirmation == "1h"
         assert config.ema_fast == 50
