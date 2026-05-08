@@ -304,3 +304,77 @@ On partial exits (SELL_HALF), `_execute_reduce` sent `decision.size` (full posit
 ### Fix
 
 - [x] Split validator: price fields (`open`, `high`, `low`, `close`) now require strictly positive (`> 0`); volume allows zero (valid for low-liquidity candles)
+
+---
+
+## BUG-014: Non-atomic buy — exchange order fills but PM rejects position, stranding assets
+
+**Status:** Fixed
+**Reported:** 2026-05-08
+**Severity:** Critical (real money loss)
+**Affected symbols:** CHZUSDT, PUMPUSDT (smart_hodler) — 435 CHZ + 9674 PUMP stranded on exchange
+
+### Symptom
+
+The bot bought assets on Binance but never created a local position. On every subsequent tick the system sees no position, the strategy generates a new BUY signal, and buys again — compounding the problem. Eventually the kill switch triggers with a false drawdown (PM equity is tiny because it never tracked the positions), blocking all trading across all pairs.
+
+**Production incident 2026-05-08 04:44 UTC:**
+- 4 filled buy orders (2× CHZ, 2× PUMP) totalling ~$38.70 of assets on the exchange
+- 0 positions in the DB
+- Kill switch falsely triggered at 41% drawdown across all 102 strategy pairs
+- Assets sat unmanaged on the exchange with no stop-loss protection
+
+### Root cause
+
+`_execute_open` in `core/execution/_actions.py` is **non-atomic**: it places a real market order on Binance first, then calls `pm.open_position()` to track it locally. `pm.open_position()` raises `ValueError("Insufficient funds")` when the PM's internal `usdt_balance` is lower than the position cost — even though the exchange already accepted and filled the order.
+
+The PM balance diverges from reality because:
+
+1. **Position sizing uses exchange capital:** The risk engine computes order size from `initial_capital` (= real exchange USDT ÷ `max_concurrent_positions`), e.g. ~$12.88 per slot.
+2. **PM balance tracks historical P&L:** The portfolio manager's `usdt_balance` is recovered from the DB at ~$0.40 — accumulated losses from paper-like P&L tracking that drifted far from the real exchange balance.
+3. **No pre-flight check:** Nothing validates that the PM can afford the position before the exchange order is placed.
+
+When `pm.open_position()` raises, the exception propagates through `execute()` → `run_single_strategy_tick` where it's caught by the outer `try/except`. The tick returns an error, **persistence never runs** (step 7 is skipped), and the position exists only on the exchange.
+
+### Sequence of events
+
+```
+1. risk.evaluate → OPEN, size=290 CHZ (~$12.88)
+2. _place_and_fill → BUY 290 CHZ on Binance → FILLED ✓
+3. pm.open_position() → ValueError("Insufficient funds: need 12.88, have 0.41") ✗
+4. Exception propagates → single_tick: failed
+5. Persistence skipped → position NOT in DB
+6. Next tick → PM has no position → BUY again → repeat
+7. After 2 cycles → kill switch triggers on false 41% drawdown → blocks ALL pairs
+```
+
+### Three sub-bugs
+
+1. **Non-atomic execution** (`_actions.py:91-155`): Exchange order placed before PM balance validation. If PM rejects, the asset is stranded.
+
+2. **PM balance ≠ exchange balance** (`_state.py:243-305`): `_sync_balance_from_exchange` adjusts proportionally across all strategy pairs, but the per-pair tracked balance drifts far from the per-slot allocated capital. The risk engine sizes orders against allocated capital while the PM validates against tracked balance.
+
+3. **Kill switch false drawdown** (`kill_switch.py:84-142`): Peak equity is based on the PM's historical high-water mark. When PM equity is $0.40 and peak was $0.80, the kill switch computes 50% drawdown even though real exchange equity hasn't changed.
+
+### Affected code
+
+- **`core/execution/_actions.py:91-155`** — `_execute_open`: places exchange order then calls `pm.open_position()` which can raise
+- **`core/execution/_actions.py:157-204`** — `_execute_scale_in`: same pattern
+- **`core/execution/binance.py:256-304`** — `execute()`: no try/except around action handlers, exceptions propagate
+- **`core/portfolio/__init__.py:112-124`** — `open_position`: raises `ValueError` on insufficient funds
+- **`core/tasks/_tick.py:586-618`** — tick pipeline: execution at step 5, persistence at step 7 — if step 5 crashes, step 7 is skipped
+- **`core/tasks/_state.py:243-305`** — `_sync_balance_from_exchange`: proportional correction doesn't fix the root divergence
+- **`core/risk/kill_switch.py:84-142`** — `check()`: drawdown computed from PM equity which is disconnected from reality
+
+### Fix plan
+
+- [x] **1. Pre-flight balance sync in live mode**
+  - [x] Added `_ensure_balance_for_cost()` helper in `_actions.py` that tops up PM balance when an exchange fill exceeds it
+  - [x] Called in `_execute_open` after fill, before `pm.open_position()` — PM balance is forced to cover the trade
+  - [x] Applied same fix to `_execute_scale_in`
+- [x] **2. Force-track on fill (safety net)**
+  - [x] `_ensure_balance_for_cost()` guarantees PM will accept the position after any exchange fill — logs warning with shortfall details
+  - [x] Covers both `open_position` and `scale_in` paths
+- [x] **3. Kill switch equity fix**
+  - [x] On state recovery in live mode, reset kill switch `_peak_equity` to 0 so first `check()` re-initialises from current equity
+  - [x] Prevents false drawdown triggers caused by stale peak from PM balance drift

@@ -118,6 +118,12 @@ class _ActionsMixin:
         fill_price = order.avg_fill_price or decision.price
         filled_size = order.filled_amount
 
+        # BUG-014: the exchange order already filled — ensure PM can track
+        # it.  An untracked position is far worse than an adjusted balance.
+        self._ensure_balance_for_cost(
+            decision.symbol, filled_size * fill_price,
+        )
+
         position = self._pm.open_position(
             symbol=decision.symbol,
             size=filled_size,
@@ -173,6 +179,11 @@ class _ActionsMixin:
 
         fill_price = order.avg_fill_price or decision.price
         filled_size = order.filled_amount
+
+        # BUG-014: same safety net as _execute_open.
+        self._ensure_balance_for_cost(
+            decision.symbol, filled_size * fill_price,
+        )
 
         position = self._pm.scale_in(
             symbol=decision.symbol,
@@ -436,7 +447,30 @@ class _ActionsMixin:
 
         return ExecutionResult(order=order, trade=trade)
 
-    # ── Private: balance helper ──────────────────────────────────────────
+    # ── Private: balance helpers ─────────────────────────────────────────
+
+    def _ensure_balance_for_cost(
+        self, symbol: str, notional_cost: Decimal,
+    ) -> None:
+        """Top up PM balance if it can't cover *notional_cost* (+ fee).
+
+        Called after an exchange order already filled to guarantee the PM
+        will accept the position.  Only adjusts when needed; in paper mode
+        the balance is authoritative so this is normally a no-op.
+        """
+        fee = self._pm._apply_fee(notional_cost)
+        total = notional_cost + fee
+        balance = self._pm._portfolio.usdt_balance
+        if total <= balance:
+            return
+        logger.warning(
+            "binance.balance_forced_for_fill",
+            symbol=symbol,
+            shortfall=str(total - balance),
+            balance_before=str(balance),
+            total_cost=str(total),
+        )
+        self._pm._portfolio.usdt_balance = total
 
     def _get_available_balance(self, symbol: str) -> Optional[Decimal]:
         """Query Binance for the free balance of the base asset in *symbol* (e.g. 'HBAR' from 'HBARUSDT')."""

@@ -134,6 +134,13 @@ def _recover_state(
                             data, current_trading_mode=trading_mode,
                         )
 
+                    # BUG-014: in live mode, PM balance drifts from
+                    # reality so the saved peak equity is unreliable.
+                    # Reset to 0 → first check() re-initialises from
+                    # current equity, preventing false drawdown triggers.
+                    if trading_mode == "live":
+                        kill_switch._peak_equity = Decimal("0")
+
                 logger.info(
                     "state_recovery: strategy state restored",
                     strategy=strategy_name,
