@@ -517,7 +517,16 @@ def run_single_strategy_tick(
                     elif new_effective_stop > old_effective_stop and updated_pos.exchange_stop_order_id:
                         if _cancel_stop(updated_pos.exchange_stop_order_id):
                             new_stop_id = _place_stop()
-                            comp.pm.update_stop_order_id(symbol, new_stop_id)
+                            if new_stop_id:
+                                comp.pm.update_stop_order_id(symbol, new_stop_id)
+                            else:
+                                # Placement failed — clear stale ID so next tick retries
+                                comp.pm.update_stop_order_id(symbol, None)
+                                log.warning(
+                                    "single_tick: stop ratchet placement failed, will retry",
+                                    symbol=symbol,
+                                    stop_price=str(new_effective_stop),
+                                )
 
         # ── 3. Strategy decision ─────────────────────────────
         signal = Signal.HOLD

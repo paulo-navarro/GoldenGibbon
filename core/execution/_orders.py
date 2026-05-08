@@ -206,6 +206,8 @@ class _OrdersMixin:
 
         formatted_stop = self._format_price(symbol, stop_price, futures=True)
 
+        self._cancel_stale_stop_records(symbol)
+
         record_id = self._write_ahead_order(
             symbol=symbol,
             side="buy",
@@ -722,7 +724,9 @@ class _OrdersMixin:
             symbol, stop_price * (1 - slippage_pct),
         )
 
-        # Write-ahead: persist stop order as PENDING
+        # Clean up any stale stop_loss records before creating a new one
+        self._cancel_stale_stop_records(symbol)
+
         record_id = self._write_ahead_order(
             symbol=symbol,
             side="sell",
@@ -801,6 +805,7 @@ class _OrdersMixin:
                 symbol=symbol,
                 order_id=order_id,
             )
+            self._mark_stop_record_cancelled(symbol, order_id)
             return True
         except BinanceAPIError as exc:
             if exc.code == -2011:
@@ -809,6 +814,7 @@ class _OrdersMixin:
                     symbol=symbol,
                     order_id=order_id,
                 )
+                self._mark_stop_record_cancelled(symbol, order_id)
                 return True
             logger.error(
                 "binance.stop_order_cancel_failed",
@@ -825,6 +831,69 @@ class _OrdersMixin:
                 order_id=order_id,
             )
             return False
+
+    def _mark_stop_record_cancelled(
+        self, symbol: str, exchange_order_id: str,
+    ) -> None:
+        """Mark the OrderRecord for a cancelled stop as 'cancelled' in the DB."""
+        if self._session_factory is None:
+            return
+        from db.models import OrderRecord
+
+        try:
+            with self._session_factory() as session:
+                record = (
+                    session.query(OrderRecord)
+                    .filter_by(
+                        symbol=symbol,
+                        exchange_order_id=exchange_order_id,
+                        intent="stop_loss",
+                    )
+                    .first()
+                )
+                if record:
+                    record.status = "cancelled"
+                    record.exchange_status = "CANCELED"
+                    record.reconciliation_status = "synced"
+        except Exception:
+            logger.warning(
+                "binance.mark_stop_cancelled_failed",
+                symbol=symbol,
+                exchange_order_id=exchange_order_id,
+            )
+
+    def _cancel_stale_stop_records(self, symbol: str) -> None:
+        """Mark any pending/rejected stop_loss OrderRecords for *symbol* as superseded.
+
+        Called before placing a new stop to prevent duplicate DB records.
+        """
+        if self._session_factory is None:
+            return
+        from db.models import OrderRecord
+
+        try:
+            with self._session_factory() as session:
+                stale = (
+                    session.query(OrderRecord)
+                    .filter_by(symbol=symbol, intent="stop_loss")
+                    .filter(OrderRecord.status.in_(("pending", "rejected")))
+                    .all()
+                )
+                for record in stale:
+                    record.status = "cancelled"
+                    record.exchange_status = record.exchange_status or "SUPERSEDED"
+                    record.reconciliation_status = "synced"
+                if stale:
+                    logger.info(
+                        "binance.stale_stop_records_cleaned",
+                        symbol=symbol,
+                        count=len(stale),
+                    )
+        except Exception:
+            logger.warning(
+                "binance.stale_stop_cleanup_failed",
+                symbol=symbol,
+            )
 
     def _check_stop_order_status(
         self, symbol: str, order_id: str,
@@ -871,6 +940,7 @@ class _OrdersMixin:
                 symbol=symbol,
                 order_id=order_id,
             )
+            self._mark_stop_record_cancelled(symbol, order_id)
             return True
         except BinanceAPIError as exc:
             if exc.code == -2011:
@@ -879,6 +949,7 @@ class _OrdersMixin:
                     symbol=symbol,
                     order_id=order_id,
                 )
+                self._mark_stop_record_cancelled(symbol, order_id)
                 return True
             logger.error(
                 "binance.futures_order_cancel_failed",

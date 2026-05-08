@@ -446,3 +446,163 @@ class TestScaleInRecreatesStop:
         assert result is not None
         assert "DELETE" in methods
         assert pm.get_position("BTCUSDT").exchange_stop_order_id == "22222"
+
+
+# ── Cancel marks DB record ──────────────────────────────────────────────────
+
+
+@patch("core.execution.binance.get_publisher")
+class TestCancelMarksDbRecord:
+
+    def test_cancel_stop_marks_order_record_cancelled(self, mock_pub):
+        """_cancel_stop_order updates the OrderRecord status to 'cancelled'."""
+        mock_pub.return_value = MagicMock()
+        pm = _pm()
+        ex = _executor(pm=pm)
+
+        # Simulate a session factory with an in-memory record store
+        from unittest.mock import PropertyMock
+        from contextlib import contextmanager
+
+        records = {}
+
+        class FakeRecord:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        @contextmanager
+        def fake_session():
+            class Session:
+                def query(self, model):
+                    return self
+                def filter_by(self, **kwargs):
+                    self._filter = kwargs
+                    return self
+                def first(self):
+                    key = (self._filter.get("symbol"), self._filter.get("exchange_order_id"))
+                    return records.get(key)
+            yield Session()
+
+        records[("BTCUSDT", "99999")] = FakeRecord(
+            symbol="BTCUSDT",
+            exchange_order_id="99999",
+            intent="stop_loss",
+            status="pending",
+            exchange_status="NEW",
+            reconciliation_status="pending_sync",
+        )
+
+        ex._session_factory = fake_session
+
+        with patch.object(ex, "_signed_request", return_value={"status": "CANCELED"}):
+            result = ex._cancel_stop_order("BTCUSDT", "99999")
+
+        assert result is True
+        record = records[("BTCUSDT", "99999")]
+        assert record.status == "cancelled"
+        assert record.exchange_status == "CANCELED"
+
+    def test_cancel_2011_also_marks_record(self, mock_pub):
+        """When Binance says order already gone (-2011), record is still marked."""
+        mock_pub.return_value = MagicMock()
+        pm = _pm()
+        ex = _executor(pm=pm)
+
+        from contextlib import contextmanager
+
+        records = {}
+
+        class FakeRecord:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        @contextmanager
+        def fake_session():
+            class Session:
+                def query(self, model):
+                    return self
+                def filter_by(self, **kwargs):
+                    self._filter = kwargs
+                    return self
+                def first(self):
+                    key = (self._filter.get("symbol"), self._filter.get("exchange_order_id"))
+                    return records.get(key)
+            yield Session()
+
+        records[("BTCUSDT", "99999")] = FakeRecord(
+            symbol="BTCUSDT",
+            exchange_order_id="99999",
+            intent="stop_loss",
+            status="pending",
+            exchange_status="NEW",
+            reconciliation_status="pending_sync",
+        )
+
+        ex._session_factory = fake_session
+
+        def raise_2011(*args, **kwargs):
+            raise BinanceAPIError(code=-2011, msg="Unknown order")
+
+        with patch.object(ex, "_signed_request", side_effect=raise_2011):
+            result = ex._cancel_stop_order("BTCUSDT", "99999")
+
+        assert result is True
+        record = records[("BTCUSDT", "99999")]
+        assert record.status == "cancelled"
+
+
+# ── Stale record cleanup ────────────────────────────────────────────────────
+
+
+@patch("core.execution.binance.get_publisher")
+class TestStaleRecordCleanup:
+
+    def test_stale_pending_records_cleaned_before_new_stop(self, mock_pub):
+        """Old pending stop_loss records are marked cancelled before placing a new stop."""
+        mock_pub.return_value = MagicMock()
+        pm = _pm()
+        ex = _executor(pm=pm)
+
+        from contextlib import contextmanager
+
+        cleaned = []
+
+        class FakeRecord:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        stale_record = FakeRecord(
+            symbol="BTCUSDT", intent="stop_loss", status="pending",
+            exchange_status="NEW", reconciliation_status="pending_sync",
+        )
+
+        @contextmanager
+        def fake_session():
+            class QueryChain:
+                def __init__(self):
+                    self._model = None
+                def filter_by(self, **kwargs):
+                    self._filter = kwargs
+                    return self
+                def filter(self, *args):
+                    return self
+                def all(self):
+                    return [stale_record]
+
+            class Session:
+                def query(self, model):
+                    return QueryChain()
+                def add(self, record):
+                    pass
+                def flush(self):
+                    pass
+            yield Session()
+
+        ex._session_factory = fake_session
+        ex._cancel_stale_stop_records("BTCUSDT")
+
+        assert stale_record.status == "cancelled"
+        assert stale_record.reconciliation_status == "synced"
