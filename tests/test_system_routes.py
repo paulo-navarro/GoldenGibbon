@@ -182,51 +182,51 @@ class TestGetLogs:
 
     def test_response_shape(self, client_with_logs):
         data = client_with_logs.get("/api/system/logs").json()
-        expected_keys = {"file", "total_lines", "lines"}
+        expected_keys = {"file", "total_count", "offset", "limit", "lines"}
         assert expected_keys == set(data.keys())
 
     def test_default_returns_all_lines(self, client_with_logs):
         """Default limit (100) exceeds file size, so all 10 lines returned."""
         data = client_with_logs.get("/api/system/logs").json()
-        assert data["total_lines"] == 10
+        assert data["total_count"] == 10
         assert len(data["lines"]) == 10
 
     def test_lines_param(self, client_with_logs):
-        data = client_with_logs.get("/api/system/logs", params={"lines": 3}).json()
-        assert data["total_lines"] == 3
+        data = client_with_logs.get("/api/system/logs", params={"limit": 3}).json()
+        assert data["total_count"] == 10
         assert len(data["lines"]) == 3
 
     def test_lines_returns_tail(self, client_with_logs):
         """Limited results should be from the end of the file."""
-        data = client_with_logs.get("/api/system/logs", params={"lines": 1}).json()
+        data = client_with_logs.get("/api/system/logs", params={"limit": 1}).json()
         assert "reconnected" in data["lines"][0]
 
     def test_lines_bounds_min(self, client_with_logs):
-        resp = client_with_logs.get("/api/system/logs", params={"lines": 0})
+        resp = client_with_logs.get("/api/system/logs", params={"limit": 0})
         assert resp.status_code == 422
 
     def test_lines_bounds_max(self, client_with_logs):
-        resp = client_with_logs.get("/api/system/logs", params={"lines": 5001})
+        resp = client_with_logs.get("/api/system/logs", params={"limit": 5001})
         assert resp.status_code == 422
 
     def test_level_filter_info(self, client_with_logs):
         data = client_with_logs.get(
             "/api/system/logs", params={"level": "info"}
         ).json()
-        assert data["total_lines"] == 6
+        assert data["total_count"] == 6
         assert all("info" in line.lower() for line in data["lines"])
 
     def test_level_filter_error(self, client_with_logs):
         data = client_with_logs.get(
             "/api/system/logs", params={"level": "error"}
         ).json()
-        assert data["total_lines"] == 2
+        assert data["total_count"] == 2
 
     def test_level_filter_warning(self, client_with_logs):
         data = client_with_logs.get(
             "/api/system/logs", params={"level": "warning"}
         ).json()
-        assert data["total_lines"] == 2
+        assert data["total_count"] == 2
 
     def test_404_when_no_log_file(self, client_no_logs):
         resp = client_no_logs.get("/api/system/logs")
@@ -250,7 +250,7 @@ class TestGetLogs:
                 TestClient(app) as tc,
             ):
                 data = tc.get("/api/system/logs").json()
-                assert data["total_lines"] == 0
+                assert data["total_count"] == 0
                 assert data["lines"] == []
 
     def test_file_path_in_response(self, client_with_logs, log_file):
