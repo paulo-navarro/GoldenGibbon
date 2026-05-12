@@ -17,6 +17,7 @@ GET /price/{symbol}
 
 from __future__ import annotations
 
+import json as _json
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional
@@ -48,6 +49,15 @@ class PriceResponse(BaseModel):
     price: str  # Decimal as string to preserve precision
     open_time: datetime
     timeframe: str
+
+
+class Ticker24hItem(BaseModel):
+    symbol: str
+    price_change_pct: str
+
+
+class Ticker24hResponse(BaseModel):
+    tickers: list[Ticker24hItem]
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -148,3 +158,36 @@ def get_price(
         open_time=record.open_time,
         timeframe=record.timeframe,
     )
+
+
+@router.get("/ticker24h", response_model=Ticker24hResponse)
+def get_ticker_24h() -> Ticker24hResponse:
+    """Fetch 24h price change percentage for all enabled symbols from Binance."""
+    from core.config import get_settings
+
+    symbols = [s.symbol for s in get_settings().enabled_symbols]
+    if not symbols:
+        return Ticker24hResponse(tickers=[])
+
+    import requests as _requests
+
+    symbol_set = set(symbols)
+    try:
+        resp = _requests.get(
+            "https://api.binance.com/api/v3/ticker/24hr",
+            params={"symbols": _json.dumps(symbols, separators=(",", ":"))},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        tickers = [
+            Ticker24hItem(
+                symbol=item["symbol"],
+                price_change_pct=item["priceChangePercent"],
+            )
+            for item in resp.json()
+            if item["symbol"] in symbol_set
+        ]
+    except Exception:
+        tickers = []
+
+    return Ticker24hResponse(tickers=tickers)

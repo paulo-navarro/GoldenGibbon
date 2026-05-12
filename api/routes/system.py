@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -45,7 +44,9 @@ class HealthResponse(BaseModel):
 
 class LogsResponse(BaseModel):
     file: str
-    total_lines: int
+    total_count: int
+    offset: int
+    limit: int
     lines: list[str]
 
 
@@ -94,27 +95,39 @@ def _check_heartbeat_key() -> bool:
         return False
 
 
-def _tail_file(path: str, n: int, level_filter: Optional[str] = None) -> list[str]:
-    """
-    Read the last *n* lines from *path*, optionally filtering by log level.
+def _read_logs(
+    path: str,
+    limit: int,
+    offset: int = 0,
+    level_filter: Optional[str] = None,
+    category_filter: Optional[str] = None,
+) -> tuple[list[str], int]:
+    """Return ``(page_lines, total_matching)`` from the log file.
 
-    Uses a deque for memory-efficient tailing regardless of file size.
+    Pagination counts from the tail: offset 0 returns the most recent page.
     """
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(path)
 
     with p.open("r", encoding="utf-8", errors="replace") as f:
-        if level_filter is None:
-            lines = list(deque(f, maxlen=n))
-        else:
-            # Read all lines and filter, then take last N
-            needle = f'"level": "{level_filter.lower()}"'
-            filtered = [line for line in f if needle in line.lower()]
-            lines = filtered[-n:]
+        lines = f.readlines()
 
-    # Strip trailing newlines
-    return [line.rstrip("\n") for line in lines]
+    if level_filter:
+        needle = f'"level": "{level_filter.lower()}"'
+        lines = [l for l in lines if needle in l.lower()]
+
+    if category_filter:
+        needle = f'"category": "{category_filter}"'
+        lines = [l for l in lines if needle in l]
+
+    total = len(lines)
+
+    end = total - offset
+    start = max(end - limit, 0)
+    page = lines[start:end] if end > 0 else []
+
+    return [l.rstrip("\n") for l in page], total
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -155,19 +168,25 @@ async def health(request: Request) -> HealthResponse:
 
 @router.get("/logs", response_model=LogsResponse)
 def get_logs(
-    lines: int = Query(100, ge=1, le=5000, description="Number of lines to return (from tail)"),
-    level: Optional[str] = Query(None, description="Filter by log level (e.g. info, error, warning)"),
+    limit: int = Query(100, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+    level: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
 ) -> LogsResponse:
     """
-    Return the last *lines* entries from the structured log file.
+    Return a page of log entries from the structured log file.
 
-    Reads directly from disk. The log file path is determined by
-    ``settings.yaml`` logging configuration.
+    Pagination counts from the tail: ``offset=0`` returns the most
+    recent *limit* lines.
     """
     log_path = _get_log_path()
 
     try:
-        result = _tail_file(log_path, lines, level_filter=level)
+        result, total_count = _read_logs(
+            log_path, limit, offset,
+            level_filter=level,
+            category_filter=category,
+        )
     except FileNotFoundError:
         raise HTTPException(
             status_code=404,
@@ -176,6 +195,8 @@ def get_logs(
 
     return LogsResponse(
         file=log_path,
-        total_lines=len(result),
+        total_count=total_count,
+        offset=offset,
+        limit=limit,
         lines=result,
     )

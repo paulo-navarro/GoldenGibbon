@@ -15,6 +15,8 @@ export interface HealthResponse {
 /** Log tail response (GET /api/system/logs). */
 export interface LogsResponse {
   file: string;
-  total_lines: number;
+  total_count: number;
+  offset: number;
+  limit: number;
   lines: string[];
 }

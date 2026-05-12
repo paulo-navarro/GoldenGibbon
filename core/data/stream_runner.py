@@ -37,6 +37,9 @@ logger = structlog.get_logger(__name__)
 _closed_candles: OrderedDict[Tuple[str, str, str], None] = OrderedDict()
 _MAX_CLOSED_CACHE = 500  # trim when exceeded
 
+_TF_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440, "1w": 10080}
+_price_timeframe: Dict[str, str] = {}
+
 
 def _make_close_key(update: dict) -> Tuple[str, str, str]:
     """Build a dedup key from a KlineUpdate dict."""
@@ -48,7 +51,16 @@ def _make_close_key(update: dict) -> Tuple[str, str, str]:
 
 
 def on_update(update: dict) -> None:
-    """Publish a PRICE_UPDATE event for live dashboard prices."""
+    """Publish a PRICE_UPDATE event for live dashboard prices.
+
+    Only emits for the smallest configured timeframe per symbol to
+    avoid redundant events (the close price is the same across all
+    timeframes at any given moment).
+    """
+    symbol = update["symbol"]
+    if update["timeframe"] != _price_timeframe.get(symbol, update["timeframe"]):
+        return
+
     from core.events import EventChannel, EventType, get_publisher
 
     publisher = get_publisher()
@@ -144,6 +156,12 @@ async def _run() -> None:  # pragma: no cover – integration entrypoint
     timeframes = sorted(
         {tf for s in settings.enabled_symbols for tf in s.timeframes}
     )
+
+    global _price_timeframe  # noqa: PLW0603
+    for sym_cfg in settings.enabled_symbols:
+        _price_timeframe[sym_cfg.symbol] = min(
+            sym_cfg.timeframes, key=lambda tf: _TF_MINUTES.get(tf, 9999)
+        )
 
     if not symbols:
         logger.error("stream_runner.no_symbols")

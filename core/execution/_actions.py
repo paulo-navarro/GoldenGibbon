@@ -69,6 +69,7 @@ class _ActionsMixin:
 
             logger.info(
                 "binance.exchange_stop_filled",
+                category="trade",
                 symbol=symbol,
                 order_id=pos.exchange_stop_order_id,
                 fill_price=str(fill_price),
@@ -107,6 +108,7 @@ class _ActionsMixin:
         if order is None or order.status != OrderStatus.FILLED:
             logger.error(
                 "binance.open_failed",
+                category="trade",
                 symbol=decision.symbol,
                 side=decision.side.value,
                 size=str(decision.size),
@@ -137,6 +139,7 @@ class _ActionsMixin:
 
         logger.info(
             "binance.open",
+            category="trade",
             symbol=decision.symbol,
             side=decision.side.value,
             size=str(filled_size),
@@ -170,6 +173,7 @@ class _ActionsMixin:
         if order is None or order.status != OrderStatus.FILLED:
             logger.error(
                 "binance.scale_in_failed",
+                category="trade",
                 symbol=decision.symbol,
                 size=str(decision.size),
                 order_status=order.status.value if order else "no_order",
@@ -194,6 +198,7 @@ class _ActionsMixin:
 
         logger.info(
             "binance.scale_in",
+            category="trade",
             symbol=decision.symbol,
             size=str(filled_size),
             fill_price=str(fill_price),
@@ -296,6 +301,7 @@ class _ActionsMixin:
         if order is None or order.status != OrderStatus.FILLED:
             logger.error(
                 "binance.close_failed",
+                category="trade",
                 symbol=decision.symbol,
                 size=str(decision.size),
                 order_status=order.status.value if order else "no_order",
@@ -325,6 +331,7 @@ class _ActionsMixin:
 
         logger.info(
             "binance.close",
+            category="trade",
             symbol=decision.symbol,
             size=str(trade.size),
             fill_price=str(fill_price),
@@ -403,6 +410,7 @@ class _ActionsMixin:
         if order is None or order.status != OrderStatus.FILLED:
             logger.error(
                 "binance.reduce_failed",
+                category="trade",
                 symbol=decision.symbol,
                 size=str(decision.size),
                 order_status=order.status.value if order else "no_order",
@@ -423,6 +431,7 @@ class _ActionsMixin:
 
         logger.info(
             "binance.reduce",
+            category="trade",
             symbol=decision.symbol,
             size=str(trade.size),
             fill_price=str(fill_price),

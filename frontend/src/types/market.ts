@@ -21,3 +21,13 @@ export interface PriceResponse {
   open_time: string; // ISO 8601
   timeframe: string;
 }
+
+/** 24h ticker item (GET /api/market/ticker24h). */
+export interface Ticker24hItem {
+  symbol: string;
+  price_change_pct: string;
+}
+
+export interface Ticker24hResponse {
+  tickers: Ticker24hItem[];
+}

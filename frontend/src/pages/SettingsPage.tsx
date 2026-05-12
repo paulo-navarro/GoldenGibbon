@@ -11,29 +11,34 @@ import {
   Switch,
   Button,
   Chip,
+  Divider,
   Skeleton,
   Alert,
-  Card,
-  CardContent,
-  CardActions,
 } from '@mui/material';
 import SettingsIcon from '@mui/icons-material/Settings';
-import ShowChartIcon from '@mui/icons-material/ShowChart';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useNamespaceList,
   useNamespaceConfig,
   useUpdateNamespaceConfig,
   useResetNamespaceConfig,
+  useStrategyList,
+  useStrategyConfig,
+  useUpdateStrategyConfig,
+  useResetStrategyConfig,
   useStrategyOverview,
   useToggleStrategy,
 } from '../api';
-import type { NamespaceFieldMeta } from '../api';
+import type { FieldMeta, NamespaceFieldMeta } from '../api';
 
 function labelFromKey(key: string): string {
   return key
     .replace(/_/g, ' ')
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .replace(/\bEma\b/g, 'EMA')
+    .replace(/\bAdx\b/g, 'ADX')
+    .replace(/\bRsi\b/g, 'RSI')
+    .replace(/\bBb\b/g, 'BB');
 }
 
 function NamespaceEditor({ namespace, onSaved }: { namespace: string; onSaved?: () => void }) {
@@ -215,62 +220,186 @@ function TradingModeEditor() {
   );
 }
 
-function StrategyToggles() {
-  const { data, isLoading, error } = useStrategyOverview();
+const STRATEGY_PREFIX = '_strategy:';
+
+function StrategyConfigEditor({ strategyName }: { strategyName: string }) {
+  const { data, isLoading, error } = useStrategyConfig(strategyName);
+  const { update, isPending, isError, isSuccess } = useUpdateStrategyConfig(strategyName);
+  const resetMutation = useResetStrategyConfig(strategyName);
+  const { data: overviewData } = useStrategyOverview();
   const toggle = useToggleStrategy();
 
-  if (isLoading) return <Skeleton variant="rounded" height={80} />;
-  if (error) return <Alert severity="error" variant="outlined">Failed to load strategies</Alert>;
+  const [edits, setEdits] = useState<Record<string, unknown>>({});
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    setEdits({});
+    setStatusMsg(null);
+  }, [strategyName]);
+
+  useEffect(() => {
+    if (isSuccess) {
+      setEdits({});
+      setStatusMsg('Saved');
+      const t = setTimeout(() => setStatusMsg(null), 2000);
+      return () => clearTimeout(t);
+    }
+    if (isError) {
+      setStatusMsg('Failed to save');
+      const t = setTimeout(() => setStatusMsg(null), 3000);
+      return () => clearTimeout(t);
+    }
+  }, [isSuccess, isError]);
+
+  useEffect(() => {
+    if (resetMutation.isSuccess) {
+      setEdits({});
+      setStatusMsg('Reset to defaults');
+      const t = setTimeout(() => setStatusMsg(null), 2000);
+      return () => clearTimeout(t);
+    }
+  }, [resetMutation.isSuccess]);
+
+  const grouped = useMemo(() => {
+    if (!data) return {};
+    const groups: Record<string, FieldMeta[]> = {};
+    for (const field of data.fields) {
+      if (field.name === 'enabled' || field.name === 'description') continue;
+      const g = field.group;
+      if (!groups[g]) groups[g] = [];
+      groups[g].push(field);
+    }
+    return groups;
+  }, [data]);
+
+  const handleChange = useCallback((name: string, value: unknown) => {
+    setEdits((prev) => ({ ...prev, [name]: value }));
+  }, []);
+
+  const handleApply = useCallback(() => {
+    if (Object.keys(edits).length === 0) return;
+    update(edits);
+  }, [edits, update]);
+
+  const enabled = overviewData?.strategies.find((s) => s.name === strategyName)?.enabled ?? true;
+  const hasEdits = Object.keys(edits).length > 0;
+
+  if (isLoading) return <Skeleton variant="rounded" height={200} />;
+  if (error) return <Alert severity="error">Failed to load {strategyName} config</Alert>;
   if (!data) return null;
 
   return (
-    <Box sx={{ mb: 3 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-        <ShowChartIcon color="primary" />
-        <Typography variant="h6">Strategies</Typography>
+    <Box>
+      <Typography variant="h6" sx={{ mb: 2 }}>{labelFromKey(strategyName)}</Typography>
+
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3, p: 1.5, borderRadius: 1, bgcolor: 'action.hover' }}>
+        <Box>
+          <Typography variant="body2" fontWeight={600}>Strategy Enabled</Typography>
+          <Typography variant="caption" color="text.secondary">
+            {enabled ? 'This strategy is actively trading' : 'This strategy is paused'}
+          </Typography>
+        </Box>
+        <Switch
+          checked={enabled}
+          disabled={toggle.isPending}
+          onChange={(_, checked) => toggle.mutate({ name: strategyName, enabled: checked })}
+        />
       </Box>
-      <Grid container spacing={2}>
-        {data.strategies.map((s) => (
-          <Grid size={{ xs: 12, sm: 6, md: 4 }} key={s.name}>
-            <Card variant="outlined">
-              <CardContent sx={{ pb: 0 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-                    {labelFromKey(s.name)}
-                  </Typography>
-                  <Chip
-                    label={s.enabled ? 'Active' : 'Disabled'}
+
+      {Object.entries(grouped).map(([group, fields]) => (
+        <Box key={group} sx={{ mb: 2 }}>
+          <Typography variant="overline" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
+            {group}
+          </Typography>
+          <Grid container spacing={1.5}>
+            {fields.map((field) => {
+              const currentValue = field.name in edits ? edits[field.name] : field.value;
+
+              if (field.type === 'bool') {
+                return (
+                  <Grid size={{ xs: 12, sm: 6, md: 4 }} key={field.name}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Typography variant="body2">{labelFromKey(field.name)}</Typography>
+                      <Switch
+                        size="small"
+                        checked={!!currentValue}
+                        onChange={(_, checked) => handleChange(field.name, checked)}
+                      />
+                    </Box>
+                  </Grid>
+                );
+              }
+
+              if (field.type === 'list') return null;
+
+              return (
+                <Grid size={{ xs: 6, sm: 4, md: 3 }} key={field.name}>
+                  <TextField
+                    fullWidth
                     size="small"
-                    color={s.enabled ? 'success' : 'default'}
-                    variant={s.enabled ? 'filled' : 'outlined'}
+                    label={labelFromKey(field.name)}
+                    type={field.type === 'int' || field.type === 'float' ? 'number' : 'text'}
+                    value={currentValue ?? ''}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (field.type === 'int') handleChange(field.name, raw === '' ? '' : parseInt(raw, 10));
+                      else if (field.type === 'float') handleChange(field.name, raw === '' ? '' : parseFloat(raw));
+                      else handleChange(field.name, raw);
+                    }}
+                    slotProps={{
+                      htmlInput: {
+                        min: field.min,
+                        max: field.max,
+                        step: field.type === 'float' ? 0.01 : 1,
+                      },
+                    }}
+                    helperText={field.description}
                   />
-                </Box>
-              </CardContent>
-              <CardActions sx={{ px: 2, pb: 1.5, justifyContent: 'flex-end' }}>
-                <Switch
-                  checked={s.enabled}
-                  disabled={toggle.isPending}
-                  onChange={(_, checked) => toggle.mutate({ name: s.name, enabled: checked })}
-                />
-              </CardActions>
-            </Card>
+                </Grid>
+              );
+            })}
           </Grid>
-        ))}
-      </Grid>
-      {toggle.isError && (
-        <Alert severity="error" variant="outlined" sx={{ mt: 1 }}>
-          Failed to toggle strategy
-        </Alert>
-      )}
+        </Box>
+      ))}
+
+      <Box sx={{ display: 'flex', gap: 1, mt: 2, alignItems: 'center' }}>
+        <Button
+          variant="contained"
+          size="small"
+          onClick={handleApply}
+          disabled={!hasEdits || isPending}
+        >
+          {isPending ? 'Saving...' : 'Apply'}
+        </Button>
+        <Button
+          variant="outlined"
+          size="small"
+          color="warning"
+          onClick={() => resetMutation.mutate()}
+          disabled={isPending || resetMutation.isPending}
+        >
+          Reset to Defaults
+        </Button>
+        {statusMsg && (
+          <Chip
+            label={statusMsg}
+            size="small"
+            color={statusMsg === 'Saved' ? 'success' : statusMsg.includes('Reset') ? 'info' : 'error'}
+            variant="outlined"
+          />
+        )}
+      </Box>
     </Box>
   );
 }
 
 export default function SettingsPage() {
   const { data: listData, isLoading } = useNamespaceList();
+  const { data: strategyListData } = useStrategyList();
+  const { data: overviewData } = useStrategyOverview();
   const [selected, setSelected] = useState('');
 
-  const menuItems = useMemo(() => {
+  const namespaceItems = useMemo(() => {
     const raw = listData?.namespaces ?? [];
     const items: string[] = [];
     let tradingInserted = false;
@@ -290,11 +419,16 @@ export default function SettingsPage() {
     return items;
   }, [listData]);
 
+  const strategies = useMemo(
+    () => strategyListData?.strategies ?? [],
+    [strategyListData],
+  );
+
   useEffect(() => {
-    if (menuItems.length > 0 && !selected) {
-      setSelected(menuItems[0]);
+    if (namespaceItems.length > 0 && !selected) {
+      setSelected(namespaceItems[0]);
     }
-  }, [menuItems, selected]);
+  }, [namespaceItems, selected]);
 
   return (
     <Box sx={{ p: 2 }}>
@@ -303,8 +437,6 @@ export default function SettingsPage() {
         <Typography variant="h5">Settings</Typography>
       </Box>
 
-      <StrategyToggles />
-
       <Grid container spacing={2}>
         <Grid size={{ xs: 12, md: 3 }}>
           <Paper variant="outlined" sx={{ p: 1 }}>
@@ -312,7 +444,7 @@ export default function SettingsPage() {
               <Skeleton variant="rounded" height={300} />
             ) : (
               <List dense disablePadding>
-                {menuItems.map((key) => (
+                {namespaceItems.map((key) => (
                   <ListItemButton
                     key={key}
                     selected={key === selected}
@@ -324,6 +456,35 @@ export default function SettingsPage() {
                     />
                   </ListItemButton>
                 ))}
+                {strategies.length > 0 && (
+                  <>
+                    <Divider sx={{ my: 1 }} />
+                    <Typography variant="caption" color="text.secondary" sx={{ px: 2, py: 0.5, display: 'block' }}>
+                      Strategies
+                    </Typography>
+                    {strategies.map((name) => {
+                      const key = STRATEGY_PREFIX + name;
+                      const enabled = overviewData?.strategies.find((s) => s.name === name)?.enabled;
+                      return (
+                        <ListItemButton
+                          key={key}
+                          selected={key === selected}
+                          onClick={() => setSelected(key)}
+                          sx={{ borderRadius: 1 }}
+                        >
+                          <ListItemText primary={labelFromKey(name)} />
+                          <Chip
+                            label={enabled ? 'On' : 'Off'}
+                            size="small"
+                            color={enabled ? 'success' : 'default'}
+                            variant={enabled ? 'filled' : 'outlined'}
+                            sx={{ ml: 1 }}
+                          />
+                        </ListItemButton>
+                      );
+                    })}
+                  </>
+                )}
               </List>
             )}
           </Paper>
@@ -333,6 +494,8 @@ export default function SettingsPage() {
           <Paper variant="outlined" sx={{ p: 2 }}>
             {selected === TRADING_MODE_KEY ? (
               <TradingModeEditor />
+            ) : selected.startsWith(STRATEGY_PREFIX) ? (
+              <StrategyConfigEditor strategyName={selected.slice(STRATEGY_PREFIX.length)} />
             ) : selected ? (
               <NamespaceEditor namespace={selected} />
             ) : (

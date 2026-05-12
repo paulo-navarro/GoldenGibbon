@@ -383,6 +383,7 @@ def run_single_strategy_tick(
                 )
                 log.info(
                     "single_tick: exchange stop filled between ticks",
+                    category="trade",
                     symbol=symbol,
                     fill_price=str(fill_price),
                     pnl_usdt=str(trade.pnl_usdt),
@@ -439,6 +440,7 @@ def run_single_strategy_tick(
         if stop_result.stop_hit:
             log.info(
                 "single_tick: stop hit",
+                category="risk",
                 exit_reason=str(stop_result.decision.exit_reason),
                 close=str(close),
             )
@@ -661,6 +663,7 @@ def run_single_strategy_tick(
 
         log.info(
             "single_tick: complete",
+            category="signal",
             signal=signal.value,
             state=comp.strategy.state.value,
             close=str(close),
@@ -729,7 +732,7 @@ def run_strategy_tick(self) -> Dict[str, Any]:  # noqa: ANN001
     stale_keys = [k for k in _worker_state if k not in active_keys]
     for k in stale_keys:
         del _worker_state[k]
-        logger.info("run_strategy_tick: evicted stale worker state", strategy=k[0], symbol=k[1])
+        logger.info("run_strategy_tick: evicted stale worker state", category="state", strategy=k[0], symbol=k[1])
 
     job = group(
         run_single_strategy_tick.s(strategy_name, symbol)

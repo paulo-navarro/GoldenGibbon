@@ -182,6 +182,7 @@ class KillSwitch:
 
         logger.info(
             "kill_switch.reset",
+            category="risk",
             previous_reason=prev_reason,
             peak_equity=str(self._peak_equity),
         )
@@ -205,6 +206,7 @@ class KillSwitch:
 
         logger.info(
             "kill_switch.hard_reset",
+            category="risk",
             previous_reason=prev_reason,
             previous_peak_equity=str(prev_peak),
         )
@@ -269,6 +271,7 @@ class KillSwitch:
         if self._triggered:
             logger.warning(
                 "kill_switch.restored_triggered",
+                category="risk",
                 reason=self._trigger_reason,
                 peak_equity=str(self._peak_equity),
             )
@@ -288,6 +291,7 @@ class KillSwitch:
 
         logger.critical(
             "kill_switch.TRIGGERED",
+            category="risk",
             reason=reason,
             **data,
         )

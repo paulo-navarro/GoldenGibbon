@@ -69,6 +69,7 @@ class EvaluationMixin:
             )
             logger.info(
                 "risk.evaluate",
+                category="risk",
                 action=decision.action.value,
                 symbol=symbol,
                 signal=signal.value,
@@ -93,6 +94,7 @@ class EvaluationMixin:
             )
             logger.info(
                 "risk.evaluate",
+                category="risk",
                 action=decision.action.value,
                 symbol=symbol,
                 signal=signal.value,
@@ -113,6 +115,7 @@ class EvaluationMixin:
             if decision.action != RiskAction.HOLD:
                 logger.info(
                     "risk.evaluate",
+                    category="risk",
                     action=decision.action.value,
                     symbol=symbol,
                     signal=signal.value,
@@ -126,6 +129,7 @@ class EvaluationMixin:
             if not self._shorts_enabled:
                 logger.info(
                     "risk.short_disabled",
+                    category="risk",
                     symbol=symbol,
                     signal=signal.value,
                 )
@@ -141,6 +145,7 @@ class EvaluationMixin:
             if decision.action != RiskAction.HOLD:
                 logger.info(
                     "risk.evaluate",
+                    category="risk",
                     action=decision.action.value,
                     symbol=symbol,
                     signal=signal.value,
@@ -167,6 +172,7 @@ class EvaluationMixin:
         if self._is_daily_limit_reached():
             logger.info(
                 "risk.daily_limit_reached",
+                category="risk",
                 symbol=symbol,
                 max_daily_trades=self._max_daily_trades,
                 opens_today=self.get_daily_opens(),
@@ -176,6 +182,7 @@ class EvaluationMixin:
         if self._is_symbol_exposure_exceeded(symbol, portfolio, close):
             logger.info(
                 "risk.symbol_exposure_exceeded",
+                category="risk",
                 symbol=symbol,
                 max_symbol_exposure_usdt=str(self._max_symbol_exposure_usdt),
             )
@@ -221,6 +228,7 @@ class EvaluationMixin:
         if self._is_daily_limit_reached():
             logger.info(
                 "risk.daily_limit_reached",
+                category="risk",
                 symbol=symbol,
                 action="short_open",
                 max_daily_trades=self._max_daily_trades,
@@ -231,6 +239,7 @@ class EvaluationMixin:
         if self._is_symbol_exposure_exceeded(symbol, portfolio, close):
             logger.info(
                 "risk.symbol_exposure_exceeded",
+                category="risk",
                 symbol=symbol,
                 action="short_open",
                 max_symbol_exposure_usdt=str(self._max_symbol_exposure_usdt),
@@ -287,6 +296,7 @@ class EvaluationMixin:
         if self._is_daily_limit_reached():
             logger.info(
                 "risk.daily_limit_reached",
+                category="risk",
                 symbol=symbol,
                 action="scale_in",
                 max_daily_trades=self._max_daily_trades,
@@ -297,6 +307,7 @@ class EvaluationMixin:
         if self._is_symbol_exposure_exceeded(symbol, portfolio, close):
             logger.info(
                 "risk.symbol_exposure_exceeded",
+                category="risk",
                 symbol=symbol,
                 action="scale_in",
                 max_symbol_exposure_usdt=str(self._max_symbol_exposure_usdt),

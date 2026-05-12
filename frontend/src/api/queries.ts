@@ -10,7 +10,7 @@ import { useCallback, useEffect } from 'react';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { fetchApi, postApi, patchApi, deleteApi } from './client';
 
-import type { Candle, PriceResponse } from '../types/market';
+import type { Candle, PriceResponse, Ticker24hResponse } from '../types/market';
 import type { ExitProximityResponse, PortfolioResponse, PortfolioSnapshot } from '../types/portfolio';
 import type { Trade, TradeStatsResponse } from '../types/trades';
 import type { Order, ExchangeOrder } from '../types/orders';
@@ -99,6 +99,14 @@ export function usePrice(symbol: string, params: UsePriceParams = {}) {
   }, [query.data, symbol]);
 
   return query;
+}
+
+export function useTicker24h() {
+  return useQuery<Ticker24hResponse>({
+    queryKey: ['ticker24h'],
+    queryFn: () => fetchApi<Ticker24hResponse>('/api/market/ticker24h'),
+    refetchInterval: 60_000,
+  });
 }
 
 // ── Portfolio ────────────────────────────────────────────────────────────────
@@ -462,17 +470,19 @@ export function useHealth() {
 }
 
 export interface UseLogsParams {
-  lines?: number;
+  limit?: number;
+  offset?: number;
   level?: string;
+  category?: string;
 }
 
 export function useLogs(params: UseLogsParams = {}) {
-  const { lines, level } = params;
+  const { limit, offset, level, category } = params;
 
   const query = useQuery({
-    queryKey: ['logs', lines, level],
+    queryKey: ['logs', limit, offset, level, category],
     queryFn: () =>
-      fetchApi<LogsResponse>('/api/system/logs', { lines, level }),
+      fetchApi<LogsResponse>('/api/system/logs', { limit, offset, level, category }),
   });
 
   useEffect(() => {

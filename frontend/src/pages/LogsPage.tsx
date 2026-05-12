@@ -1,5 +1,5 @@
 // ── LogsPage ──────────────────────────────────────────────────────────────────
-// Task 2.44 – Real-time log stream with level filtering and severity chips.
+// Task 2.44 / 8.4 – Log viewer with server-side pagination and category filter.
 
 import { useMemo, useRef, useState } from 'react';
 import Alert from '@mui/material/Alert';
@@ -10,11 +10,11 @@ import Chip from '@mui/material/Chip';
 import Grid from '@mui/material/Grid';
 import MenuItem from '@mui/material/MenuItem';
 import Skeleton from '@mui/material/Skeleton';
+import TablePagination from '@mui/material/TablePagination';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
 import { useLogs } from '../api';
-import { useSystemStore } from '../stores/systemStore';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -25,6 +25,12 @@ interface ParsedLog {
   level: LogLevel;
   timestamp: string | null;
   message: string;
+}
+
+interface Filters {
+  level: string;
+  category: string;
+  search: string;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -39,7 +45,6 @@ function parseLine(line: string): ParsedLog {
       message: obj.message ?? obj.msg ?? obj.event ?? line,
     };
   } catch {
-    // Not JSON — return raw
     return { raw: line, level: 'INFO', timestamp: null, message: line };
   }
 }
@@ -62,10 +67,7 @@ function levelTextColor(level: LogLevel): string {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-interface Filters {
-  level: string;
-  search: string;
-}
+const CATEGORIES = ['trade', 'signal', 'risk', 'state', 'system'] as const;
 
 function LogFilters({ filters, onChange }: { filters: Filters; onChange: (f: Filters) => void }) {
   return (
@@ -82,6 +84,16 @@ function LogFilters({ filters, onChange }: { filters: Filters; onChange: (f: Fil
           <MenuItem value="error">ERROR</MenuItem>
         </TextField>
         <TextField
+          select size="small" label="Category" value={filters.category}
+          onChange={(e) => onChange({ ...filters, category: e.target.value })}
+          sx={{ minWidth: 140 }}
+        >
+          <MenuItem value="">All Categories</MenuItem>
+          {CATEGORIES.map((c) => (
+            <MenuItem key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</MenuItem>
+          ))}
+        </TextField>
+        <TextField
           size="small" label="Search logs…" value={filters.search}
           onChange={(e) => onChange({ ...filters, search: e.target.value })}
           sx={{ minWidth: 240, flexGrow: 1 }}
@@ -91,7 +103,7 @@ function LogFilters({ filters, onChange }: { filters: Filters; onChange: (f: Fil
   );
 }
 
-function LogStats({ lines }: { lines: ParsedLog[] }) {
+function LogStats({ lines, totalCount }: { lines: ParsedLog[]; totalCount: number }) {
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
     for (const l of lines) {
@@ -103,7 +115,7 @@ function LogStats({ lines }: { lines: ParsedLog[] }) {
   return (
     <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
       <Typography variant="body2" color="text.secondary">
-        {lines.length} lines
+        {totalCount.toLocaleString()} total
       </Typography>
       {Object.entries(counts).map(([level, count]) => (
         <Chip
@@ -182,42 +194,42 @@ function LogStream({ lines }: { lines: ParsedLog[] }) {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function LogsPage() {
-  const [filters, setFilters] = useState<Filters>({ level: '', search: '' });
-  // REST fetch — re-fetches when level filter changes
-  const { isLoading, error } = useLogs({
-    lines: 500,
-    level: (filters.level || undefined) as ('info' | 'warning' | 'error') | undefined,
+  const [filters, setFilters] = useState<Filters>({ level: '', category: '', search: '' });
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(100);
+
+  const handleFilterChange = (f: Filters) => {
+    setFilters(f);
+    setPage(0);
+  };
+
+  const { data, isLoading, error } = useLogs({
+    limit: rowsPerPage,
+    offset: page * rowsPerPage,
+    level: filters.level || undefined,
+    category: filters.category || undefined,
   });
 
-  // Zustand store holds all log lines (REST + WS appendLog)
-  const storeLogs = useSystemStore((s) => s.logs);
-
-  const parsedLines = useMemo(() => storeLogs.map(parseLine), [storeLogs]);
+  const parsedLines = useMemo(
+    () => (data?.lines ?? []).slice().reverse().map(parseLine),
+    [data],
+  );
 
   const visibleLines = useMemo(() => {
-    let filtered = parsedLines;
-    if (filters.level) {
-      const lvl = filters.level.toUpperCase();
-      filtered = filtered.filter((l) => l.level === lvl);
-    }
-    if (filters.search.trim()) {
-      const q = filters.search.toLowerCase();
-      filtered = filtered.filter((l) => l.message.toLowerCase().includes(q) || l.raw.toLowerCase().includes(q));
-    }
-    return filtered;
-  }, [parsedLines, filters]);
+    if (!filters.search.trim()) return parsedLines;
+    const q = filters.search.toLowerCase();
+    return parsedLines.filter((l) => l.message.toLowerCase().includes(q) || l.raw.toLowerCase().includes(q));
+  }, [parsedLines, filters.search]);
 
   return (
     <Box>
       <Typography variant="h5" sx={{ mb: 3 }}>Logs</Typography>
 
       <Grid container spacing={2}>
-        {/* ── Filters ──────────────────────────────────────────────── */}
         <Grid size={{ xs: 12 }}>
-          <LogFilters filters={filters} onChange={setFilters} />
+          <LogFilters filters={filters} onChange={handleFilterChange} />
         </Grid>
 
-        {/* ── Log Stream ───────────────────────────────────────────── */}
         <Grid size={{ xs: 12 }}>
           {isLoading ? (
             <Skeleton variant="rounded" height={400} />
@@ -225,11 +237,20 @@ export default function LogsPage() {
             <Alert severity="error" variant="outlined">Failed to load logs</Alert>
           ) : (
             <Card>
-              <CardContent sx={{ pb: '16px !important' }}>
+              <CardContent sx={{ pb: '0 !important' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-                  <LogStats lines={visibleLines} />
+                  <LogStats lines={visibleLines} totalCount={data?.total_count ?? 0} />
                 </Box>
                 <LogStream lines={visibleLines} />
+                <TablePagination
+                  component="div"
+                  count={data?.total_count ?? 0}
+                  page={page}
+                  onPageChange={(_, p) => setPage(p)}
+                  rowsPerPage={rowsPerPage}
+                  onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
+                  rowsPerPageOptions={[50, 100, 250]}
+                />
               </CardContent>
             </Card>
           )}

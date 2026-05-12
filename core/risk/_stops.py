@@ -76,6 +76,7 @@ class StopCheckMixin:
         if hard_stop_hit:
             logger.info(
                 "risk.hard_stop",
+                category="risk",
                 symbol=symbol,
                 close=str(close),
                 hard_stop=str(ratcheted_hard_stop),
@@ -161,6 +162,7 @@ class StopCheckMixin:
                 if new_stop < position.entry_price:
                     logger.info(
                         "risk.ratchet_lockin",
+                        category="risk",
                         symbol=symbol,
                         side="short",
                         old_stop=str(position.hard_stop_price),
@@ -172,6 +174,7 @@ class StopCheckMixin:
                 else:
                     logger.info(
                         "risk.ratchet_breakeven",
+                        category="risk",
                         symbol=symbol,
                         side="short",
                         old_stop=str(position.hard_stop_price),
@@ -194,6 +197,7 @@ class StopCheckMixin:
                 if new_stop > position.entry_price:
                     logger.info(
                         "risk.ratchet_lockin",
+                        category="risk",
                         symbol=symbol,
                         old_stop=str(position.hard_stop_price),
                         new_stop=str(new_stop),
@@ -204,6 +208,7 @@ class StopCheckMixin:
                 else:
                     logger.info(
                         "risk.ratchet_breakeven",
+                        category="risk",
                         symbol=symbol,
                         old_stop=str(position.hard_stop_price),
                         new_stop=str(new_stop),
@@ -234,6 +239,7 @@ class StopCheckMixin:
         if self._time_stop_skip_profitable and unrealized > 0:
             logger.info(
                 "risk.time_stop_skipped_profitable",
+                category="risk",
                 symbol=symbol,
                 candles_held=candles_held,
                 unrealized_pct=str(unrealized),
@@ -242,6 +248,7 @@ class StopCheckMixin:
 
         logger.info(
             "risk.time_stop",
+            category="risk",
             symbol=symbol,
             candles_held=candles_held,
             time_stop_candles=self._time_stop_candles,
@@ -284,6 +291,7 @@ class StopCheckMixin:
         if new_trailing > 0 and close < new_trailing:
             logger.info(
                 "risk.trailing_stop",
+                category="risk",
                 symbol=symbol,
                 close=str(close),
                 trailing_stop=str(new_trailing),
@@ -330,6 +338,7 @@ class StopCheckMixin:
         if new_trailing > 0 and close > new_trailing:
             logger.info(
                 "risk.trailing_stop",
+                category="risk",
                 symbol=symbol,
                 side="short",
                 close=str(close),

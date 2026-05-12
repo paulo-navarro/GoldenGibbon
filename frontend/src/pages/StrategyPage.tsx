@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import Accordion from '@mui/material/Accordion';
 import AccordionDetails from '@mui/material/AccordionDetails';
@@ -15,21 +15,18 @@ import ListItem from '@mui/material/ListItem';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
 import Skeleton from '@mui/material/Skeleton';
-import Switch from '@mui/material/Switch';
-import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import TimerIcon from '@mui/icons-material/Timer';
-import TuneIcon from '@mui/icons-material/Tune';
 
-import { useStrategyState, useStrategySignals, usePortfolio, useExitProximity, useStrategyConfig, useUpdateStrategyConfig, useResetStrategyConfig, useResetKillSwitch } from '../api';
-import type { FieldMeta } from '../api';
+import { useStrategyState, useStrategySignals, usePortfolio, useExitProximity, useResetKillSwitch, useStrategyOverview } from '../api';
 import { useStrategyStore } from '../stores/strategyStore';
 import type { RegimeInfo } from '../stores/strategyStore';
 import type { Signal, StrategyState } from '../types/enums';
+import type { ExitConditionStatus } from '../types/portfolio';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -111,18 +108,77 @@ function ConditionsBar({ entries }: { entries: CondEntry[] }) {
   );
 }
 
+// ── Exit proximity sub-components ───────────────────────────────────────────
+
+function StopBar({ label, pct }: { label: string; pct: number }) {
+  const danger = Math.max(0, Math.min(100, (1 - pct / 0.20) * 100));
+  const color = proximityColor(pct);
+
+  return (
+    <Box sx={{ mb: 1.5 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.25 }}>
+        <Typography variant="caption" color="text.secondary">{label}</Typography>
+        <Typography variant="caption" fontWeight={600}>{pctLabel(pct)}</Typography>
+      </Box>
+      <LinearProgress
+        variant="determinate"
+        value={danger}
+        color={color}
+        sx={{ height: 8, borderRadius: 1 }}
+      />
+    </Box>
+  );
+}
+
+function TimeStopBar({ pct }: { pct: number }) {
+  const progress = Math.max(0, Math.min(100, pct * 100));
+  const color = pct >= 0.85 ? 'error' : pct >= 0.60 ? 'warning' : 'success';
+
+  return (
+    <Box sx={{ mb: 1.5 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.25 }}>
+        <Typography variant="caption" color="text.secondary">Time stop</Typography>
+        <Typography variant="caption" fontWeight={600}>{`${Math.round(progress)}%`}</Typography>
+      </Box>
+      <LinearProgress
+        variant="determinate"
+        value={progress}
+        color={color}
+        sx={{ height: 8, borderRadius: 1 }}
+      />
+    </Box>
+  );
+}
+
+function ExitConditionRow({ cond }: { cond: ExitConditionStatus }) {
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
+      {cond.met
+        ? <CheckCircleIcon sx={{ fontSize: 16, color: 'error.main' }} />
+        : <CancelIcon sx={{ fontSize: 16, color: 'text.disabled' }} />
+      }
+      <Typography variant="caption" sx={{ flex: 1 }}>{cond.name}</Typography>
+      {cond.current_value && (
+        <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+          {cond.current_value}
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
 // ── Strategy card (collapsible) ──────────────────────────────────────────────
 
 const SCALE_STEPS = ['50%', '75%', '100%'];
 
-function exitProxLabel(pct: number): string {
-  return `${(pct * 100).toFixed(1)}%`;
+function proximityColor(pct: number): 'success' | 'warning' | 'error' {
+  if (pct > 0.15) return 'success';
+  if (pct > 0.05) return 'warning';
+  return 'error';
 }
 
-function exitProxColor(pct: number): 'success.main' | 'warning.main' | 'error.main' {
-  if (pct > 0.15) return 'success.main';
-  if (pct > 0.05) return 'warning.main';
-  return 'error.main';
+function pctLabel(pct: number): string {
+  return `${(pct * 100).toFixed(1)}%`;
 }
 
 function StrategyCard({ stratKey }: { stratKey: string }) {
@@ -191,17 +247,6 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
           <Chip label="KILL SWITCH" size="small" color="error" variant="filled" />
         )}
 
-        {exitProx && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, ml: 1 }}>
-            <Typography variant="caption" color="text.secondary">
-              Hard <Typography component="span" variant="caption" fontWeight={600} sx={{ color: exitProxColor(exitProx.hard_stop_pct) }}>{exitProxLabel(exitProx.hard_stop_pct)}</Typography>
-            </Typography>
-            <Typography variant="caption" color="text.secondary">
-              Trail <Typography component="span" variant="caption" fontWeight={600} sx={{ color: exitProxColor(exitProx.trailing_stop_pct) }}>{exitProxLabel(exitProx.trailing_stop_pct)}</Typography>
-            </Typography>
-          </Box>
-        )}
-
         {condEntries.length > 0 && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 1 }}>
             <ConditionsBar entries={condEntries} />
@@ -223,7 +268,7 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
 
         <Grid container spacing={2}>
           {/* Conditions */}
-          <Grid size={{ xs: 12, md: 6 }}>
+          <Grid size={{ xs: 12, md: 4 }}>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>Conditions</Typography>
             {condEntries.length === 0 ? (
               <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 1 }}>
@@ -248,7 +293,7 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
           </Grid>
 
           {/* Scaled Entry */}
-          <Grid size={{ xs: 12, md: 6 }}>
+          <Grid size={{ xs: 12, md: 4 }}>
             <Typography variant="body2" color="text.secondary" gutterBottom>Scaled Entry</Typography>
             <Box sx={{ mb: 2 }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
@@ -277,6 +322,32 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
                 Buy candles: <strong>{consecutiveBuys}</strong>
               </Typography>
             </Box>
+          </Grid>
+
+          {/* Exit Proximity */}
+          <Grid size={{ xs: 12, md: 4 }}>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>Exit Proximity</Typography>
+            {exitProx ? (
+              <>
+                <StopBar label="Hard stop" pct={exitProx.hard_stop_pct} />
+                <StopBar label="Trailing stop" pct={exitProx.trailing_stop_pct} />
+                {exitProx.time_stop_pct !== null && <TimeStopBar pct={exitProx.time_stop_pct} />}
+                {exitProx.exit_conditions.length > 0 && (
+                  <Box sx={{ mt: 1.5 }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5, display: 'block' }}>
+                      Exit conditions
+                    </Typography>
+                    {exitProx.exit_conditions.map((c) => (
+                      <ExitConditionRow key={c.name} cond={c} />
+                    ))}
+                  </Box>
+                )}
+              </>
+            ) : (
+              <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 1 }}>
+                No exit data
+              </Typography>
+            )}
           </Grid>
         </Grid>
 
@@ -338,163 +409,6 @@ function StrategyCard({ stratKey }: { stratKey: string }) {
           </>
         )}
 
-        <ParameterTuning strategyName={st.strategy} />
-      </AccordionDetails>
-    </Accordion>
-  );
-}
-
-// ── Parameter Tuning ─────────────────────────────────────────────────────────
-
-function ParameterTuning({ strategyName }: { strategyName: string }) {
-  const { data, isLoading, error } = useStrategyConfig(strategyName);
-  const { update, isPending, isError, isSuccess } = useUpdateStrategyConfig(strategyName);
-  const resetMutation = useResetStrategyConfig(strategyName);
-
-  const [edits, setEdits] = useState<Record<string, unknown>>({});
-  const [statusMsg, setStatusMsg] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (isSuccess) {
-      setEdits({});
-      setStatusMsg('Saved to database');
-      const t = setTimeout(() => setStatusMsg(null), 2000);
-      return () => clearTimeout(t);
-    }
-    if (isError) {
-      setStatusMsg('Failed to save');
-      const t = setTimeout(() => setStatusMsg(null), 3000);
-      return () => clearTimeout(t);
-    }
-  }, [isSuccess, isError]);
-
-  useEffect(() => {
-    if (resetMutation.isSuccess) {
-      setEdits({});
-      setStatusMsg('Reset to defaults');
-      const t = setTimeout(() => setStatusMsg(null), 2000);
-      return () => clearTimeout(t);
-    }
-  }, [resetMutation.isSuccess]);
-
-  const grouped = useMemo(() => {
-    if (!data) return {};
-    const groups: Record<string, FieldMeta[]> = {};
-    for (const field of data.fields) {
-      const g = field.group;
-      if (!groups[g]) groups[g] = [];
-      groups[g].push(field);
-    }
-    return groups;
-  }, [data]);
-
-  const handleChange = useCallback((name: string, value: unknown) => {
-    setEdits((prev) => ({ ...prev, [name]: value }));
-  }, []);
-
-  const handleApply = useCallback(() => {
-    if (Object.keys(edits).length === 0) return;
-    update(edits);
-  }, [edits, update]);
-
-  const hasEdits = Object.keys(edits).length > 0;
-
-  if (isLoading) return <Skeleton variant="rounded" height={60} />;
-  if (error) return <Alert severity="error" variant="outlined" sx={{ mt: 1 }}>Failed to load config</Alert>;
-  if (!data) return null;
-
-  return (
-    <Accordion sx={{ mt: 1 }}>
-      <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <TuneIcon fontSize="small" color="primary" />
-          <Typography variant="body2">Parameters</Typography>
-        </Box>
-      </AccordionSummary>
-      <AccordionDetails>
-        {Object.entries(grouped).map(([group, fields]) => (
-          <Box key={group} sx={{ mb: 2 }}>
-            <Typography variant="overline" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
-              {group}
-            </Typography>
-            <Grid container spacing={1.5}>
-              {fields.map((field) => {
-                const currentValue = field.name in edits ? edits[field.name] : field.value;
-
-                if (field.type === 'bool') {
-                  return (
-                    <Grid size={{ xs: 12, sm: 6, md: 4 }} key={field.name}>
-                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <Typography variant="body2">{labelFromKey(field.name)}</Typography>
-                        <Switch
-                          size="small"
-                          checked={!!currentValue}
-                          onChange={(_, checked) => handleChange(field.name, checked)}
-                        />
-                      </Box>
-                    </Grid>
-                  );
-                }
-
-                if (field.type === 'list') return null;
-
-                return (
-                  <Grid size={{ xs: 6, sm: 4, md: 3 }} key={field.name}>
-                    <TextField
-                      fullWidth
-                      size="small"
-                      label={labelFromKey(field.name)}
-                      type={field.type === 'int' || field.type === 'float' ? 'number' : 'text'}
-                      value={currentValue ?? ''}
-                      onChange={(e) => {
-                        const raw = e.target.value;
-                        if (field.type === 'int') handleChange(field.name, raw === '' ? '' : parseInt(raw, 10));
-                        else if (field.type === 'float') handleChange(field.name, raw === '' ? '' : parseFloat(raw));
-                        else handleChange(field.name, raw);
-                      }}
-                      slotProps={{
-                        htmlInput: {
-                          min: field.min,
-                          max: field.max,
-                          step: field.type === 'float' ? 0.01 : 1,
-                        },
-                      }}
-                      helperText={field.description}
-                    />
-                  </Grid>
-                );
-              })}
-            </Grid>
-          </Box>
-        ))}
-
-        <Box sx={{ display: 'flex', gap: 1, mt: 2, alignItems: 'center' }}>
-          <Button
-            variant="contained"
-            size="small"
-            onClick={handleApply}
-            disabled={!hasEdits || isPending}
-          >
-            {isPending ? 'Applying...' : 'Apply'}
-          </Button>
-          <Button
-            variant="outlined"
-            size="small"
-            color="warning"
-            onClick={() => resetMutation.mutate()}
-            disabled={isPending || resetMutation.isPending}
-          >
-            Reset to Defaults
-          </Button>
-          {statusMsg && (
-            <Chip
-              label={statusMsg}
-              size="small"
-              color={statusMsg === 'Applied' ? 'success' : 'error'}
-              variant="outlined"
-            />
-          )}
-        </Box>
       </AccordionDetails>
     </Accordion>
   );
@@ -507,6 +421,10 @@ export default function StrategyPage() {
 
   const { isLoading: statesLoading, error: statesError } = useStrategyState();
   const { isLoading: signalsLoading, error: signalsError } = useStrategySignals();
+  const { data: overviewData } = useStrategyOverview();
+  const isDisabled = strategyName
+    ? overviewData?.strategies?.some((s) => s.name === strategyName && !s.enabled) ?? false
+    : false;
 
   const storeStates = useStrategyStore((s) => s.states);
   const storeSignals = useStrategyStore((s) => s.signals);
@@ -574,6 +492,11 @@ export default function StrategyPage() {
   return (
     <Box sx={{ p: 2 }}>
       <Typography variant="h5" sx={{ mb: 2 }}>{title}</Typography>
+      {isDisabled && (
+        <Alert severity="warning" variant="outlined" sx={{ mb: 2 }}>
+          {title} is disabled. Enable it in Settings to resume trading.
+        </Alert>
+      )}
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
         {stratKeys.map((k) => (
           <StrategyCard key={k} stratKey={k} />

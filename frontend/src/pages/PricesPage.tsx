@@ -3,12 +3,11 @@ import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
-import Chip from '@mui/material/Chip';
 import Grid from '@mui/material/Grid';
 import Skeleton from '@mui/material/Skeleton';
 import Typography from '@mui/material/Typography';
 
-import { usePrice, useSymbols } from '../api';
+import { usePrice, useSymbols, useTicker24h } from '../api';
 import { useMarketStore } from '../stores/marketStore';
 import type { PriceResponse } from '../types/market';
 
@@ -22,7 +21,7 @@ function fmt(value: string | null | undefined, decimals = 2): string {
 
 // ── PriceTickerCard ─────────────────────────────────────────────────────────
 
-function PriceTickerCard({ symbol }: { symbol: string }) {
+function PriceTickerCard({ symbol, changePct }: { symbol: string; changePct?: string }) {
   const { isLoading, error } = usePrice(symbol);
   const storePrice = useMarketStore((s) => s.latestPrice[symbol]) as PriceResponse | undefined;
 
@@ -30,6 +29,9 @@ function PriceTickerCard({ symbol }: { symbol: string }) {
   if (error) return <Alert severity="error" variant="outlined">Failed to load {symbol}</Alert>;
 
   const price = storePrice?.price;
+  const pctNum = changePct != null ? parseFloat(changePct) : null;
+  const pctColor = pctNum != null ? (pctNum >= 0 ? 'success.main' : 'error.main') : 'text.secondary';
+  const pctText = pctNum != null ? `${pctNum >= 0 ? '+' : ''}${pctNum.toFixed(2)}%` : null;
 
   return (
     <Card>
@@ -37,11 +39,13 @@ function PriceTickerCard({ symbol }: { symbol: string }) {
         <Typography variant="body2" color="text.secondary" gutterBottom>
           {symbol}
         </Typography>
-        <Typography variant="h5" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-          ${fmt(price, symbol.startsWith('BTC') ? 2 : 2)}
+        <Typography variant="h5" color={pctColor} sx={{ fontVariantNumeric: 'tabular-nums' }}>
+          ${fmt(price, 2)}
         </Typography>
-        {storePrice?.timeframe && (
-          <Chip label={storePrice.timeframe} size="small" sx={{ mt: 0.5 }} />
+        {pctText && (
+          <Typography variant="body2" color={pctColor} sx={{ fontVariantNumeric: 'tabular-nums' }}>
+            {pctText}
+          </Typography>
         )}
       </CardContent>
     </Card>
@@ -52,6 +56,7 @@ function PriceTickerCard({ symbol }: { symbol: string }) {
 
 export default function PricesPage() {
   const { data: symbolsConfig, isLoading, error } = useSymbols();
+  const { data: ticker24h } = useTicker24h();
 
   const symbols = useMemo(
     () => (symbolsConfig?.symbols ?? []).filter((s) => s.enabled).map((s) => s.symbol),
@@ -88,7 +93,10 @@ export default function PricesPage() {
       <Grid container spacing={2}>
         {symbols.map((symbol) => (
           <Grid size={{ xs: 12, sm: 6, md: 4 }} key={symbol}>
-            <PriceTickerCard symbol={symbol} />
+            <PriceTickerCard
+              symbol={symbol}
+              changePct={ticker24h?.tickers?.find((t) => t.symbol === symbol)?.price_change_pct}
+            />
           </Grid>
         ))}
       </Grid>

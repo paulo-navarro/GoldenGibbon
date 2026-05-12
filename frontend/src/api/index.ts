@@ -4,6 +4,7 @@ export {
   // Market
   useCandles,
   usePrice,
+  useTicker24h,
   // Portfolio
   usePortfolio,
   useExitProximity,
