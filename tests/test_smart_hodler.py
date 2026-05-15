@@ -84,7 +84,7 @@ def _make_candles_1h(close_val=110.0, volume_val=24000.0, length=N_1H):
 
 def _make_market_data(
     *,
-    close=110.0,
+    close=105.4,
     volume=6000.0,
     ema_50=105.0,
     ema_200=100.0,
@@ -98,14 +98,15 @@ def _make_market_data(
     """
     Build a MarketData object with hand-crafted indicators.
 
-    By default all 7 BUY conditions are met:
+    By default all 8 BUY conditions are met:
         1. ema_cross_bullish:        ema_50 (105) > ema_200 (100)  ✓
         2. adx_above_threshold:      adx (30) > 25                 ✓
-        3. close_above_ema_fast:     close (110) > ema_50 (105)    ✓
+        3. close_above_ema_fast:     close (105.4) > ema_50 (105)  ✓
         4. volume_above_average:     volume (6000) > volume_sma (5000) ✓
         5. hourly_ema_rising:        ema_21_1h rising              ✓
         6. hourly_rsi_above_threshold: rsi_1h (55) > 45            ✓
-        7. session_filter_pass:      True (no dead zones in default config)
+        7. pullback_near_ema:        |close - ema_50| / ema_50 ≤ 0.5%  ✓
+        8. session_filter_pass:      True (no dead zones in default config)
     """
     candles = _make_candles(close_val=close, volume_val=volume)
 
@@ -220,6 +221,7 @@ class TestBuySignal:
         assert c.volume_above_average
         assert c.hourly_ema_rising
         assert c.hourly_rsi_above_threshold
+        assert c.pullback_near_ema
         assert c.session_filter_pass
 
     # ── Each condition individually false → HOLD ─────────────────────────
@@ -260,6 +262,13 @@ class TestBuySignal:
         s = SmartHodler(DEFAULT_CONFIG)
         md = _make_market_data(rsi_1h_val=30.0)
         assert s.decide(md, _portfolio()) == Signal.HOLD
+
+    def test_hold_when_close_too_far_from_ema(self):
+        """Close > 0.5% above EMA 50 → pullback_near_ema = False."""
+        s = SmartHodler(DEFAULT_CONFIG)
+        md = _make_market_data(close=110.0, ema_50=105.0)
+        assert s.decide(md, _portfolio()) == Signal.HOLD
+        assert s.conditions.pullback_near_ema is False
 
     def test_buy_from_reduced_state(self):
         """BUY is allowed from REDUCED state when all conditions met."""
@@ -810,7 +819,7 @@ def _make_md_at_time(start_str, **kwargs):
     candle_time = pd.Timestamp(_dt.fromisoformat(start_str))
     candles = _make_candles_at(
         candle_time,
-        close_val=kwargs.get("close", 110.0),
+        close_val=kwargs.get("close", 105.4),
         volume_val=kwargs.get("volume", 6000.0),
     )
     candles_1h = _make_candles_1h()

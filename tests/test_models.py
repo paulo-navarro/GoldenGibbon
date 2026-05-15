@@ -272,6 +272,7 @@ class TestStrategyConditions:
             volume_above_average=True,
             hourly_ema_rising=True,
             hourly_rsi_above_threshold=True,
+            pullback_near_ema=True,
             session_filter_pass=True,
         )
         assert conditions.all_buy_conditions_met is True

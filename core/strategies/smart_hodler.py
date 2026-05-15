@@ -108,6 +108,8 @@ class SmartHodler(Strategy):
 
         # ── Update conditions snapshot ───────────────────────────────────
         adx_threshold = self.config.get("adx_threshold", 25)
+        pullback_pct = self.config.get("pullback_max_distance_pct", 0.005)
+        pullback_near = ema_50_val > 0 and abs(close - ema_50_val) / ema_50_val <= pullback_pct
 
         self._conditions = StrategyConditions(
             ema_cross_bullish=ema_50_val > ema_200_val,
@@ -116,6 +118,7 @@ class SmartHodler(Strategy):
             volume_above_average=volume > vol_sma_val,
             hourly_ema_rising=hourly_ema_rising,
             hourly_rsi_above_threshold=hourly_rsi_ok,
+            pullback_near_ema=pullback_near,
             session_filter_pass=self._check_session_filter(market_data),
         )
 

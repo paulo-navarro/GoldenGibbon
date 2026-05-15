@@ -140,6 +140,9 @@ class SmartHodlerConfig(BaseModel):
     lockin_trigger_pct: float = Field(default=0.04, ge=0, le=0.5, description="Lock in profit at this profit %")
     lockin_stop_pct: float = Field(default=0.01, ge=0, le=0.5, description="Hard stop moves to entry + this %")
 
+    # Pullback filter
+    pullback_max_distance_pct: float = Field(default=0.005, ge=0, le=0.05, description="Max distance from EMA 50 to allow entry (0.5% default)")
+
     # Re-Entry / Cooldown
     cooldown_candles: int = Field(default=16, ge=0)
 

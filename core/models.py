@@ -526,8 +526,9 @@ class StrategyConditions(BaseModel):
     volume_above_average: bool = False
     hourly_ema_rising: bool = False
     hourly_rsi_above_threshold: bool = False
+    pullback_near_ema: bool = False
     session_filter_pass: bool = False
-    
+
     @property
     def all_buy_conditions_met(self) -> bool:
         """Check if all BUY conditions are satisfied."""
@@ -538,6 +539,7 @@ class StrategyConditions(BaseModel):
             self.volume_above_average,
             self.hourly_ema_rising,
             self.hourly_rsi_above_threshold,
+            self.pullback_near_ema,
             self.session_filter_pass,
         ])
 

@@ -35,6 +35,7 @@ export interface StrategyConditions {
   volume_above_average: boolean;
   hourly_ema_rising: boolean;
   hourly_rsi_above_threshold: boolean;
+  pullback_near_ema: boolean;
   session_filter_pass: boolean;
 }
 
