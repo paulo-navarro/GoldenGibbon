@@ -235,7 +235,24 @@ class _OrdersMixin:
                 retryable=(requests.ConnectionError, requests.Timeout),
                 label=f"binance.place_futures_stop({symbol})",
             )
-        except (BinanceAPIError, RetryExhausted) as exc:
+        except BinanceAPIError as exc:
+            logger.error(
+                "binance.futures_stop_order_failed",
+                symbol=symbol,
+                stop_price=str(formatted_stop),
+                error=str(exc),
+                code=exc.code,
+            )
+            self._update_order_record(
+                record_id,
+                status="rejected",
+                reject_reason=str(exc),
+                reconciliation_status="synced",
+            )
+            if exc.code == -2010 and "trigger immediately" in str(exc.msg).lower():
+                return "TRIGGER_NOW"
+            return None
+        except RetryExhausted as exc:
             logger.error(
                 "binance.futures_stop_order_failed",
                 symbol=symbol,
@@ -264,6 +281,7 @@ class _OrdersMixin:
 
         self._update_order_record(
             record_id,
+            status="new",
             exchange_order_id=order_id,
             exchange_status="NEW",
         )
@@ -754,7 +772,24 @@ class _OrdersMixin:
                 retryable=(requests.ConnectionError, requests.Timeout),
                 label=f"binance.place_stop_order({symbol})",
             )
-        except (BinanceAPIError, RetryExhausted) as exc:
+        except BinanceAPIError as exc:
+            logger.error(
+                "binance.stop_order_failed",
+                symbol=symbol,
+                stop_price=str(formatted_stop),
+                error=str(exc),
+                code=exc.code,
+            )
+            self._update_order_record(
+                record_id,
+                status="rejected",
+                reject_reason=str(exc),
+                reconciliation_status="synced",
+            )
+            if exc.code == -2010 and "trigger immediately" in str(exc.msg).lower():
+                return "TRIGGER_NOW"
+            return None
+        except RetryExhausted as exc:
             logger.error(
                 "binance.stop_order_failed",
                 symbol=symbol,
@@ -770,7 +805,6 @@ class _OrdersMixin:
             return None
         except Exception:
             logger.exception("binance.stop_order_unexpected", symbol=symbol)
-            # Leave as PENDING for recovery
             return None
 
         order_id = str(response["orderId"])
@@ -783,9 +817,9 @@ class _OrdersMixin:
             order_id=order_id,
         )
 
-        # Update record with exchange_order_id (stop is still "pending" until triggered)
         self._update_order_record(
             record_id,
+            status="new",
             exchange_order_id=order_id,
             exchange_status="NEW",
         )
@@ -876,7 +910,7 @@ class _OrdersMixin:
                 stale = (
                     session.query(OrderRecord)
                     .filter_by(symbol=symbol, intent="stop_loss")
-                    .filter(OrderRecord.status.in_(("pending", "rejected")))
+                    .filter(OrderRecord.status.in_(("pending", "new", "rejected")))
                     .all()
                 )
                 for record in stale:

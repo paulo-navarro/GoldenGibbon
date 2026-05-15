@@ -164,8 +164,6 @@ export const usePortfolioStore = create<PortfolioStore>()((set) => ({
               ...s.balance,
               usdt_balance: data.usdt_balance as string,
               total_pnl: data.total_pnl as string,
-              open_positions_count:
-                (data.open_trades_count as number) ?? s.balance.open_positions_count,
             },
           };
         });

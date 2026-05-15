@@ -1096,10 +1096,59 @@ def _sync_open_orders(
                 },
             )
 
+    # Detect stale local records: locally "open" but not in exchange open orders
+    exchange_open_ids = {str(o["orderId"]) for o in open_orders}
+    stale_local = (
+        session.query(OrderRecord)
+        .filter(OrderRecord.status.in_(("new", "partially_filled")))
+        .filter(OrderRecord.exchange_order_id.isnot(None))
+        .filter(OrderRecord.trading_mode == "live")
+        .filter(~OrderRecord.exchange_order_id.in_(exchange_open_ids))
+        .all()
+    )
+    stale_cleaned = 0
+    for record in stale_local:
+        try:
+            exchange_data = executor.get_order_status(
+                record.symbol, int(record.exchange_order_id)
+            )
+            ex_status = exchange_data.get("status", "")
+            if ex_status == "FILLED":
+                record.status = "filled"
+                record.exchange_status = "FILLED"
+                record.reconciliation_status = "synced"
+                record.reconciled_at = now
+                if exchange_data.get("executedQty"):
+                    from decimal import Decimal
+                    record.filled_amount = Decimal(exchange_data["executedQty"])
+            elif ex_status in ("CANCELED", "EXPIRED", "REJECTED"):
+                record.status = "cancelled"
+                record.exchange_status = ex_status
+                record.reconciliation_status = "synced"
+                record.reconciled_at = now
+            else:
+                continue
+            stale_cleaned += 1
+            logger.info(
+                "sync_open_orders: cleaned stale record",
+                symbol=record.symbol,
+                order_id=record.exchange_order_id,
+                old_status=record.status,
+                exchange_status=ex_status,
+            )
+        except Exception as exc:
+            logger.warning(
+                "sync_open_orders: failed to check stale record",
+                symbol=record.symbol,
+                order_id=record.exchange_order_id,
+                error=str(exc),
+            )
+
     return {
         "status": "ok",
         "orders_synced": orders_synced,
         "orphans_found": orphans_found,
+        "stale_cleaned": stale_cleaned,
     }
 
 
@@ -1123,7 +1172,8 @@ def _check_pending_stop_orders(
 
     pending_stops = (
         session.query(OrderRecord)
-        .filter_by(intent="stop_loss", status="pending")
+        .filter_by(intent="stop_loss")
+        .filter(OrderRecord.status.in_(("pending", "new")))
         .filter(OrderRecord.exchange_order_id.isnot(None))
         .all()
     )

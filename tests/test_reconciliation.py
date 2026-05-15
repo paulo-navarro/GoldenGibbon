@@ -1267,7 +1267,7 @@ class TestSyncOpenOrders:
         with get_session() as session:
             result = _sync_open_orders(session, executor)
 
-        assert result == {"status": "ok", "orders_synced": 0, "orphans_found": 0}
+        assert result == {"status": "ok", "orders_synced": 0, "orphans_found": 0, "stale_cleaned": 0}
 
 
 class TestCheckPendingStopOrders:

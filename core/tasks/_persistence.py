@@ -100,6 +100,7 @@ def _persist_tick_results(
     if comp.pm.has_position(symbol):
         position = comp.pm.get_position(symbol)
         if existing_pos is not None:
+            existing_pos.side = position.side.value if hasattr(position.side, 'value') else position.side
             existing_pos.size = position.size
             existing_pos.entry_price = position.entry_price
             existing_pos.entry_time = position.entry_time

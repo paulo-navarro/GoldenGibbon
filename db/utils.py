@@ -146,6 +146,7 @@ def position_to_orm(position: pydantic_models.Position) -> orm_models.PositionRe
     return orm_models.PositionRecord(
         symbol=position.symbol,
         strategy=position.strategy,
+        side=position.side.value if hasattr(position.side, 'value') else position.side,
         size=position.size,
         entry_price=position.entry_price,
         entry_time=position.entry_time,
@@ -171,6 +172,7 @@ def orm_to_position(record: orm_models.PositionRecord) -> pydantic_models.Positi
     return pydantic_models.Position(
         symbol=record.symbol,
         strategy=record.strategy,
+        side=pydantic_models.PositionSide(record.side) if record.side else pydantic_models.PositionSide.LONG,
         size=record.size,
         entry_price=record.entry_price,
         entry_time=record.entry_time,

@@ -14,7 +14,7 @@ export type OrderSide = 'buy' | 'sell';
 export type OrderType = 'market' | 'limit';
 
 /** Order status lifecycle. */
-export type OrderStatus = 'pending' | 'filled' | 'partial' | 'rejected' | 'cancelled';
+export type OrderStatus = 'pending' | 'new' | 'filled' | 'partial' | 'rejected' | 'cancelled';
 
 /** Reasons for trade exit. */
 export type ExitReason =

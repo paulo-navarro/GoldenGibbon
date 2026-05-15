@@ -1629,7 +1629,7 @@ class TestWriteAheadStopOrder:
         assert order_id == "99988"
         assert len(records_created) == 1
         assert records_created[0].intent == "stop_loss"
-        assert records_created[0].status == "pending"
+        assert records_created[0].status == "new"
         assert records_created[0].side == "sell"
 
     def test_stop_order_rejected_marks_record(self, mock_pub):

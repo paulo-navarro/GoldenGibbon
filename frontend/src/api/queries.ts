@@ -117,6 +117,7 @@ export function usePortfolio() {
   const query = useQuery({
     queryKey: ['portfolio', tradingMode],
     queryFn: () => fetchApi<PortfolioResponse>('/api/portfolio/', { trading_mode: tradingMode }),
+    refetchInterval: 15_000,
   });
 
   useEffect(() => {

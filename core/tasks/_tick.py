@@ -218,7 +218,7 @@ def run_single_strategy_tick(
     from core.data.binance_client import BinanceClient
     from core.data.loader import DataLoader
     from core.events import EventChannel, EventType, get_publisher
-    from core.models import Signal, StrategyState
+    from core.models import Signal, StopCheckResult, StrategyState
     from db import get_session
 
     # Always reload settings from DB so workers pick up config changes
@@ -508,21 +508,49 @@ def run_single_strategy_tick(
                             return comp.executor._cancel_futures_order(symbol, oid)
                         return comp.executor._cancel_stop_order(symbol, oid)
 
+                    def _force_stop_exit() -> None:
+                        """Exchange says stop would trigger now — execute immediate close."""
+                        nonlocal execution_result, stop_result
+                        from core.models import ExitReason, RiskAction, RiskDecision
+                        log.warning(
+                            "single_tick: stop would trigger immediately — forcing exit",
+                            symbol=symbol, stop_price=str(new_effective_stop),
+                        )
+                        forced_decision = RiskDecision(
+                            action=RiskAction.CLOSE,
+                            symbol=symbol,
+                            price=close,
+                            size=updated_pos.size,
+                            exit_reason=ExitReason.HARD_STOP,
+                        )
+                        execution_result = comp.executor.execute(forced_decision, candle_time)
+                        if execution_result is not None:
+                            comp.strategy._cooldown_remaining = getattr(comp.strategy, "_cooldown_candles", 16)
+                            comp.strategy._state = StrategyState.COOLDOWN
+                            stop_result = StopCheckResult(
+                                decision=forced_decision,
+                                hard_stop_price=new_effective_stop,
+                                cooldown_candles=getattr(comp.strategy, "_cooldown_candles", 16),
+                            )
+
                     if not updated_pos.exchange_stop_order_id and new_effective_stop > 0:
                         log.info(
                             "single_tick: placing missing exchange stop order",
                             symbol=symbol, stop_price=str(new_effective_stop),
                         )
                         new_stop_id = _place_stop()
-                        if new_stop_id:
+                        if new_stop_id == "TRIGGER_NOW":
+                            _force_stop_exit()
+                        elif new_stop_id:
                             comp.pm.update_stop_order_id(symbol, new_stop_id)
                     elif new_effective_stop > old_effective_stop and updated_pos.exchange_stop_order_id:
                         if _cancel_stop(updated_pos.exchange_stop_order_id):
                             new_stop_id = _place_stop()
-                            if new_stop_id:
+                            if new_stop_id == "TRIGGER_NOW":
+                                _force_stop_exit()
+                            elif new_stop_id:
                                 comp.pm.update_stop_order_id(symbol, new_stop_id)
                             else:
-                                # Placement failed — clear stale ID so next tick retries
                                 comp.pm.update_stop_order_id(symbol, None)
                                 log.warning(
                                     "single_tick: stop ratchet placement failed, will retry",
