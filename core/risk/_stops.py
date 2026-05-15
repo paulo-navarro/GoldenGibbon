@@ -308,6 +308,7 @@ class StopCheckMixin:
                 highest_close=highest,
                 trailing_stop_price=new_trailing,
                 hard_stop_price=ratcheted_hard_stop,
+                cooldown_candles=self._cooldown_candles,
             )
 
         return StopCheckResult(
@@ -357,6 +358,7 @@ class StopCheckMixin:
                 lowest_close=lowest,
                 trailing_stop_price=new_trailing,
                 hard_stop_price=ratcheted_hard_stop,
+                cooldown_candles=self._cooldown_candles,
             )
 
         return StopCheckResult(

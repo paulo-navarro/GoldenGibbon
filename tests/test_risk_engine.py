@@ -779,8 +779,8 @@ class TestCheckStops_HardStop:
 
     # -- Trailing stop no cooldown --------------------------------------------
 
-    def test_trailing_stop_has_no_cooldown(self):
-        """Trailing stop exit must NOT set cooldown_candles."""
+    def test_trailing_stop_has_cooldown(self):
+        """Trailing stop exit sets cooldown_candles to prevent rapid re-entry."""
         engine = _sh_engine()
         md = _market_data(close=48999.0, atr=500.0)
         port = _portfolio_with_hard_stop(
@@ -790,7 +790,7 @@ class TestCheckStops_HardStop:
         result = engine.check_stops(md, port)
         assert result.stop_hit is True
         assert result.decision.exit_reason == ExitReason.TRAILING_STOP
-        assert result.cooldown_candles is None
+        assert result.cooldown_candles == 16
 
 
 # ── Edge cases ───────────────────────────────────────────────────────────────
