@@ -24,7 +24,7 @@ import TimerIcon from '@mui/icons-material/Timer';
 
 import { useStrategyState, useStrategySignals, usePortfolio, useExitProximity, useResetKillSwitch, useStrategyOverview } from '../api';
 import { useStrategyStore } from '../stores/strategyStore';
-import type { RegimeInfo } from '../stores/strategyStore';
+import type { MacroFilterInfo, RegimeInfo } from '../stores/strategyStore';
 import type { Signal, StrategyState } from '../types/enums';
 import type { ExitConditionStatus } from '../types/portfolio';
 
@@ -429,6 +429,7 @@ export default function StrategyPage() {
   const storeStates = useStrategyStore((s) => s.states);
   const storeSignals = useStrategyStore((s) => s.signals);
   const storeConditions = useStrategyStore((s) => s.conditions);
+  const macroFilter = useStrategyStore((s) => s.macroFilter);
 
   const isLoading = statesLoading || signalsLoading;
   const error = statesError || signalsError;
@@ -495,6 +496,11 @@ export default function StrategyPage() {
       {isDisabled && (
         <Alert severity="warning" variant="outlined" sx={{ mb: 2 }}>
           {title} is disabled. Enable it in Settings to resume trading.
+        </Alert>
+      )}
+      {macroFilter?.longs_blocked && (
+        <Alert severity="warning" variant="outlined" sx={{ mb: 2 }}>
+          New LONGs paused — {macroFilter.reason}
         </Alert>
       )}
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>

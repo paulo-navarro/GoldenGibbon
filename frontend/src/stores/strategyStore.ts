@@ -27,6 +27,20 @@ export interface RegimeInfo {
   gate_blocked: boolean;
 }
 
+export interface SentinelStatus {
+  symbol: string;
+  bearish: boolean;
+  close: number;
+  ema_50: number;
+  adx: number;
+}
+
+export interface MacroFilterInfo {
+  longs_blocked: boolean;
+  reason: string;
+  sentinels: SentinelStatus[];
+}
+
 interface StrategyStoreState {
   /** State-machine records keyed by "symbol:strategy". */
   states: Record<string, StrategyStateResponse>;
@@ -39,6 +53,9 @@ interface StrategyStoreState {
 
   /** Latest detected regime keyed by "symbol:strategy". */
   regimes: Record<string, RegimeInfo>;
+
+  /** Global macro filter state (BTC + ETH sentiment). */
+  macroFilter: MacroFilterInfo | null;
 }
 
 interface StrategyStoreActions {
@@ -64,6 +81,7 @@ export const useStrategyStore = create<StrategyStore>()((set) => ({
   signals: {},
   conditions: {},
   regimes: {},
+  macroFilter: null,
 
   // ── REST seed actions ───────────────────────────────────────────
 
@@ -89,6 +107,18 @@ export const useStrategyStore = create<StrategyStore>()((set) => ({
     if (event.channel !== 'gg:strategy') return;
 
     const { event_type, data } = event;
+
+    if (event_type === 'macro_filter_updated') {
+      set({
+        macroFilter: {
+          longs_blocked: data.longs_blocked as boolean,
+          reason: data.reason as string,
+          sentinels: data.sentinels as SentinelStatus[],
+        },
+      });
+      return;
+    }
+
     const symbol = data.symbol as string;
     const strategy = data.strategy as string;
     const key = storeKey(symbol, strategy);

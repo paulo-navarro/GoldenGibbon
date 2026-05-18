@@ -109,6 +109,9 @@ class EventType(str, Enum):
     STARTUP = "startup"
     SHUTDOWN = "shutdown"
 
+    # ── Macro filter ───────────────────────────────────────────────
+    MACRO_FILTER_UPDATED = "macro_filter_updated"
+
     # ── Kill-switch (task 4.5) ──────────────────────────────────────
     KILL_SWITCH_TRIGGERED = "kill_switch_triggered"
 

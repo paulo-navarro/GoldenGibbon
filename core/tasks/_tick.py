@@ -603,7 +603,42 @@ def run_single_strategy_tick(
                     },
                 )
 
-            # ── 3c. Max concurrent positions guard ──────────
+            # ── 3c. Macro filter (BTC + ETH sentiment gate) ──
+            if signal == Signal.BUY:
+                from core.macro_filter import evaluate as macro_evaluate
+
+                macro = macro_evaluate(candle_time_iso)
+                if macro.longs_blocked:
+                    log.info(
+                        "macro_filter.blocked",
+                        strategy=strategy_name,
+                        symbol=symbol,
+                        reason=macro.reason,
+                    )
+                    signal = Signal.HOLD
+                    if comp.strategy.state != pre_decide_state:
+                        comp.strategy._state = pre_decide_state
+
+                publisher.publish(
+                    EventChannel.STRATEGY,
+                    EventType.MACRO_FILTER_UPDATED,
+                    {
+                        "longs_blocked": macro.longs_blocked,
+                        "reason": macro.reason,
+                        "sentinels": [
+                            {
+                                "symbol": s.symbol,
+                                "bearish": s.bearish,
+                                "close": round(s.close, 2),
+                                "ema_50": round(s.ema_50, 2),
+                                "adx": round(s.adx, 1),
+                            }
+                            for s in macro.sentinels
+                        ],
+                    },
+                )
+
+            # ── 3d. Max concurrent positions guard ──────────
             if (
                 signal in (Signal.BUY, Signal.SHORT)
                 and not comp.pm.has_position(symbol)
