@@ -53,6 +53,7 @@ export type EventType =
   | 'state_changed'
   | 'conditions_evaluated'
   | 'regime_detected'
+  | 'macro_filter_updated'
   // Risk
   | 'risk_evaluated'
   | 'stop_triggered'

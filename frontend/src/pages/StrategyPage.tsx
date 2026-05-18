@@ -24,7 +24,7 @@ import TimerIcon from '@mui/icons-material/Timer';
 
 import { useStrategyState, useStrategySignals, usePortfolio, useExitProximity, useResetKillSwitch, useStrategyOverview } from '../api';
 import { useStrategyStore } from '../stores/strategyStore';
-import type { MacroFilterInfo, RegimeInfo } from '../stores/strategyStore';
+import type { RegimeInfo } from '../stores/strategyStore';
 import type { Signal, StrategyState } from '../types/enums';
 import type { ExitConditionStatus } from '../types/portfolio';
 
