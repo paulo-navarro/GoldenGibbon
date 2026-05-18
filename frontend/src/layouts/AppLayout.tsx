@@ -13,15 +13,20 @@ import AppBar from '@mui/material/AppBar';
 import Box from '@mui/material/Box';
 import Divider from '@mui/material/Divider';
 import Drawer from '@mui/material/Drawer';
+import IconButton from '@mui/material/IconButton';
 import List from '@mui/material/List';
 import ListItemButton from '@mui/material/ListItemButton';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
 import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import { useTheme } from '@mui/material/styles';
 import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import BarChartIcon from '@mui/icons-material/BarChart';
 import DashboardIcon from '@mui/icons-material/Dashboard';
+import CloseIcon from '@mui/icons-material/Close';
+import MenuIcon from '@mui/icons-material/Menu';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import CurrencyExchangeIcon from '@mui/icons-material/CurrencyExchange';
@@ -59,6 +64,10 @@ function localClock(): string {
 export default function AppLayout() {
   const { pathname } = useLocation();
   const [clock, setClock] = useState(localClock);
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  const theme = useTheme();
+  const isDesktop = useMediaQuery(theme.breakpoints.up('md'));
 
   const marketHandleEvent = useMarketStore((s) => s.handleEvent);
   const strategyHandleEvent = useStrategyStore((s) => s.handleEvent);
@@ -86,25 +95,78 @@ export default function AppLayout() {
     return () => clearInterval(id);
   }, []);
 
+  const drawerContent = (
+    <>
+      <Toolbar variant="dense" sx={{ justifyContent: 'flex-end' }}>
+        {!isDesktop && (
+          <IconButton onClick={() => setMobileOpen(false)} size="small">
+            <CloseIcon />
+          </IconButton>
+        )}
+      </Toolbar>
+      <Divider />
+      <List sx={{ pt: 1 }}>
+        {NAV_ITEMS.map(({ label, path, icon }) => {
+          const active =
+            path === '/' ? pathname === '/' : pathname.startsWith(path);
+          return (
+            <ListItemButton
+              key={path}
+              component={NavLink}
+              to={path}
+              selected={active}
+              onClick={() => !isDesktop && setMobileOpen(false)}
+            >
+              <ListItemIcon
+                sx={{
+                  minWidth: 36,
+                  color: active ? 'primary.main' : 'text.secondary',
+                }}
+              >
+                {icon}
+              </ListItemIcon>
+              <ListItemText
+                primary={label}
+                primaryTypographyProps={{
+                  variant: 'body2',
+                  fontWeight: active ? 600 : 400,
+                }}
+              />
+            </ListItemButton>
+          );
+        })}
+      </List>
+    </>
+  );
+
   return (
     <Box sx={{ display: 'flex' }}>
       {/* ── AppBar ──────────────────────────────────────────────────── */}
       <AppBar
         position="fixed"
         sx={{
-          width: `calc(100% - ${DRAWER_WIDTH}px)`,
-          ml: `${DRAWER_WIDTH}px`,
+          width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
+          ml: { md: `${DRAWER_WIDTH}px` },
         }}
       >
         <Toolbar variant="dense">
-          {/* Left – page context (placeholder) */}
-          <Typography variant="body2" color="text.secondary" noWrap>
-            Dashboard
+          {!isDesktop && (
+            <IconButton
+              color="inherit"
+              edge="start"
+              onClick={() => setMobileOpen(true)}
+              sx={{ mr: 1 }}
+            >
+              <MenuIcon />
+            </IconButton>
+          )}
+
+          <Typography variant="h6" noWrap sx={{ color: 'primary.main' }}>
+            Golden Gibbon
           </Typography>
 
           <Box sx={{ flexGrow: 1 }} />
 
-          {/* Right – connection status + price tickers + clock */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
             <ConnectionStatus wsStatus={wsStatus} wsHealthy={wsHealthy} />
             <Typography
@@ -118,58 +180,42 @@ export default function AppLayout() {
         </Toolbar>
       </AppBar>
 
-      {/* ── Sidebar Drawer ──────────────────────────────────────────── */}
-      <Drawer
-        variant="permanent"
-        anchor="left"
-        sx={{
-          width: DRAWER_WIDTH,
-          flexShrink: 0,
-          '& .MuiDrawer-paper': {
-            width: DRAWER_WIDTH,
-            boxSizing: 'border-box',
-          },
-        }}
-      >
-        {/* Logo / app title */}
-        <Toolbar variant="dense" sx={{ px: 2 }}>
-          <Typography variant="h6" noWrap sx={{ color: 'primary.main' }}>
-            GoldenGibbon
-          </Typography>
-        </Toolbar>
-        <Divider />
+      {/* ── Sidebar – mobile (temporary) ───────────────────────────── */}
+      {!isDesktop && (
+        <Drawer
+          variant="temporary"
+          anchor="left"
+          open={mobileOpen}
+          onClose={() => setMobileOpen(false)}
+          ModalProps={{ keepMounted: true }}
+          sx={{
+            '& .MuiDrawer-paper': {
+              width: DRAWER_WIDTH,
+              boxSizing: 'border-box',
+            },
+          }}
+        >
+          {drawerContent}
+        </Drawer>
+      )}
 
-        <List sx={{ pt: 1 }}>
-          {NAV_ITEMS.map(({ label, path, icon }) => {
-            const active =
-              path === '/' ? pathname === '/' : pathname.startsWith(path);
-            return (
-              <ListItemButton
-                key={path}
-                component={NavLink}
-                to={path}
-                selected={active}
-              >
-                <ListItemIcon
-                  sx={{
-                    minWidth: 36,
-                    color: active ? 'primary.main' : 'text.secondary',
-                  }}
-                >
-                  {icon}
-                </ListItemIcon>
-                <ListItemText
-                  primary={label}
-                  primaryTypographyProps={{
-                    variant: 'body2',
-                    fontWeight: active ? 600 : 400,
-                  }}
-                />
-              </ListItemButton>
-            );
-          })}
-        </List>
-      </Drawer>
+      {/* ── Sidebar – desktop (permanent) ──────────────────────────── */}
+      {isDesktop && (
+        <Drawer
+          variant="permanent"
+          anchor="left"
+          sx={{
+            width: DRAWER_WIDTH,
+            flexShrink: 0,
+            '& .MuiDrawer-paper': {
+              width: DRAWER_WIDTH,
+              boxSizing: 'border-box',
+            },
+          }}
+        >
+          {drawerContent}
+        </Drawer>
+      )}
 
       {/* ── Main Content ────────────────────────────────────────────── */}
       <Box
@@ -177,12 +223,10 @@ export default function AppLayout() {
         sx={{
           flexGrow: 1,
           p: 3,
-          width: `calc(100% - ${DRAWER_WIDTH}px)`,
+          width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
         }}
       >
-        {/* Spacer to push content below the AppBar */}
         <Toolbar variant="dense" />
-
         <Outlet />
       </Box>
     </Box>
