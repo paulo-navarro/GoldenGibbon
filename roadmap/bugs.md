@@ -418,7 +418,7 @@ Os 79 trades live com `exit_reason='reconciliation_force_close'` têm PnL médio
 
 ## BUG-016: Force-close sem período de carência (race window)
 
-**Status:** Open
+**Status:** Fixed
 **Reported:** 2026-07-08 (revisão geral)
 **Related:** task 9.3 (phase_9.md), BUG-015
 
@@ -426,11 +426,17 @@ Os 79 trades live com `exit_reason='reconciliation_force_close'` têm PnL médio
 
 `reconcile_exchange` (`core/tasks/_reconciliation.py:359+`) força o fechamento local quando `exchange_size ≈ 0` com posição aberta no DB, **sem verificar há quanto tempo a posição existe nem se há ordem em voo**. Janelas de corrida com o sync de 2 min e o tick de 15 min podem fechar posições legítimas recém-abertas. Causa externa plausível também: Binance auto-Earn/conversão de dust zerando o saldo spot enquanto o ativo ainda pertence à conta.
 
-### Fix direction
+### Fix
 
-- Carência mínima (ex: posição tocada nos últimos N minutos → skip + warning).
-- Exigir 2 ciclos consecutivos de mismatch antes do force-close (mesma filosofia de histerese do RegimeDetector).
-- Verificar ordens abertas do símbolo antes de concluir "órfã".
+Três guards adicionados ao branch de force-close em `_reconcile_with_exchange` (`core/tasks/_reconciliation.py`), todos configuráveis via `ReconciliationConfig`:
+
+- [x] **Carência (grace period):** `force_close_grace_minutes` (default 15). A posição mais nova precisa ter idade ≥ carência antes de ser elegível ao force-close — cobre a corrida com o sync de 2 min logo após a abertura.
+- [x] **Histerese:** `force_close_min_cycles` (default 2). Contador `force_close_streak` persistido em `state_data` exige N ciclos consecutivos de órfã antes de fechar. É zerado quando os tamanhos voltam a bater (`_clear_force_close_streak`) ou quando há ordem em voo, e removido ao efetivar o fechamento.
+- [x] **Ordens em voo:** antes de fechar, consulta `executor.get_open_orders(symbol)`; se houver ordem aberta (ou a checagem falhar → fail-safe) o fechamento é adiado. Cobre o caso de uma compra/stop prestes a preencher.
+- [x] Quando qualquer guard dispara, o resultado do check vira `warning` com o motivo detalhado (`force-close deferred: ...`) e um `logger.warning` — nada é fechado.
+- [x] Testes: `test_force_close_deferred_within_grace`, `test_force_close_deferred_with_open_orders`, `test_force_close_requires_two_consecutive_cycles`, `test_force_close_streak_reset_on_size_recovery`. Os testes existentes de mecânica de force-close passam `force_close_grace_minutes=0, force_close_min_cycles=1` para exercitar o fechamento em si.
+
+Nota: a causa externa Binance auto-Earn/dust (saldo spot zerado com o ativo ainda na conta) não é resolvida diretamente aqui — mas a histerese + carência reduzem muito a chance de fechar uma posição legítima por causa dela.
 
 ---
 
