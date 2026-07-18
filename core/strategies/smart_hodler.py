@@ -25,6 +25,8 @@ from core.strategies.session_filter import is_in_dead_zone
 class SmartHodler(Strategy):
     """Trend-following strategy for 15m timeframe with hourly confirmation."""
 
+    DEFAULT_COOLDOWN_CANDLES: int = 16
+
     def __init__(self, config: Dict[str, Any]) -> None:
         super().__init__(config)
         self._consecutive_below_ema200: int = 0
@@ -179,9 +181,12 @@ class SmartHodler(Strategy):
         return not is_in_dead_zone(candle_time, dead_zones)
 
     def _enter_cooldown(self) -> None:
-        """Transition to COOLDOWN state and initialise the countdown."""
-        self._state = StrategyState.COOLDOWN
-        self._cooldown_remaining = self.config.get("cooldown_candles", 16)
+        """Transition to COOLDOWN state and initialise the countdown.
+
+        Thin wrapper around the public :meth:`enter_cooldown` (base class) so
+        internal callers and the live tick loop share one path.
+        """
+        self.enter_cooldown(reason="hard_stop")
 
     def _check_sell_full(self, ema_50_val: float, ema_200_val: float) -> bool:
         """

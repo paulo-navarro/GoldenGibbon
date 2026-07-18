@@ -436,7 +436,7 @@ Os 79 trades live com `exit_reason='reconciliation_force_close'` têm PnL médio
 
 ## BUG-017: Cooldown hardcoded e bypass da state machine no stop da exchange
 
-**Status:** Open
+**Status:** Fixed
 **Reported:** 2026-07-08 (revisão geral)
 
 ### Problem
@@ -450,6 +450,16 @@ comp.strategy._state = StrategyState.COOLDOWN
 
 Acessa atributos privados com fallback de **16 candles (4h)**, enquanto a spec do smart_hodler define cooldown de **48h** pós-stop. Se o nome do atributo divergir, o fallback silenciosamente aplica cooldown errado. Setar `_state` direto também pula qualquer lógica da state machine.
 
-### Fix direction
+### Root cause (confirmado)
 
-Expor método público na Strategy (ex: `enter_cooldown(reason)`) que usa a config real da estratégia; remover o default mágico.
+`getattr(comp.strategy, "_cooldown_candles", 16)` referenciava um atributo **que nunca existe** — as strategies guardam o valor em `self.config["cooldown_candles"]`, não em `self._cooldown_candles`. Logo o fallback de 16 era aplicado **sempre**, ignorando a config por completo (mean_reversion default 8, ou qualquer override do usuário).
+
+### Fix
+
+- [x] Novo método público `Strategy.enter_cooldown(reason="", candles=None)` + property `configured_cooldown_candles` na base (`core/strategies/base.py`). Lê `cooldown_candles` da config, com fallback para `DEFAULT_COOLDOWN_CANDLES` de classe — **sem** default mágico.
+- [x] `DEFAULT_COOLDOWN_CANDLES` definido por estratégia: smart_hodler=16, mean_reversion=8, bear_guard=16 (batendo com os defaults de `core/config.py`).
+- [x] `smart_hodler._enter_cooldown` e `mean_reversion._enter_cooldown` viraram wrappers finos de `enter_cooldown()` — uma única fonte de verdade.
+- [x] `core/tasks/_tick.py`: as **três** ocorrências do bug (stop da exchange entre ticks, o path normal do risco, e o `_force_stop_exit`) agora entram em cooldown via `enter_cooldown(...)`. Removido o acesso direto a `_state`/`_cooldown_remaining` e o import órfão de `StrategyState`.
+- [x] Testes: `TestEnterCooldown` (5 casos, incl. regressão "sem default mágico 16" e override explícito de candles) em `tests/test_strategy_base.py`. Testes existentes de `_enter_cooldown` continuam passando via delegação.
+
+Nota: a spec cita cooldown de 48h pós-stop para smart_hodler, mas o default de config é 16 candles (4h). O fix garante que **o valor da config é respeitado** — se a intenção for 48h, basta setar `cooldown_candles=192` na config (antes era impossível, o código forçava 16).

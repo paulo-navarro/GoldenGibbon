@@ -218,7 +218,7 @@ def run_single_strategy_tick(
     from core.data.binance_client import BinanceClient
     from core.data.loader import DataLoader
     from core.events import EventChannel, EventType, get_publisher
-    from core.models import Signal, StopCheckResult, StrategyState
+    from core.models import Signal, StopCheckResult
     from db import get_session
 
     # Always reload settings from DB so workers pick up config changes
@@ -388,8 +388,10 @@ def run_single_strategy_tick(
                     fill_price=str(fill_price),
                     pnl_usdt=str(trade.pnl_usdt),
                 )
-                comp.strategy._cooldown_remaining = getattr(comp.strategy, "_cooldown_candles", 16)
-                comp.strategy._state = StrategyState.COOLDOWN
+                # BUG-017: enter cooldown through the public state-machine path
+                # so the countdown uses the strategy's real configured length
+                # instead of a hardcoded 16-candle fallback.
+                comp.strategy.enter_cooldown(reason="exchange_stop")
                 from core.models import ExecutionResult, Order, OrderSide, OrderStatus, OrderType
                 synth_order = Order(
                     symbol=symbol,
@@ -465,8 +467,10 @@ def run_single_strategy_tick(
                     except Exception:
                         pass
             elif stop_result.cooldown_candles and stop_result.cooldown_candles > 0:
-                comp.strategy._cooldown_remaining = stop_result.cooldown_candles
-                comp.strategy._state = StrategyState.COOLDOWN
+                comp.strategy.enter_cooldown(
+                    reason=str(stop_result.decision.exit_reason),
+                    candles=stop_result.cooldown_candles,
+                )
         elif comp.pm.has_position(symbol):
             old_pos = comp.pm.get_position(symbol)
             old_effective_stop = max(
@@ -525,12 +529,13 @@ def run_single_strategy_tick(
                         )
                         execution_result = comp.executor.execute(forced_decision, candle_time)
                         if execution_result is not None:
-                            comp.strategy._cooldown_remaining = getattr(comp.strategy, "_cooldown_candles", 16)
-                            comp.strategy._state = StrategyState.COOLDOWN
+                            # BUG-017: use the configured cooldown length via the
+                            # public state-machine path, not a hardcoded 16.
+                            comp.strategy.enter_cooldown(reason="exchange_stop_forced")
                             stop_result = StopCheckResult(
                                 decision=forced_decision,
                                 hard_stop_price=new_effective_stop,
-                                cooldown_candles=getattr(comp.strategy, "_cooldown_candles", 16),
+                                cooldown_candles=comp.strategy.configured_cooldown_candles,
                             )
 
                     if not updated_pos.exchange_stop_order_id and new_effective_stop > 0:

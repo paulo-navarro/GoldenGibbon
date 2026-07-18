@@ -30,6 +30,8 @@ from core.strategies.session_filter import is_in_dead_zone
 class MeanReversion(Strategy):
     """Contrarian mean-reversion strategy for 15m timeframe with hourly confirmation."""
 
+    DEFAULT_COOLDOWN_CANDLES: int = 8
+
     def __init__(self, config: Dict[str, Any]) -> None:
         super().__init__(config)
         self._conditions: MeanReversionConditions = MeanReversionConditions()
@@ -194,9 +196,11 @@ class MeanReversion(Strategy):
 
         Called by hard stop (task 1.16) and time stop (task 1.27).
         Not used for profit exits — those go directly to FLAT.
+
+        Thin wrapper around the public :meth:`enter_cooldown` (base class) so
+        internal callers and the live tick loop share one path.
         """
-        self._state = StrategyState.COOLDOWN
-        self._cooldown_remaining = self.config.get("cooldown_candles", 8)
+        self.enter_cooldown(reason="hard_stop")
 
     def _check_sell_full(
         self,

@@ -315,3 +315,45 @@ class TestStrategyEvaluate:
     def test_import_from_package(self):
         """Strategy is importable from core.strategies (not just core.strategies.base)."""
         assert Strategy is StrategyDirect
+
+
+# ── BUG-017: public cooldown entry ────────────────────────────────────────────
+
+
+class TestEnterCooldown:
+    """Verify the public enter_cooldown() / configured_cooldown_candles path."""
+
+    def test_configured_cooldown_reads_config(self):
+        s = ConcreteStrategy({"cooldown_candles": 42})
+        assert s.configured_cooldown_candles == 42
+
+    def test_configured_cooldown_falls_back_to_class_default(self):
+        # ConcreteStrategy inherits DEFAULT_COOLDOWN_CANDLES = 0 from base.
+        s = ConcreteStrategy({})
+        assert s.configured_cooldown_candles == 0
+
+        class WithDefault(ConcreteStrategy):
+            DEFAULT_COOLDOWN_CANDLES = 16
+
+        assert WithDefault({}).configured_cooldown_candles == 16
+
+    def test_enter_cooldown_sets_state_and_counter_from_config(self):
+        s = ConcreteStrategy({"cooldown_candles": 20})
+        s.enter_cooldown(reason="exchange_stop")
+        assert s.state == StrategyState.COOLDOWN
+        assert s._cooldown_remaining == 20
+
+    def test_enter_cooldown_explicit_candles_override(self):
+        s = ConcreteStrategy({"cooldown_candles": 20})
+        s.enter_cooldown(reason="stop", candles=5)
+        assert s.state == StrategyState.COOLDOWN
+        assert s._cooldown_remaining == 5
+
+    def test_enter_cooldown_no_magic_16_default(self):
+        """Regression: the old getattr(_cooldown_candles, 16) always applied 16.
+
+        A strategy configured for 192 candles (48h) must get 192, not 16.
+        """
+        s = ConcreteStrategy({"cooldown_candles": 192})
+        s.enter_cooldown(reason="exchange_stop")
+        assert s._cooldown_remaining == 192
