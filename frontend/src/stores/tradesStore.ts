@@ -77,6 +77,7 @@ export const useTradesStore = create<TradesStore>()((set) => ({
       exit_reason: data.exit_reason as ExitReason,
       max_favorable_excursion: (data.max_favorable_excursion as string) ?? null,
       max_adverse_excursion: (data.max_adverse_excursion as string) ?? null,
+      exit_price_estimated: Boolean(data.exit_price_estimated),
     };
 
     // Prepend (newest first) and cap the buffer.

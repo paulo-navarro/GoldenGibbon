@@ -26,9 +26,11 @@ import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import TextField from '@mui/material/TextField';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 
 import { useTrades, useTradeStats } from '../api';
 import { useTradesStore } from '../stores/tradesStore';
@@ -83,7 +85,16 @@ const COLUMNS = [
   }),
   col.accessor('exit_price', {
     header: 'Exit $',
-    cell: (info) => `$${fmt(info.getValue())}`,
+    cell: (info) => (
+      <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
+        {`$${fmt(info.getValue())}`}
+        {info.row.original.exit_price_estimated && (
+          <Tooltip title="Exit price estimated — not a real exchange fill. PnL is unreliable (BUG-015).">
+            <WarningAmberIcon color="warning" sx={{ fontSize: 14 }} />
+          </Tooltip>
+        )}
+      </Box>
+    ),
   }),
   col.accessor('size', {
     header: 'Size',
@@ -120,6 +131,7 @@ interface Filters {
   symbol: string;
   strategy: string;
   exit_reason: string;
+  exit_price_estimated: string; // '' | 'true' | 'false'
 }
 
 function TradeStatsCards({ filters }: { filters: Filters }) {
@@ -127,6 +139,7 @@ function TradeStatsCards({ filters }: { filters: Filters }) {
     symbol: filters.symbol || undefined,
     strategy: filters.strategy || undefined,
     exit_reason: (filters.exit_reason || undefined) as ExitReason | undefined,
+    exit_price_estimated: filters.exit_price_estimated || undefined,
     limit: 10000,
   };
   const { isLoading, error } = useTradeStats(params);
@@ -217,6 +230,16 @@ function TradeFilters({ filters, onChange }: { filters: Filters; onChange: (f: F
             <MenuItem key={r} value={r}>{r.replace(/_/g, ' ')}</MenuItem>
           ))}
         </TextField>
+        <TextField
+          select size="small" label="Exit Price" value={filters.exit_price_estimated}
+          onChange={(e) => onChange({ ...filters, exit_price_estimated: e.target.value })}
+          sx={{ minWidth: 170 }}
+          helperText="Estimated = fabricated PnL"
+        >
+          <MenuItem value="">All</MenuItem>
+          <MenuItem value="false">Real fill only</MenuItem>
+          <MenuItem value="true">Estimated only</MenuItem>
+        </TextField>
       </Box>
     </Card>
   );
@@ -229,6 +252,7 @@ function TradeHistoryTable({ filters }: { filters: Filters }) {
     symbol: filters.symbol || undefined,
     strategy: filters.strategy || undefined,
     exit_reason: (filters.exit_reason || undefined) as ExitReason | undefined,
+    exit_price_estimated: filters.exit_price_estimated || undefined,
     limit: 500,
   };
   const { isLoading, error } = useTrades(params);
@@ -239,6 +263,10 @@ function TradeHistoryTable({ filters }: { filters: Filters }) {
       if (filters.symbol && t.symbol !== filters.symbol) return false;
       if (filters.strategy && t.strategy !== filters.strategy) return false;
       if (filters.exit_reason && t.exit_reason !== filters.exit_reason) return false;
+      if (filters.exit_price_estimated) {
+        const want = filters.exit_price_estimated === 'true';
+        if (Boolean(t.exit_price_estimated) !== want) return false;
+      }
       return true;
     });
   }, [trades, filters]);
@@ -382,7 +410,7 @@ function TradeStatsDetail({ filters }: { filters: Filters }) {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function TradesPage() {
-  const [filters, setFilters] = useState<Filters>({ symbol: '', strategy: '', exit_reason: '' });
+  const [filters, setFilters] = useState<Filters>({ symbol: '', strategy: '', exit_reason: '', exit_price_estimated: '' });
 
   return (
     <Box>

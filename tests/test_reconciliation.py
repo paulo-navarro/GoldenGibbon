@@ -1023,6 +1023,78 @@ class TestReconcileWithExchange:
             # PnL = (55000 - 50000) * 1.0 = 5000
             assert trade.pnl_usdt == Decimal("5000")
 
+    def test_force_close_uses_real_exchange_fill(self, _seed_state):
+        """BUG-015: force-close resolves the real SELL fill from myTrades,
+        deducts the fee, and does NOT flag the trade as estimated."""
+        _seed_state(
+            state="position",
+            position=True,
+            position_size=Decimal("1.0"),
+            entry_price=Decimal("50000"),
+        )
+
+        # The exchange actually sold at 55000 with a 5.5 USDT commission — this
+        # differs from the (stale) ticker so we can prove the real fill wins.
+        sell_trades = [
+            {
+                "id": 1,
+                "orderId": 200,
+                "symbol": "BTCUSDT",
+                "side": "SELL",
+                "price": "55000",
+                "qty": "1.0",
+                "commission": "5.5",
+                "commissionAsset": "USDT",
+                "time": 1700000000000,
+            }
+        ]
+        executor = self._make_executor(
+            {"USDT": {"free": Decimal("5000"), "locked": Decimal("0")}},
+            trades=sell_trades,
+            ticker_prices={"BTCUSDT": Decimal("40000")},  # stale — must be ignored
+        )
+
+        from core.tasks import _reconcile_with_exchange
+
+        with get_session() as session:
+            _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+
+        with get_session() as session:
+            trade = session.query(TradeRecord).filter_by(symbol="BTCUSDT").first()
+            assert trade is not None
+            assert trade.exit_price == Decimal("55000")
+            assert trade.exit_price_estimated is False
+            # PnL = (55000 - 50000) * 1.0 - 5.5 fee = 4994.5
+            assert trade.pnl_usdt == Decimal("4994.5")
+
+    def test_force_close_flags_estimated_when_no_fill(self, _seed_state):
+        """BUG-015: when neither myTrades nor ticker resolve a price, the trade
+        falls back to entry price and is flagged as estimated (never fabricated
+        as a real fill)."""
+        _seed_state(
+            state="position",
+            position=True,
+            position_size=Decimal("1.0"),
+            entry_price=Decimal("50000"),
+        )
+
+        # No trades, no ticker prices → only the entry price remains.
+        executor = self._make_executor(
+            {"USDT": {"free": Decimal("5000"), "locked": Decimal("0")}},
+        )
+
+        from core.tasks import _reconcile_with_exchange
+
+        with get_session() as session:
+            _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+
+        with get_session() as session:
+            trade = session.query(TradeRecord).filter_by(symbol="BTCUSDT").first()
+            assert trade is not None
+            assert trade.exit_price == Decimal("50000")  # entry-price fallback
+            assert trade.exit_price_estimated is True
+            assert trade.pnl_usdt == Decimal("0")
+
 
 # ── Phase 6.6.3: Margin debt for shorts (6.9.18) ────────────────────────────
 

@@ -245,6 +245,7 @@ def orm_to_trade(record: orm_models.TradeRecord) -> pydantic_models.Trade:
         exit_reason=pydantic_models.ExitReason(record.exit_reason),  # Convert string to enum
         max_favorable_excursion=record.max_favorable_excursion,
         max_adverse_excursion=record.max_adverse_excursion,
+        exit_price_estimated=bool(record.exit_price_estimated),
     )
 
 

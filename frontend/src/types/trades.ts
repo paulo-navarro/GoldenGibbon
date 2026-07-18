@@ -19,6 +19,8 @@ export interface Trade {
   exit_reason: ExitReason;
   max_favorable_excursion: string | null;
   max_adverse_excursion: string | null;
+  /** True when exit_price was estimated (not a real exchange fill) — PnL untrustworthy. */
+  exit_price_estimated: boolean;
 }
 
 /** Aggregate trade statistics (GET /api/trades/stats). */

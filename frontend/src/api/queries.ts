@@ -172,15 +172,17 @@ export interface UseTradesParams extends RunFilterParams {
   symbol?: string;
   strategy?: string;
   exit_reason?: string;
+  /** 'true' | 'false' | undefined — filter by estimated exit price (BUG-015). */
+  exit_price_estimated?: string;
   limit?: number;
 }
 
 export function useTrades(params: UseTradesParams = {}) {
-  const { run_id, symbol, strategy, exit_reason, limit, start, end } = params;
+  const { run_id, symbol, strategy, exit_reason, exit_price_estimated, limit, start, end } = params;
   const tradingMode = useTradingMode();
 
   const query = useQuery({
-    queryKey: ['trades', tradingMode, run_id, symbol, strategy, exit_reason, limit, start, end],
+    queryKey: ['trades', tradingMode, run_id, symbol, strategy, exit_reason, exit_price_estimated, limit, start, end],
     queryFn: () =>
       fetchApi<Trade[]>('/api/trades/', {
         run_id,
@@ -188,6 +190,7 @@ export function useTrades(params: UseTradesParams = {}) {
         symbol,
         strategy,
         exit_reason,
+        exit_price_estimated,
         limit,
         start,
         end,
@@ -204,11 +207,11 @@ export function useTrades(params: UseTradesParams = {}) {
 }
 
 export function useTradeStats(params: UseTradesParams = {}) {
-  const { run_id, symbol, strategy, exit_reason, limit, start, end } = params;
+  const { run_id, symbol, strategy, exit_reason, exit_price_estimated, limit, start, end } = params;
   const tradingMode = useTradingMode();
 
   const query = useQuery({
-    queryKey: ['trade-stats', tradingMode, run_id, symbol, strategy, exit_reason, limit, start, end],
+    queryKey: ['trade-stats', tradingMode, run_id, symbol, strategy, exit_reason, exit_price_estimated, limit, start, end],
     queryFn: () =>
       fetchApi<TradeStatsResponse>('/api/trades/stats', {
         run_id,
@@ -216,6 +219,7 @@ export function useTradeStats(params: UseTradesParams = {}) {
         symbol,
         strategy,
         exit_reason,
+        exit_price_estimated,
         limit,
         start,
         end,

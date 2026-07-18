@@ -75,6 +75,7 @@ def _base_query(
     symbol: Optional[str],
     strategy: Optional[str],
     exit_reason: Optional[str],
+    exit_price_estimated: Optional[bool],
     start: Optional[datetime],
     end: Optional[datetime],
     limit: int,
@@ -92,6 +93,8 @@ def _base_query(
         stmt = stmt.where(TradeRecord.strategy == strategy)
     if exit_reason is not None:
         stmt = stmt.where(TradeRecord.exit_reason == exit_reason)
+    if exit_price_estimated is not None:
+        stmt = stmt.where(TradeRecord.exit_price_estimated == exit_price_estimated)
 
     if start is not None:
         stmt = stmt.where(TradeRecord.exit_time >= start)
@@ -120,6 +123,7 @@ def get_trades(
     symbol: Optional[str] = Query(None, description="Filter by symbol (e.g. BTCUSDT)"),
     strategy: Optional[str] = Query(None, description="Filter by strategy name"),
     exit_reason: Optional[str] = Query(None, description="Filter by exit reason"),
+    exit_price_estimated: Optional[bool] = Query(None, description="Filter by whether exit price was estimated (true) or resolved from a real fill (false)"),
     limit: int = Query(500, ge=1, le=10000, description="Max trades to return"),
     start: Optional[datetime] = Query(None, description="Start time filter on exit_time (ISO 8601)"),
     end: Optional[datetime] = Query(None, description="End time filter on exit_time (ISO 8601)"),
@@ -139,6 +143,7 @@ def get_trades(
         symbol=symbol,
         strategy=strategy,
         exit_reason=exit_reason,
+        exit_price_estimated=exit_price_estimated,
         start=start,
         end=end,
         limit=limit,
@@ -153,6 +158,7 @@ def get_trade_stats(
     symbol: Optional[str] = Query(None, description="Filter by symbol (e.g. BTCUSDT)"),
     strategy: Optional[str] = Query(None, description="Filter by strategy name"),
     exit_reason: Optional[str] = Query(None, description="Filter by exit reason"),
+    exit_price_estimated: Optional[bool] = Query(None, description="Filter by whether exit price was estimated (true) or resolved from a real fill (false)"),
     limit: int = Query(10000, ge=1, le=10000, description="Max trades to consider"),
     start: Optional[datetime] = Query(None, description="Start time filter on exit_time (ISO 8601)"),
     end: Optional[datetime] = Query(None, description="End time filter on exit_time (ISO 8601)"),
@@ -171,6 +177,7 @@ def get_trade_stats(
         symbol=symbol,
         strategy=strategy,
         exit_reason=exit_reason,
+        exit_price_estimated=exit_price_estimated,
         start=start,
         end=end,
         limit=limit,

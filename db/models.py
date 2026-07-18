@@ -145,6 +145,13 @@ class TradeRecord(Base):
     trading_mode: Mapped[str] = mapped_column(String(10), nullable=False, default="paper", server_default="paper")
     exchange_order_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
+    # True when exit_price could not be resolved from the exchange and was
+    # estimated (e.g. reconciliation force-close falling back to a ticker or
+    # the entry price). PnL on such rows is not trustworthy for analysis.
+    exit_price_estimated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
