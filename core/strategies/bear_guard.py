@@ -35,6 +35,8 @@ from core.strategies.session_filter import is_in_dead_zone
 class BearGuard(Strategy):
     """Bear trend short strategy for 15m timeframe with hourly confirmation."""
 
+    DEFAULT_COOLDOWN_CANDLES: int = 16
+
     def __init__(self, config: Dict[str, Any]) -> None:
         super().__init__(config)
         self._conditions: BearGuardConditions = BearGuardConditions()

@@ -27,6 +27,10 @@ class Strategy(ABC):
         - decide(): MarketData + Portfolio → Signal
     """
 
+    # Default COOLDOWN length in candles when the config omits
+    # ``cooldown_candles``. Subclasses override to match their own spec.
+    DEFAULT_COOLDOWN_CANDLES: int = 0
+
     def __init__(self, config: Dict[str, Any]) -> None:
         """
         Initialize strategy with configuration.
@@ -77,6 +81,42 @@ class Strategy(ABC):
     def conditions(self) -> StrategyConditions:
         """Current conditions snapshot (for debugging / UI)."""
         return self._conditions
+
+    @property
+    def configured_cooldown_candles(self) -> int:
+        """The ``COOLDOWN`` length (in candles) this strategy is configured for.
+
+        Reads ``cooldown_candles`` from the config, falling back to the
+        subclass's :attr:`DEFAULT_COOLDOWN_CANDLES`. This replaces the old
+        ``getattr(strategy, "_cooldown_candles", 16)`` pattern (BUG-017), which
+        referenced an attribute that never existed and so always applied a
+        hardcoded 16.
+        """
+        return int(self.config.get("cooldown_candles", self.DEFAULT_COOLDOWN_CANDLES))
+
+    def enter_cooldown(self, reason: str = "", candles: int | None = None) -> None:
+        """
+        Transition the strategy into the ``COOLDOWN`` state.
+
+        This is the single public entry point for entering cooldown. By default
+        the countdown uses :attr:`configured_cooldown_candles` (the strategy's
+        real config) — there is **no** magic hardcoded length. Used both by
+        internal exit paths and by the live tick loop when an exchange stop
+        fills between ticks (BUG-017), so every COOLDOWN transition goes through
+        one consistent path instead of poking ``_state`` directly.
+
+        Args:
+            reason: Optional short label for why cooldown was entered
+                (e.g. ``"hard_stop"``, ``"exchange_stop"``) — for logging.
+            candles: Explicit countdown length. When ``None`` (default), uses
+                the configured length. Callers that already have an
+                engine-computed value (e.g. ``StopCheckResult.cooldown_candles``)
+                pass it here.
+        """
+        self._cooldown_remaining = int(
+            candles if candles is not None else self.configured_cooldown_candles
+        )
+        self._state = StrategyState.COOLDOWN
 
     def evaluate(
         self, market_data: MarketData, portfolio: Portfolio
