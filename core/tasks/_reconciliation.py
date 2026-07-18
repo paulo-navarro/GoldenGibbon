@@ -285,6 +285,43 @@ def _resolve_exit_from_exchange(
     return exit_price, fee_usdt
 
 
+# Key under which the consecutive-orphan-cycle counter lives in state_data.
+_FORCE_CLOSE_STREAK_KEY = "force_close_streak"
+
+
+def _bump_force_close_streak(state_recs) -> int:
+    """
+    Increment the consecutive-orphan-cycle counter (BUG-016 hysteresis) on every
+    involved ``StrategyStateRecord`` and return the resulting streak.
+
+    The counter is stored in ``state_data`` so it survives across reconciliation
+    runs (the task opens a fresh session each cycle). All records for the symbol
+    are bumped together so they stay in sync; the max is returned as the
+    symbol-level streak.
+    """
+    result = 0
+    for sr in state_recs:
+        data = dict(sr.state_data or {})
+        new = int(data.get(_FORCE_CLOSE_STREAK_KEY, 0)) + 1
+        data[_FORCE_CLOSE_STREAK_KEY] = new
+        sr.state_data = data
+        result = max(result, new)
+    return result
+
+
+def _clear_force_close_streak(session, symbol: str) -> None:
+    """Drop the orphan-cycle counter for ``symbol`` once its size agrees again."""
+    from db.models import StrategyStateRecord
+
+    recs = session.query(StrategyStateRecord).filter_by(symbol=symbol).all()
+    for sr in recs:
+        data = sr.state_data or {}
+        if _FORCE_CLOSE_STREAK_KEY in data:
+            new = dict(data)
+            new.pop(_FORCE_CLOSE_STREAK_KEY, None)
+            sr.state_data = new
+
+
 def _reconcile_with_exchange(
     session,  # noqa: ANN001 – SQLAlchemy Session
     executor,  # noqa: ANN001 – BinanceExecutor
@@ -294,6 +331,8 @@ def _reconcile_with_exchange(
     position_tolerance: Decimal = _EXCHANGE_POSITION_TOLERANCE,
     auto_repair: bool = True,
     force_close_orphans: bool = True,
+    force_close_grace_minutes: int = 15,
+    force_close_min_cycles: int = 2,
     recover_untracked: bool = True,
 ) -> Dict[str, Any]:
     """
@@ -419,6 +458,10 @@ def _reconcile_with_exchange(
                 "check": f"exchange_position_{symbol}",
                 "result": "ok",
             })
+            # BUG-016: sizes agree again — drop any pending orphan streak so a
+            # transient blip never carries over toward a future force-close.
+            if pos_recs:
+                _clear_force_close_streak(session, symbol)
         elif pos_recs and exchange_size <= position_tolerance:
             # Exchange has zero/dust but local DB has open position(s).
             # The sell was executed on Binance but the local state was
@@ -445,6 +488,92 @@ def _reconcile_with_exchange(
                 from db.models import TradeRecord
 
                 now = datetime.now(timezone.utc)
+
+                # ── BUG-016: guards against closing legitimate positions ──────
+                # A zero spot balance is not sufficient proof of an orphan: a
+                # just-opened position (race with the 2-min sync), an in-flight
+                # order, or a transient blip can all look identical. Require the
+                # orphan to be old enough, have no pending orders, and persist
+                # across consecutive cycles before force-closing.
+                involved_states = [
+                    sr for sr in (
+                        session.query(StrategyStateRecord)
+                        .filter_by(symbol=symbol)
+                        .all()
+                    )
+                    if sr.state in ("position", "reduced")
+                ]
+
+                # Guard A — in-flight orders. If the symbol has any open order
+                # the zero balance may be transient; if the check fails, fail
+                # safe and defer rather than fabricate a close.
+                try:
+                    has_open_orders = bool(executor.get_open_orders(symbol))
+                    open_orders_known = True
+                except Exception as exc:
+                    logger.error(
+                        "reconcile_exchange: open-order check failed before force-close",
+                        symbol=symbol, error=str(exc),
+                    )
+                    has_open_orders = True
+                    open_orders_known = False
+
+                # Guard B — grace period on the youngest position.
+                youngest_age_min = min(
+                    (now - r.entry_time).total_seconds() / 60 for r in pos_recs
+                )
+                within_grace = youngest_age_min < force_close_grace_minutes
+
+                # Guard C — hysteresis. An open order resets the streak (not a
+                # genuine orphan). Without a trackable state record we cannot
+                # apply hysteresis, so we don't block on it.
+                if has_open_orders:
+                    _clear_force_close_streak(session, symbol)
+                    streak = 0
+                    reached_streak = False
+                elif involved_states:
+                    streak = _bump_force_close_streak(involved_states)
+                    reached_streak = streak >= force_close_min_cycles
+                else:
+                    streak = 0
+                    reached_streak = True
+
+                if has_open_orders or within_grace or not reached_streak:
+                    reasons: list[str] = []
+                    if has_open_orders:
+                        reasons.append(
+                            "open order in flight" if open_orders_known
+                            else "open-order check failed (fail-safe)"
+                        )
+                    if within_grace:
+                        reasons.append(
+                            f"within grace ({youngest_age_min:.1f}min < "
+                            f"{force_close_grace_minutes}min)"
+                        )
+                    if not reached_streak and not has_open_orders:
+                        reasons.append(
+                            f"awaiting hysteresis ({streak}/{force_close_min_cycles} cycles)"
+                        )
+                    reason = "; ".join(reasons)
+                    checks.append({
+                        "check": f"exchange_position_{symbol}",
+                        "result": "warning",
+                        "detail": (
+                            f"local_size={local_size} vs exchange_size={exchange_size} "
+                            f"— force-close deferred: {reason}"
+                        ),
+                    })
+                    logger.warning(
+                        "reconcile_exchange: force-close deferred (BUG-016 guard)",
+                        symbol=symbol,
+                        local_size=str(local_size),
+                        exchange_size=str(exchange_size),
+                        youngest_age_min=round(youngest_age_min, 1),
+                        streak=streak,
+                        reason=reason,
+                    )
+                    continue
+
                 current_price = ticker_prices.get(symbol, None)
 
                 for rec in pos_recs:
@@ -515,6 +644,7 @@ def _reconcile_with_exchange(
                             state_data["usdt_balance"] = str(balance + proceeds)
                             state_data["total_pnl"] = str(total_pnl + pnl)
                             state_data["cooldown_remaining"] = 0
+                            state_data.pop(_FORCE_CLOSE_STREAK_KEY, None)  # BUG-016
                             state_rec.state_data = state_data
                         repairs.append(
                             f"force-closed {strategy}:{symbol} from {old_state} to flat "
@@ -2193,6 +2323,8 @@ def run_reconciliation(self) -> Dict[str, Any]:  # noqa: ANN001
                         position_tolerance=recon_cfg.size_mismatch_threshold,
                         auto_repair=recon_cfg.auto_repair,
                         force_close_orphans=recon_cfg.force_close_orphans,
+                        force_close_grace_minutes=recon_cfg.force_close_grace_minutes,
+                        force_close_min_cycles=recon_cfg.force_close_min_cycles,
                         recover_untracked=recon_cfg.recover_untracked,
                     )
 

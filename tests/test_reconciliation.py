@@ -11,7 +11,7 @@ Also verifies event publishing and the worker_ready startup trigger.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -52,6 +52,7 @@ def _seed_state():
         position: bool = False,
         position_size: Decimal = Decimal("0.01"),
         entry_price: Decimal = Decimal("50000"),
+        entry_time: datetime | None = None,
     ) -> None:
         with get_session() as session:
             state_data = state_data or {
@@ -71,7 +72,7 @@ def _seed_state():
                 )
             )
             if position:
-                now = datetime.now(timezone.utc)
+                pos_entry_time = entry_time or datetime.now(timezone.utc)
                 session.add(
                     PositionRecord(
                         symbol=symbol,
@@ -79,7 +80,7 @@ def _seed_state():
                         side="long",
                         size=position_size,
                         entry_price=entry_price,
-                        entry_time=now,
+                        entry_time=pos_entry_time,
                         highest_close=entry_price,
                         trailing_stop_price=entry_price * Decimal("0.95"),
                         hard_stop_price=entry_price * Decimal("0.97"),
@@ -612,7 +613,7 @@ class TestStartupReconciliation:
 class TestReconcileWithExchange:
     """Verify Check D (USDT balance) and Check E (position size) vs Binance."""
 
-    def _make_executor(self, balances: dict, *, trades=None, ticker_prices=None) -> MagicMock:
+    def _make_executor(self, balances: dict, *, trades=None, ticker_prices=None, open_orders=None) -> MagicMock:
         """Build a mock executor that returns given balances."""
         executor = MagicMock()
         executor.get_account_info.return_value = {
@@ -621,6 +622,8 @@ class TestReconcileWithExchange:
         }
         executor.get_ticker_prices.return_value = ticker_prices or {}
         executor.get_my_trades.return_value = trades if trades is not None else []
+        # BUG-016: force-close now checks for in-flight orders — default to none.
+        executor.get_open_orders.return_value = open_orders if open_orders is not None else []
         return executor
 
     def test_ok_when_balances_match(self, _seed_state):
@@ -777,7 +780,10 @@ class TestReconcileWithExchange:
         from core.tasks import _reconcile_with_exchange
 
         with get_session() as session:
-            result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+            result = _reconcile_with_exchange(
+                session, executor, ["BTCUSDT"],
+                force_close_grace_minutes=0, force_close_min_cycles=1,
+            )
 
         assert result["status"] == "mismatch"
         pos_check = next(c for c in result["checks"] if c["check"] == "exchange_position_BTCUSDT")
@@ -815,7 +821,10 @@ class TestReconcileWithExchange:
         })
 
         with get_session() as session:
-            _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+            _reconcile_with_exchange(
+                session, executor, ["BTCUSDT"],
+                force_close_grace_minutes=0, force_close_min_cycles=1,
+            )
 
         assert ("smart_hodler", "BTCUSDT") not in _worker_state
 
@@ -835,7 +844,10 @@ class TestReconcileWithExchange:
         from core.tasks import _reconcile_with_exchange
 
         with get_session() as session:
-            result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+            result = _reconcile_with_exchange(
+                session, executor, ["BTCUSDT"],
+                force_close_grace_minutes=0, force_close_min_cycles=1,
+            )
 
         pos_check = next(c for c in result["checks"] if c["check"] == "exchange_position_BTCUSDT")
         assert pos_check["result"] == "repaired"
@@ -1012,7 +1024,10 @@ class TestReconcileWithExchange:
         from core.tasks import _reconcile_with_exchange
 
         with get_session() as session:
-            result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+            result = _reconcile_with_exchange(
+                session, executor, ["BTCUSDT"],
+                force_close_grace_minutes=0, force_close_min_cycles=1,
+            )
 
         # Verify TradeRecord has correct PnL
         with get_session() as session:
@@ -1057,7 +1072,10 @@ class TestReconcileWithExchange:
         from core.tasks import _reconcile_with_exchange
 
         with get_session() as session:
-            _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+            _reconcile_with_exchange(
+                session, executor, ["BTCUSDT"],
+                force_close_grace_minutes=0, force_close_min_cycles=1,
+            )
 
         with get_session() as session:
             trade = session.query(TradeRecord).filter_by(symbol="BTCUSDT").first()
@@ -1086,7 +1104,10 @@ class TestReconcileWithExchange:
         from core.tasks import _reconcile_with_exchange
 
         with get_session() as session:
-            _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+            _reconcile_with_exchange(
+                session, executor, ["BTCUSDT"],
+                force_close_grace_minutes=0, force_close_min_cycles=1,
+            )
 
         with get_session() as session:
             trade = session.query(TradeRecord).filter_by(symbol="BTCUSDT").first()
@@ -1094,6 +1115,130 @@ class TestReconcileWithExchange:
             assert trade.exit_price == Decimal("50000")  # entry-price fallback
             assert trade.exit_price_estimated is True
             assert trade.pnl_usdt == Decimal("0")
+
+    # ── BUG-016: force-close race-window guards ───────────────────────────────
+
+    def test_force_close_deferred_within_grace(self, _seed_state):
+        """A freshly-opened position is NOT force-closed (race with the sync)."""
+        _seed_state(
+            state="position",
+            position=True,
+            position_size=Decimal("1.0"),
+        )  # entry_time defaults to now → within grace
+
+        executor = self._make_executor(
+            {"USDT": {"free": Decimal("5000"), "locked": Decimal("0")}},
+        )
+
+        from core.tasks import _reconcile_with_exchange
+
+        with get_session() as session:
+            result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+
+        pos_check = next(c for c in result["checks"] if c["check"] == "exchange_position_BTCUSDT")
+        assert pos_check["result"] == "warning"
+        assert "grace" in pos_check["detail"]
+
+        # Position must survive and no trade fabricated.
+        with get_session() as session:
+            assert session.query(PositionRecord).filter_by(symbol="BTCUSDT").first() is not None
+            assert session.query(TradeRecord).filter_by(symbol="BTCUSDT").first() is None
+
+    def test_force_close_deferred_with_open_orders(self, _seed_state):
+        """An in-flight order defers force-close even for an old position."""
+        _seed_state(
+            state="position",
+            position=True,
+            position_size=Decimal("1.0"),
+            entry_time=datetime.now(timezone.utc) - timedelta(hours=2),
+        )
+
+        executor = self._make_executor(
+            {"USDT": {"free": Decimal("5000"), "locked": Decimal("0")}},
+            open_orders=[{"orderId": 1, "symbol": "BTCUSDT"}],
+        )
+
+        from core.tasks import _reconcile_with_exchange
+
+        with get_session() as session:
+            result = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+
+        pos_check = next(c for c in result["checks"] if c["check"] == "exchange_position_BTCUSDT")
+        assert pos_check["result"] == "warning"
+        assert "open order" in pos_check["detail"]
+
+        with get_session() as session:
+            assert session.query(PositionRecord).filter_by(symbol="BTCUSDT").first() is not None
+            assert session.query(TradeRecord).filter_by(symbol="BTCUSDT").first() is None
+
+    def test_force_close_requires_two_consecutive_cycles(self, _seed_state):
+        """Hysteresis: an old orphan closes only on the 2nd consecutive cycle."""
+        _seed_state(
+            state="position",
+            position=True,
+            position_size=Decimal("1.0"),
+            entry_time=datetime.now(timezone.utc) - timedelta(hours=2),
+        )
+
+        executor = self._make_executor(
+            {"USDT": {"free": Decimal("5000"), "locked": Decimal("0")}},
+        )
+
+        from core.tasks import _reconcile_with_exchange
+
+        # Cycle 1 — grace passed, but streak only reaches 1 → deferred.
+        with get_session() as session:
+            r1 = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+        c1 = next(c for c in r1["checks"] if c["check"] == "exchange_position_BTCUSDT")
+        assert c1["result"] == "warning"
+        assert "hysteresis" in c1["detail"]
+        with get_session() as session:
+            assert session.query(PositionRecord).filter_by(symbol="BTCUSDT").first() is not None
+            assert session.query(TradeRecord).filter_by(symbol="BTCUSDT").first() is None
+
+        # Cycle 2 — streak reaches 2 → force-close.
+        with get_session() as session:
+            r2 = _reconcile_with_exchange(session, executor, ["BTCUSDT"])
+        c2 = next(c for c in r2["checks"] if c["check"] == "exchange_position_BTCUSDT")
+        assert c2["result"] == "repaired"
+        with get_session() as session:
+            assert session.query(PositionRecord).filter_by(symbol="BTCUSDT").first() is None
+            assert session.query(TradeRecord).filter_by(symbol="BTCUSDT").first() is not None
+
+    def test_force_close_streak_reset_on_size_recovery(self, _seed_state):
+        """A recovered balance clears the pending orphan streak."""
+        _seed_state(
+            state="position",
+            position=True,
+            position_size=Decimal("1.0"),
+            entry_time=datetime.now(timezone.utc) - timedelta(hours=2),
+        )
+
+        from core.tasks import _reconcile_with_exchange
+        from db.models import StrategyStateRecord
+
+        # Cycle 1 — orphan → streak becomes 1.
+        zero_exec = self._make_executor(
+            {"USDT": {"free": Decimal("5000"), "locked": Decimal("0")}},
+        )
+        with get_session() as session:
+            _reconcile_with_exchange(session, zero_exec, ["BTCUSDT"])
+        with get_session() as session:
+            sd = session.query(StrategyStateRecord).filter_by(symbol="BTCUSDT").first().state_data
+            assert int(sd.get("force_close_streak", 0)) == 1
+
+        # Cycle 2 — exchange balance now matches → streak cleared.
+        match_exec = self._make_executor(
+            {
+                "USDT": {"free": Decimal("5000"), "locked": Decimal("0")},
+                "BTC": {"free": Decimal("1.0"), "locked": Decimal("0")},
+            },
+        )
+        with get_session() as session:
+            _reconcile_with_exchange(session, match_exec, ["BTCUSDT"])
+        with get_session() as session:
+            sd = session.query(StrategyStateRecord).filter_by(symbol="BTCUSDT").first().state_data
+            assert "force_close_streak" not in sd
 
 
 # ── Phase 6.6.3: Margin debt for shorts (6.9.18) ────────────────────────────

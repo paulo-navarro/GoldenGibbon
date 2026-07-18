@@ -78,6 +78,8 @@ class ReconciliationConfig(BaseModel):
     interval_minutes: int = Field(default=2, ge=1, le=60, description="Beat interval in minutes (env GG_RECONCILIATION_INTERVAL_MIN, requires restart)")
     auto_repair: bool = Field(default=True, description="Auto-repair mismatches (positions, balances)")
     force_close_orphans: bool = Field(default=True, description="Force-close stale positions not on exchange")
+    force_close_grace_minutes: int = Field(default=15, ge=0, le=1440, description="Minimum position age before it is eligible for force-close (BUG-016 race guard)")
+    force_close_min_cycles: int = Field(default=2, ge=1, le=10, description="Consecutive reconciliation cycles a position must appear orphaned before force-close (BUG-016 hysteresis)")
     recover_untracked: bool = Field(default=True, description="Reconstruct positions found on exchange but missing locally")
     balance_drift_threshold: Decimal = Field(default=Decimal("0.01"), ge=0, description="USDT balance mismatch tolerance")
     size_mismatch_threshold: Decimal = Field(default=Decimal("0.00000100"), ge=0, description="Asset qty mismatch tolerance")
