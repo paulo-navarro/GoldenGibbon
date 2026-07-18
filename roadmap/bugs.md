@@ -378,3 +378,71 @@ When `pm.open_position()` raises, the exception propagates through `execute()` �
 - [x] **3. Kill switch equity fix**
   - [x] On state recovery in live mode, reset kill switch `_peak_equity` to 0 so first `check()` re-initialises from current equity
   - [x] Prevents false drawdown triggers caused by stale peak from PM balance drift
+
+---
+
+## BUG-015: Reconciliation force-close fabricates exit price (PnL falso no histórico)
+
+**Status:** Open
+**Reported:** 2026-07-08 (revisão geral)
+**Related:** task 9.3 (phase_9.md)
+
+### Problem
+
+`core/tasks/_reconciliation.py:390` — ao force-closar uma posição órfã:
+
+```python
+exit_price = current_price if current_price else rec.entry_price
+```
+
+Se o fetch de tickers falhou (engolido silenciosamente pelo `except Exception: ticker_prices = {}` em `_reconciliation.py:330`), o trade é gravado com **exit = entry**, ou seja, PnL ≈ 0 **fabricado** — o preço real de venda na exchange foi outro.
+
+### Evidence (prod)
+
+Os 79 trades live com `exit_reason='reconciliation_force_close'` têm PnL médio de **-0.085%** — suspeito de perto de zero, consistente com exit_price = entry_price em massa. O histórico de trades (base de qualquer análise de estratégia) está parcialmente fabricado.
+
+### Fix direction
+
+- Nunca gravar trade com preço inventado: se não há ticker, buscar o fill real na exchange (`myTrades`) ou marcar o registro como `exit_price_estimated=true`.
+- Logar ERROR (não engolir) quando o fetch de tickers falha durante reconciliação.
+- PnL do force-close também não desconta fee.
+
+---
+
+## BUG-016: Force-close sem período de carência (race window)
+
+**Status:** Open
+**Reported:** 2026-07-08 (revisão geral)
+**Related:** task 9.3 (phase_9.md), BUG-015
+
+### Problem
+
+`reconcile_exchange` (`core/tasks/_reconciliation.py:359+`) força o fechamento local quando `exchange_size ≈ 0` com posição aberta no DB, **sem verificar há quanto tempo a posição existe nem se há ordem em voo**. Janelas de corrida com o sync de 2 min e o tick de 15 min podem fechar posições legítimas recém-abertas. Causa externa plausível também: Binance auto-Earn/conversão de dust zerando o saldo spot enquanto o ativo ainda pertence à conta.
+
+### Fix direction
+
+- Carência mínima (ex: posição tocada nos últimos N minutos → skip + warning).
+- Exigir 2 ciclos consecutivos de mismatch antes do force-close (mesma filosofia de histerese do RegimeDetector).
+- Verificar ordens abertas do símbolo antes de concluir "órfã".
+
+---
+
+## BUG-017: Cooldown hardcoded e bypass da state machine no stop da exchange
+
+**Status:** Open
+**Reported:** 2026-07-08 (revisão geral)
+
+### Problem
+
+`core/tasks/_tick.py:391-392` — quando um stop da exchange fillou entre ticks:
+
+```python
+comp.strategy._cooldown_remaining = getattr(comp.strategy, "_cooldown_candles", 16)
+comp.strategy._state = StrategyState.COOLDOWN
+```
+
+Acessa atributos privados com fallback de **16 candles (4h)**, enquanto a spec do smart_hodler define cooldown de **48h** pós-stop. Se o nome do atributo divergir, o fallback silenciosamente aplica cooldown errado. Setar `_state` direto também pula qualquer lógica da state machine.
+
+### Fix direction
+
+Expor método público na Strategy (ex: `enter_cooldown(reason)`) que usa a config real da estratégia; remover o default mágico.
