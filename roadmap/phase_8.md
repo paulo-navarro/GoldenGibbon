@@ -1,13 +1,18 @@
 # Phase 8 — UI/UX Refinements
 
 > **Goal:** Melhorar a organização e usabilidade do dashboard e das páginas de estratégia.
-> **Status:** Planning
+> **Status:** ✅ Done (2026-07-18)
+>
+> **Nota da auditoria (2026-07-18):** as tarefas 8.1–8.6 já haviam sido implementadas
+> no código (durante as fases 9/10) sem que este checklist fosse atualizado. A auditoria
+> confirmou cada item contra o código atual e fechou a única lacuna restante: o link
+> direto do banner "strategy disabled" para a seção da estratégia no Settings (8.3).
 
 ---
 
 ## Tarefas
 
-### [ ] 8.1 — Mover Exit Proximity para dentro dos Strategy pair cards
+### [x] 8.1 — Mover Exit Proximity para dentro dos Strategy pair cards
 
 **Problema:** A seção "Exit Proximity" no Dashboard é redundante — mostra dados por par/estratégia que já pertencem ao card de cada par na Strategy page. No header do accordion já aparecem Hard/Trail %, mas o detalhe completo (stop bars, time stop, exit conditions) fica isolado no Dashboard sem contexto.
 
@@ -48,7 +53,7 @@
 
 ---
 
-### [ ] 8.2 — Mover Strategy Parameters para Settings page
+### [x] 8.2 — Mover Strategy Parameters para Settings page
 
 **Problema:** O accordion "Parameters" dentro de cada pair card (`StrategyCard`) mostra a config **da estratégia inteira** (EMA periods, ADX threshold, etc.), não do par. Todos os cards da mesma estratégia mostram exatamente os mesmos campos, e alterar em qualquer um afeta todos. Isso é confuso — parece configuração per-pair mas é per-strategy.
 
@@ -96,7 +101,7 @@ Além disso, o toggle "Enabled" dentro do Parameters dá a impressão de desabil
 
 ---
 
-### [ ] 8.3 — Warning banner quando estratégia está disabled
+### [x] 8.3 — Warning banner quando estratégia está disabled
 
 **Problema:** Quando uma estratégia está disabled, a Strategy page mostra os pair cards normalmente (state persiste no DB/store). Não há nenhuma indicação de que a estratégia não está rodando.
 
@@ -112,7 +117,7 @@ Além disso, o toggle "Enabled" dentro do Parameters dá a impressão de desabil
 
 ---
 
-### [ ] 8.4 — Logs: paginação + categorias de log
+### [x] 8.4 — Logs: paginação + categorias de log
 
 **Problema:** A Logs page faz fetch de 500 linhas de uma vez, sem paginação. O conteúdo é na maioria ruído de infraestrutura (lock acquired, config loaded, heartbeat) — os eventos úteis (sinais, trades, rejeições de risco, transições de estado) ficam enterrados. Filtro só por level, sem como filtrar por módulo/contexto.
 
@@ -144,7 +149,7 @@ Além disso, o toggle "Enabled" dentro do Parameters dá a impressão de desabil
 
 ---
 
-### [ ] 8.5 — Prices: remover chip de timeframe + deduplicar price updates
+### [x] 8.5 — Prices: remover chip de timeframe + deduplicar price updates
 
 **Problema:** O card de preço mostra um chip com o timeframe do candle (ex: "15m", "1h") que fica alternando entre timeframes a cada ~2s. O preço é o mesmo independente do timeframe — é só o close do candle atual. A alternância é porque o Binance WS publica `PRICE_UPDATE` para cada combinação symbol × timeframe, e o frontend armazena a última que chegou.
 
@@ -157,7 +162,7 @@ Além disso, o toggle "Enabled" dentro do Parameters dá a impressão de desabil
 
 ---
 
-### [ ] 8.6 — Prices: variação 24h com cores verde/vermelho
+### [x] 8.6 — Prices: variação 24h com cores verde/vermelho
 
 **Problema:** Os cards de preço mostram apenas o preço atual, sem contexto de variação diária. Não dá pra saber de relance se o ativo subiu ou caiu.
 

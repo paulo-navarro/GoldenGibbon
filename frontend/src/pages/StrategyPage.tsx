@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link as RouterLink, useParams } from 'react-router-dom';
 import Accordion from '@mui/material/Accordion';
 import AccordionDetails from '@mui/material/AccordionDetails';
 import AccordionSummary from '@mui/material/AccordionSummary';
@@ -494,7 +494,21 @@ export default function StrategyPage() {
     <Box sx={{ p: 2 }}>
       <Typography variant="h5" sx={{ mb: 2 }}>{title}</Typography>
       {isDisabled && (
-        <Alert severity="warning" variant="outlined" sx={{ mb: 2 }}>
+        <Alert
+          severity="warning"
+          variant="outlined"
+          sx={{ mb: 2 }}
+          action={
+            <Button
+              component={RouterLink}
+              to={`/settings?section=_strategy:${strategyName}`}
+              color="warning"
+              size="small"
+            >
+              Open Settings
+            </Button>
+          }
+        >
           {title} is disabled. Enable it in Settings to resume trading.
         </Alert>
       )}

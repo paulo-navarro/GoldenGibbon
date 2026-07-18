@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Box,
   Typography,
@@ -397,7 +398,10 @@ export default function SettingsPage() {
   const { data: listData, isLoading } = useNamespaceList();
   const { data: strategyListData } = useStrategyList();
   const { data: overviewData } = useStrategyOverview();
-  const [selected, setSelected] = useState('');
+  // Deep-link support (task 8.3): /settings?section=_strategy:smart_hodler
+  // preselects a sidebar section (e.g. from the "strategy disabled" banner).
+  const [searchParams] = useSearchParams();
+  const [selected, setSelected] = useState(() => searchParams.get('section') ?? '');
 
   const namespaceItems = useMemo(() => {
     const raw = listData?.namespaces ?? [];
