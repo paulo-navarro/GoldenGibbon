@@ -395,7 +395,10 @@ class Trade(BaseModel):
     exit_reason: ExitReason
     max_favorable_excursion: Optional[Decimal] = None  # MFE
     max_adverse_excursion: Optional[Decimal] = None    # MAE
-    
+    # True when exit_price was estimated (not resolved from a real exchange
+    # fill) — e.g. reconciliation force-close fallback. PnL is not trustworthy.
+    exit_price_estimated: bool = False
+
     model_config = ConfigDict(
         json_encoders={
             Decimal: lambda v: str(v),

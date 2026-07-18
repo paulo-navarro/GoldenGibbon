@@ -383,7 +383,7 @@ When `pm.open_position()` raises, the exception propagates through `execute()` �
 
 ## BUG-015: Reconciliation force-close fabricates exit price (PnL falso no histórico)
 
-**Status:** Open
+**Status:** Fixed
 **Reported:** 2026-07-08 (revisão geral)
 **Related:** task 9.3 (phase_9.md)
 
@@ -401,11 +401,18 @@ Se o fetch de tickers falhou (engolido silenciosamente pelo `except Exception: t
 
 Os 79 trades live com `exit_reason='reconciliation_force_close'` têm PnL médio de **-0.085%** — suspeito de perto de zero, consistente com exit_price = entry_price em massa. O histórico de trades (base de qualquer análise de estratégia) está parcialmente fabricado.
 
-### Fix direction
+### Fix
 
-- Nunca gravar trade com preço inventado: se não há ticker, buscar o fill real na exchange (`myTrades`) ou marcar o registro como `exit_price_estimated=true`.
-- Logar ERROR (não engolir) quando o fetch de tickers falha durante reconciliação.
-- PnL do force-close também não desconta fee.
+- [x] Novo helper `_resolve_exit_from_exchange()` (`core/tasks/_reconciliation.py`): busca os fills SELL reais via `myTrades` desde `entry_time`, calcula o exit price por VWAP e a comissão em USDT. É a primeira fonte de verdade do force-close.
+- [x] Fallback em cascata no force-close: fill real da exchange → ticker → `entry_price`. Quando não há fill real, o trade é gravado com `exit_price_estimated=true` e um log ERROR é emitido (nunca mais um PnL fabricado passa como real).
+- [x] Nova coluna `TradeRecord.exit_price_estimated` (`db/models.py` + migration `l7m8n9o0p123`) para marcar registros com preço estimado, permitindo excluí-los de análises de estratégia.
+- [x] PnL do force-close agora desconta a fee real (`pnl = (exit - entry) * size - fee`), e o `usdt_balance` do estado credita o proceeds líquido.
+- [x] O `except` do fetch de tickers passou a logar ERROR (antes engolia silenciosamente).
+- [x] `BinanceExecutor._parse_trade_response` deriva `side` de `isBuyer` (o `myTrades` da Binance não retorna `side`), corrigindo também o caminho de reconstrução de posição.
+- [x] Exposto na API: `Trade.exit_price_estimated` (`core/models.py`), mapeado em `orm_to_trade` (`db/utils.py`), e novo query param `exit_price_estimated` (true/false) em `GET /api/trades/` e `/stats`.
+- [x] Front: tipo `Trade.exit_price_estimated` (`types/trades.ts`), filtro tri-estado "Exit Price" (All / Real fill only / Estimated only) na TradesPage e ícone ⚠️ (tooltip) na coluna Exit $ para trades estimados.
+- [x] Testes: `test_force_close_uses_real_exchange_fill`, `test_force_close_flags_estimated_when_no_fill` (reconciliação) e `test_side_derived_from_isbuyer` (executor).
+- [ ] **Pendente (manual):** rodar `alembic upgrade head` no DB de produção.
 
 ---
 

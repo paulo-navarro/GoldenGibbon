@@ -229,6 +229,62 @@ _EXCHANGE_BALANCE_TOLERANCE = Decimal("0.01")  # USDT
 _EXCHANGE_POSITION_TOLERANCE = Decimal("0.00000100")  # asset qty
 
 
+def _resolve_exit_from_exchange(
+    executor,  # noqa: ANN001 – BinanceExecutor
+    symbol: str,
+    entry_time,  # noqa: ANN001 – datetime (UTC-aware)
+) -> tuple[Decimal | None, Decimal]:
+    """
+    Resolve the real exit price of a closed position from exchange fills.
+
+    Queries ``myTrades`` for ``symbol`` since ``entry_time`` and aggregates the
+    SELL fills into a volume-weighted average exit price plus the total USDT
+    commission. This is used by the force-close path (BUG-015) so the
+    reconstructed ``TradeRecord`` reflects the *actual* price the exchange sold
+    at instead of a fabricated value.
+
+    Returns ``(exit_price, fee_usdt)``. ``exit_price`` is ``None`` when the real
+    fill could not be determined (API error or no SELL trades found), in which
+    case the caller must fall back and flag the trade as estimated. ``fee_usdt``
+    is ``Decimal("0")`` when no fill was resolved.
+    """
+    try:
+        entry_ms = int(entry_time.timestamp() * 1000)
+    except Exception:
+        entry_ms = None
+
+    try:
+        trades = executor.get_my_trades(symbol, start_time=entry_ms, limit=1000)
+    except Exception as exc:
+        logger.error(
+            "reconcile_exchange: failed to fetch myTrades for exit price",
+            symbol=symbol,
+            error=str(exc),
+        )
+        return None, Decimal("0")
+
+    sell_qty = Decimal("0")
+    sell_proceeds = Decimal("0")
+    fee_usdt = Decimal("0")
+    for t in trades:
+        if t.get("side") != "SELL":
+            continue
+        qty = Decimal(str(t.get("qty", "0")))
+        price = Decimal(str(t.get("price", "0")))
+        sell_qty += qty
+        sell_proceeds += qty * price
+        # Only USDT-denominated commissions can be subtracted directly; BNB/base
+        # commissions are left out rather than guessed at.
+        if t.get("commissionAsset") == "USDT":
+            fee_usdt += Decimal(str(t.get("commission", "0")))
+
+    if sell_qty <= 0:
+        return None, Decimal("0")
+
+    exit_price = sell_proceeds / sell_qty
+    return exit_price, fee_usdt
+
+
 def _reconcile_with_exchange(
     session,  # noqa: ANN001 – SQLAlchemy Session
     executor,  # noqa: ANN001 – BinanceExecutor
@@ -324,10 +380,17 @@ def _reconcile_with_exchange(
     # ── Check E: Position sizes ──────────────────────────────────────
     repairs: list[str] = []
 
-    # Fetch current prices for PnL calculations (best-effort)
+    # Fetch current prices for PnL calculations (best-effort). A failure here
+    # must be logged loudly (BUG-015): a silently-empty ticker map used to make
+    # the force-close path fabricate exit_price = entry_price.
     try:
         ticker_prices = executor.get_ticker_prices(symbols)
-    except Exception:
+    except Exception as exc:
+        logger.error(
+            "reconcile_exchange: failed to fetch ticker prices",
+            symbols=symbols,
+            error=str(exc),
+        )
         ticker_prices = {}
 
     for symbol in symbols:
@@ -387,8 +450,28 @@ def _reconcile_with_exchange(
                 for rec in pos_recs:
                     strategy = rec.strategy
 
-                    exit_price = current_price if current_price else rec.entry_price
-                    pnl = (exit_price - rec.entry_price) * rec.size
+                    # BUG-015: never fabricate the exit price. Try to resolve the
+                    # real SELL fill(s) from the exchange first; only if that
+                    # fails fall back to the live ticker, then the entry price —
+                    # flagging the trade as estimated so downstream analysis can
+                    # exclude it.
+                    exit_price, fee = _resolve_exit_from_exchange(
+                        executor, symbol, rec.entry_time
+                    )
+                    exit_estimated = False
+                    if exit_price is None:
+                        fee = Decimal("0")
+                        exit_estimated = True
+                        exit_price = current_price if current_price else rec.entry_price
+                        logger.error(
+                            "reconcile_exchange: exit price estimated (no exchange fill)",
+                            symbol=symbol,
+                            strategy=strategy,
+                            fallback="ticker" if current_price else "entry_price",
+                            exit_price=str(exit_price),
+                        )
+
+                    pnl = (exit_price - rec.entry_price) * rec.size - fee
                     pnl_percent = (
                         (pnl / (rec.entry_price * rec.size)) * 100
                         if rec.entry_price * rec.size > 0
@@ -410,6 +493,7 @@ def _reconcile_with_exchange(
                         duration_minutes=duration_minutes,
                         exit_reason="reconciliation_force_close",
                         trading_mode="live",
+                        exit_price_estimated=exit_estimated,
                     )
                     session.add(trade_rec)
 
@@ -426,7 +510,7 @@ def _reconcile_with_exchange(
                         if state_rec.state_data:
                             state_data = dict(state_rec.state_data)
                             balance = Decimal(str(state_data.get("usdt_balance", "0")))
-                            proceeds = exit_price * rec.size
+                            proceeds = exit_price * rec.size - fee
                             total_pnl = Decimal(str(state_data.get("total_pnl", "0")))
                             state_data["usdt_balance"] = str(balance + proceeds)
                             state_data["total_pnl"] = str(total_pnl + pnl)
@@ -434,7 +518,8 @@ def _reconcile_with_exchange(
                             state_rec.state_data = state_data
                         repairs.append(
                             f"force-closed {strategy}:{symbol} from {old_state} to flat "
-                            f"(exchange has zero balance, PnL={pnl:.2f} USDT)"
+                            f"(exchange has zero balance, PnL={pnl:.2f} USDT"
+                            f"{', exit price ESTIMATED' if exit_estimated else ''})"
                         )
 
                     _tick_key: _WorkerStateKey = (strategy, symbol)

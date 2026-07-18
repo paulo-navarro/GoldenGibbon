@@ -574,11 +574,20 @@ class BinanceExecutor(_OrdersMixin, _ActionsMixin):
     @staticmethod
     def _parse_trade_response(raw: dict) -> dict:
         """Normalize a Binance trade object — convert numeric strings to Decimal."""
+        # ``GET /api/v3/myTrades`` does not return a ``side`` field; it exposes
+        # an ``isBuyer`` boolean instead. Derive ``side`` from it (falling back
+        # to an explicit ``side`` if a caller/mock provides one).
+        if "side" in raw:
+            side = raw["side"]
+        elif "isBuyer" in raw:
+            side = "BUY" if raw["isBuyer"] else "SELL"
+        else:
+            side = ""
         return {
             "id": raw["id"],
             "orderId": raw["orderId"],
             "symbol": raw["symbol"],
-            "side": raw.get("side", ""),
+            "side": side,
             "price": Decimal(raw["price"]),
             "qty": Decimal(raw["qty"]),
             "commission": Decimal(raw["commission"]),

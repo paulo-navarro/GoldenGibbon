@@ -230,6 +230,7 @@ class TestGetTrades:
             "entry_time", "exit_time", "pnl_usdt", "pnl_percent",
             "duration_minutes", "exit_reason",
             "max_favorable_excursion", "max_adverse_excursion",
+            "exit_price_estimated",
         }
         assert expected_keys == set(trade.keys())
 

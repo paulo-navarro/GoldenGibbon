@@ -1208,6 +1208,22 @@ class TestGetMyTrades:
             with pytest.raises(BinanceAPIError):
                 ex.get_my_trades("BTCUSDT")
 
+    def test_side_derived_from_isbuyer(self, mock_pub):
+        """Real Binance myTrades has no `side` field — derive it from `isBuyer`."""
+        mock_pub.return_value = MagicMock()
+        ex = _executor()
+
+        buy = {**_TRADE_RAW, "isBuyer": True}
+        sell = {**_TRADE_RAW, "id": 99002, "isBuyer": False}
+        buy.pop("side")
+        sell.pop("side")
+
+        with patch.object(ex, "_signed_request", return_value=[buy, sell]):
+            result = ex.get_my_trades("BTCUSDT")
+
+        assert result[0]["side"] == "BUY"
+        assert result[1]["side"] == "SELL"
+
 
 # ── get_futures_open_orders (phase 6.1.4) ─────────────────────────────────────
 
