@@ -351,3 +351,41 @@ def run_backtest_job(self, job_type: str, params: Dict[str, Any]) -> Dict[str, A
             exc_info=True, category="system",
         )
         raise
+
+
+# ── Validation gate (task 9.9) ───────────────────────────────────────────────
+
+
+@app.task(bind=True, name="core.tasks.run_validation_gate")
+def run_validation_gate(
+    self,  # noqa: ANN001
+    strategy_name: str,
+    params: Dict[str, Any],
+    symbol: str = "BTCUSDT",
+    days: int = 365,
+    n_folds: int = 3,
+) -> Dict[str, Any]:
+    """
+    Run the mandatory pre-live validation gate in a worker (task 9.9).
+
+    Wraps :func:`core.backtest.gate.validate_strategy`; the verdict and
+    per-fold evidence are persisted under a ``gate:``-prefixed run_id.
+    """
+    from core.backtest.gate import validate_strategy
+
+    result = validate_strategy(
+        strategy_name=strategy_name,
+        params=params,
+        symbol=symbol,
+        days=days,
+        n_folds=n_folds,
+    )
+    logger.info(
+        "validation_gate: done",
+        task_id=self.request.id,
+        strategy=strategy_name,
+        symbol=symbol,
+        passed=result.passed,
+        category="system",
+    )
+    return result.to_dict()

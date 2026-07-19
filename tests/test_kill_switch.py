@@ -421,3 +421,21 @@ class TestModeSwitchRestore:
         ks = _ks()
         d = ks.to_dict()
         assert "kill_switch_trading_mode" not in d
+
+
+# ── External trigger (task 9.10) ─────────────────────────────────────────────
+
+
+class TestTriggerExternal:
+    def test_latches_and_blocks(self):
+        ks = _ks()
+        ks.trigger_external("account drawdown 25%", T0)
+        assert ks.is_triggered is True
+        assert ks.trigger_reason == "account drawdown 25%"
+        assert ks.check(Decimal("10000"), T0) is True
+
+    def test_idempotent_when_already_triggered(self):
+        ks = _ks()
+        ks.trigger_external("first", T0)
+        ks.trigger_external("second", T0)
+        assert ks.trigger_reason == "first"

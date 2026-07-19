@@ -308,8 +308,9 @@ def run_single_strategy_tick(
             candle_time = candle_time.to_pydatetime()
         close = Decimal(str(market_data.candles["close"].iloc[-1]))
 
-        # ── Kill-switch: detect external reset (e.g. reset_kill_switches.py) ──
-        if comp.kill_switch and comp.kill_switch.is_triggered:
+        # ── Kill-switch: sync external state changes (reset script,
+        #    account-level trigger from sync_exchange_balances — task 9.10) ──
+        if comp.kill_switch:
             try:
                 from db.models import StrategyStateRecord as _SSR
 
@@ -319,18 +320,29 @@ def run_single_strategy_tick(
                         .filter_by(symbol=symbol, strategy=strategy_name)
                         .first()
                     )
-                    if _state and not (_state.state_data or {}).get(
-                        "kill_switch_triggered", False
-                    ):
-                        log.info(
-                            "single_tick: kill-switch reset detected in DB, syncing",
-                            strategy=strategy_name,
-                            symbol=symbol,
-                        )
-                        comp.kill_switch.hard_reset()
+                    _db_data = (_state.state_data or {}) if _state else None
+                db_triggered = bool(_db_data and _db_data.get("kill_switch_triggered", False))
+
+                if comp.kill_switch.is_triggered and _db_data is not None and not db_triggered:
+                    log.info(
+                        "single_tick: kill-switch reset detected in DB, syncing",
+                        strategy=strategy_name,
+                        symbol=symbol,
+                    )
+                    comp.kill_switch.hard_reset()
+                elif not comp.kill_switch.is_triggered and db_triggered:
+                    log.warning(
+                        "single_tick: external kill-switch trigger detected in DB, syncing",
+                        strategy=strategy_name,
+                        symbol=symbol,
+                        reason=_db_data.get("kill_switch_reason"),
+                    )
+                    comp.kill_switch.restore_from_dict(
+                        _db_data, current_trading_mode=trading_mode,
+                    )
             except Exception as reset_exc:
                 log.error(
-                    "single_tick: kill-switch reset check failed",
+                    "single_tick: kill-switch sync check failed",
                     error=str(reset_exc),
                 )
 

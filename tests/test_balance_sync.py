@@ -407,3 +407,121 @@ class TestRecoverySyncFromExchange:
         # Should not raise — exception is propagated to caller (_recover_state)
         with pytest.raises(ConnectionError):
             _sync_balance_from_exchange("smart_hodler", "BTCUSDT", pm)
+
+
+# ── Account-level kill switch (task 9.10) ────────────────────────────────────
+
+
+def _seed_account_peak(equity: str) -> None:
+    """Insert an account-level snapshot establishing the equity peak."""
+    from core.tasks import ACCOUNT_RUN_ID
+    from db.models import PortfolioSnapshot
+
+    with get_session() as session:
+        session.add(
+            PortfolioSnapshot(
+                run_id=ACCOUNT_RUN_ID,
+                timestamp=datetime.now(timezone.utc),
+                usdt_balance=Decimal(equity),
+                positions_value=Decimal("0"),
+                total_equity=Decimal(equity),
+                total_pnl=Decimal("0"),
+                open_positions_count=0,
+                trading_mode="live",
+            )
+        )
+
+
+class TestAccountKillSwitch:
+    """Drawdown vs the persisted account peak halts every strategy."""
+
+    def _sync(self):
+        from core.tasks import sync_exchange_balances
+
+        return sync_exchange_balances.apply().result
+
+    @patch("core.execution.binance.BinanceExecutor.from_settings")
+    def test_breach_triggers_all_strategies(self, mock_from_settings, _seed):
+        from core.config import get_settings
+
+        settings = get_settings()
+        settings.live_trading.enabled = True
+
+        _seed(usdt_balance="50")
+        _seed_account_peak("100")
+        mock_from_settings.return_value = _mock_executor(Decimal("50"))  # 50% dd
+
+        try:
+            result = self._sync()
+            assert result["account_kill_switch"] is True
+
+            with get_session() as session:
+                state = session.query(StrategyStateRecord).filter_by(
+                    strategy="smart_hodler", symbol="BTCUSDT",
+                ).first()
+                assert state.state_data["kill_switch_triggered"] is True
+                assert "Account drawdown" in state.state_data["kill_switch_reason"]
+                assert state.state_data["kill_switch_trading_mode"] == "live"
+        finally:
+            settings.live_trading.enabled = False
+
+    @patch("core.execution.binance.BinanceExecutor.from_settings")
+    def test_latched_does_not_retrigger(self, mock_from_settings, _seed):
+        from core.config import get_settings
+
+        settings = get_settings()
+        settings.live_trading.enabled = True
+
+        _seed(usdt_balance="50")
+        _seed_account_peak("100")
+        mock_from_settings.return_value = _mock_executor(Decimal("50"))
+
+        try:
+            assert self._sync()["account_kill_switch"] is True
+            # Second run: already latched everywhere → no re-trigger/alert
+            assert self._sync()["account_kill_switch"] is False
+        finally:
+            settings.live_trading.enabled = False
+
+    @patch("core.execution.binance.BinanceExecutor.from_settings")
+    def test_small_drawdown_does_not_trigger(self, mock_from_settings, _seed):
+        from core.config import get_settings
+
+        settings = get_settings()
+        settings.live_trading.enabled = True
+
+        _seed(usdt_balance="95")
+        _seed_account_peak("100")
+        mock_from_settings.return_value = _mock_executor(Decimal("95"))  # 5% dd
+
+        try:
+            result = self._sync()
+            assert result["account_kill_switch"] is False
+
+            with get_session() as session:
+                state = session.query(StrategyStateRecord).filter_by(
+                    strategy="smart_hodler", symbol="BTCUSDT",
+                ).first()
+                assert not state.state_data.get("kill_switch_triggered", False)
+        finally:
+            settings.live_trading.enabled = False
+
+    @patch("core.execution.binance.BinanceExecutor.from_settings")
+    def test_zero_threshold_disables(self, mock_from_settings, _seed):
+        from core.config import get_settings
+
+        settings = get_settings()
+        settings.live_trading.enabled = True
+        prev = settings.live_trading.account_kill_switch_drawdown
+        settings.live_trading.account_kill_switch_drawdown = 0.0
+
+        _seed(usdt_balance="50")
+        _seed_account_peak("100")
+        mock_from_settings.return_value = _mock_executor(Decimal("50"))
+
+        try:
+            result = self._sync()
+            assert result["account_kill_switch"] is False
+        finally:
+            settings.live_trading.account_kill_switch_drawdown = prev
+            settings.live_trading.enabled = False

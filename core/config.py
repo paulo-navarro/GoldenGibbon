@@ -451,6 +451,10 @@ class LiveTradingConfig(BaseModel):
     require_manual_approval: bool = Field(default=True)
     max_order_size_usdt: float = Field(default=1000, gt=0)
     kill_switch_max_drawdown: float = Field(default=0.15, gt=0, le=1)
+    # Task 9.10: automatic account-level kill switch. When real account
+    # equity (from sync_exchange_balances) drops this fraction below its
+    # persisted peak, all strategies are halted. 0 disables.
+    account_kill_switch_drawdown: float = Field(default=0.20, ge=0, le=1)
     reconcile_on_startup: bool = Field(default=True)
     reconciliation_interval_minutes: int = Field(default=15, ge=1)
     api_key: str = Field(default="")

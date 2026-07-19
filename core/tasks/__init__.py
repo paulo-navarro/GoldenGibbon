@@ -208,6 +208,7 @@ from core.tasks._tick import (  # noqa: E402, F401
 )
 from core.tasks._backtest import (  # noqa: E402, F401
     run_backtest_job,
+    run_validation_gate,
 )
 from core.tasks._reconciliation import (  # noqa: E402, F401
     ACCOUNT_RUN_ID,

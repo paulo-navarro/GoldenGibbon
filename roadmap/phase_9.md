@@ -2,7 +2,7 @@
 
 > **Goal:** Corrigir os problemas que os dados de produção provaram estar custando dinheiro, e submeter toda mudança de estratégia a um gate de backtest antes de voltar ao live.
 > **Motivação:** Diagnóstico (2026-07-08): trading live perdeu ~$7.5 (~13% da conta de ~$50) em 10 semanas com churn de 6.4 trades/dia e custo de ~0.2-0.3% por ida-e-volta; 17% dos exits forçados por bug de reconciliação; mean_reversion nunca disparou; backtest quebra a UI e nunca persiste resultados; e o histórico de equity (`portfolio_snapshots`) está corrompido — fatias por (strategy, symbol) do modelo pré-Phase 7, snapshots paper marcados como live e escritas duplicadas, fazendo o dashboard mostrar $2.09 numa conta de $50.
-> **Status:** In progress — Etapa 1 (9.1 + 9.2 + 9.3) concluída em 2026-07-18; Etapas 2-4 (9.11, 9.12, 9.4) em 2026-07-19
+> **Status:** In progress — Etapa 1 (9.1 + 9.2 + 9.3) concluída em 2026-07-18; Etapas 2-5 (9.11, 9.12, 9.4, 9.9, 9.10) em 2026-07-19 — Track A completo
 > **Regra de ouro da fase:** nenhuma mudança de estratégia vai ao live sem passar pelo gate da task 9.9.
 
 ---
@@ -173,7 +173,15 @@ Config (`symbols.yaml` / `symbol_configs`): manter BTC, ETH, SOL, BNB (+ 1-2 a c
 - Backtest de contribuição marginal: remover uma condição por vez, medir impacto.
 - Provável correção: remover ou substituir a confirmação horária contraditória; se após ajuste a estratégia não mostrar edge líquido no backtest, **desativar** em vez de manter código morto.
 
-### [ ] 9.9 — Gate de validação: walk-forward obrigatório antes do live
+### [x] 9.9 — Gate de validação: walk-forward obrigatório antes do live ✅ 2026-07-19
+
+**Implementado:**
+- [x] `core/backtest/gate.py::validate_strategy(strategy, params)` — walk-forward de ≥365 dias / ≥3 folds com custos + filtros da 9.4 ligados; também disponível como task Celery `run_validation_gate` e CLI (`python -m core.backtest.gate`, exit 0=aprovado / 2=reprovado).
+- [x] Critérios (todos obrigatórios): retorno líquido positivo em todo fold de teste; profit factor > 1.2 em todo fold que produziu um; nenhum fold com drawdown > 25%; nenhum fold com flag `overfit`; ≥365 dias e ≥3 folds avaliados.
+- [x] Evidência persistida: 1 linha em `backtest_results` por fold de teste com `run_id` prefixado `gate:` e `config_snapshot` com params, veredito e checks.
+- [x] `WalkForwardFold` estendido com `test_profit_factor`/`test_max_drawdown`/`test_metrics` (não serializados na API).
+- [x] Documentado no README (seção "Validation Gate").
+- [x] Testes: `tests/test_validation_gate.py` (aprovação, cada critério de rejeição, persistência).
 
 Os endpoints `/optimize` e `/walk-forward` já existem (`core/backtest/optimize.py`). Formalizar o gate:
 
@@ -182,9 +190,16 @@ Os endpoints `/optimize` e `/walk-forward` já existem (`core/backtest/optimize.
 - Resultado persistido em `backtest_results` com `run_id` prefixado `gate:`.
 - Documentar no README: mudança de estratégia sem gate aprovado não sobe para o live.
 
-### [ ] 9.10 — Kill switch automático por drawdown de conta
+### [x] 9.10 — Kill switch automático por drawdown de conta ✅ 2026-07-19
 
 Hoje o kill switch é manual (`core/risk/kill_switch.py`). Adicionar trigger automático: se equity da conta cair X% (default 20%) do pico, ativar kill switch e alertar. Depende da 9.11 (equity account-level confiável para medir o drawdown).
+
+**Implementado:**
+- [x] Config `live_trading.account_kill_switch_drawdown` (default 0.20; 0 desabilita).
+- [x] `sync_exchange_balances` (a cada ~1 min): compara a equity real com o pico dos snapshots account-level (dados da 9.11); no breach, marca `kill_switch_triggered` em **todos** os `StrategyStateRecord`, publica `KILL_SWITCH_TRIGGERED`, alerta via Telegram (`alert_kill_switch`) e trava (latch — não re-alerta enquanto ativo).
+- [x] Tick: a detecção de mudança externa do kill switch virou bidirecional — além do reset externo, agora detecta trigger externo no DB e trava a memória via `restore_from_dict` antes de avaliar a estratégia.
+- [x] `KillSwitch.trigger_external(reason, timestamp)` — trigger público idempotente.
+- [x] Testes: breach ativa todas as estratégias; latch não re-dispara; drawdown pequeno não ativa; threshold 0 desabilita; trigger_external latcha e bloqueia.
 
 ---
 
