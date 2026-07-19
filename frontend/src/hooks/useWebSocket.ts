@@ -114,6 +114,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
   const retriesRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unmountedRef = useRef(false);
+  const statusRef = useRef<ConnectionStatus>('disconnected');
 
   // Keep callbacks in refs so the effect doesn't re-run when they change.
   const onEventRef = useRef(onEvent);
@@ -123,7 +124,12 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
   onStatusChangeRef.current = onStatusChange;
 
   // ── Status setter (also fires the external callback) ────────────
+  // Task 9.12: no-op when the status is unchanged — repeated
+  // 'reconnecting' updates during a reconnect storm must not feed
+  // extra renders into the tree.
   const updateStatus = useCallback((next: ConnectionStatus) => {
+    if (statusRef.current === next) return;
+    statusRef.current = next;
     setStatus(next);
     onStatusChangeRef.current?.(next);
   }, []);
@@ -135,14 +141,19 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
     Date.now() - lastPingAt < PING_STALE_MS;
 
   // ── Build the target URL once per logical config change ─────────
+  // Task 9.12: depend on the joined string, not the array identity — an
+  // inline `channels: [...]` literal would otherwise change every render,
+  // re-running the connect effect (close → status change → re-render →
+  // reconnect...) in an infinite loop (React #185).
+  const channelsKey = channels && channels.length > 0 ? channels.join(',') : '';
   const targetUrl = useCallback(() => {
     const base = url ?? defaultUrl();
-    if (channels && channels.length > 0) {
+    if (channelsKey) {
       const sep = base.includes('?') ? '&' : '?';
-      return `${base}${sep}channels=${channels.join(',')}`;
+      return `${base}${sep}channels=${channelsKey}`;
     }
     return base;
-  }, [url, channels]);
+  }, [url, channelsKey]);
 
   // ── Core connect / reconnect logic ──────────────────────────────
   useEffect(() => {

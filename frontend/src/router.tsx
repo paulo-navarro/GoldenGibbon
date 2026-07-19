@@ -1,5 +1,7 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
+import type { RouteObject } from 'react-router-dom';
 import AppLayout from './layouts/AppLayout';
+import RouteError from './components/RouteError';
 import DashboardPage from './pages/DashboardPage';
 import StrategyPage from './pages/StrategyPage';
 import PortfolioPage from './pages/PortfolioPage';
@@ -10,22 +12,28 @@ import SymbolsPage from './pages/SymbolsPage';
 import PricesPage from './pages/PricesPage';
 import SettingsPage from './pages/SettingsPage';
 
+// Task 9.12: every child route gets an errorElement so a crash in one page
+// (e.g. a Recharts render loop) renders an error card inside the layout
+// instead of unmounting the whole app.
+const pages: RouteObject[] = [
+  { index: true, element: <DashboardPage /> },
+  { path: 'prices', element: <PricesPage /> },
+  { path: 'strategy', element: <Navigate to="/strategy/smart_hodler" replace /> },
+  { path: 'strategy/:strategyName', element: <StrategyPage /> },
+  { path: 'portfolio', element: <PortfolioPage /> },
+  { path: 'activity', element: <ActivityPage /> },
+  { path: 'metrics', element: <MetricsPage /> },
+  { path: 'symbols', element: <SymbolsPage /> },
+  { path: 'settings', element: <SettingsPage /> },
+  { path: 'logs', element: <LogsPage /> },
+];
+
 const router = createBrowserRouter([
   {
     path: '/',
     element: <AppLayout />,
-    children: [
-      { index: true, element: <DashboardPage /> },
-      { path: 'prices', element: <PricesPage /> },
-      { path: 'strategy', element: <Navigate to="/strategy/smart_hodler" replace /> },
-      { path: 'strategy/:strategyName', element: <StrategyPage /> },
-      { path: 'portfolio', element: <PortfolioPage /> },
-      { path: 'activity', element: <ActivityPage /> },
-      { path: 'metrics', element: <MetricsPage /> },
-      { path: 'symbols', element: <SymbolsPage /> },
-      { path: 'settings', element: <SettingsPage /> },
-      { path: 'logs', element: <LogsPage /> },
-    ],
+    errorElement: <RouteError />,
+    children: pages.map((page) => ({ ...page, errorElement: <RouteError /> })),
   },
 ]);
 

@@ -2,7 +2,7 @@
 
 > **Goal:** Corrigir os problemas que os dados de produção provaram estar custando dinheiro, e submeter toda mudança de estratégia a um gate de backtest antes de voltar ao live.
 > **Motivação:** Diagnóstico (2026-07-08): trading live perdeu ~$7.5 (~13% da conta de ~$50) em 10 semanas com churn de 6.4 trades/dia e custo de ~0.2-0.3% por ida-e-volta; 17% dos exits forçados por bug de reconciliação; mean_reversion nunca disparou; backtest quebra a UI e nunca persiste resultados; e o histórico de equity (`portfolio_snapshots`) está corrompido — fatias por (strategy, symbol) do modelo pré-Phase 7, snapshots paper marcados como live e escritas duplicadas, fazendo o dashboard mostrar $2.09 numa conta de $50.
-> **Status:** In progress — Etapa 1 (9.1 + 9.2 + 9.3) concluída em 2026-07-18; Etapa 2 (9.11) em 2026-07-19
+> **Status:** In progress — Etapa 1 (9.1 + 9.2 + 9.3) concluída em 2026-07-18; Etapa 2 (9.11) e Etapa 3 (9.12) em 2026-07-19
 > **Regra de ouro da fase:** nenhuma mudança de estratégia vai ao live sem passar pelo gate da task 9.9.
 
 ---
@@ -116,7 +116,15 @@ Consequência: equity curve do dashboard mostra valores sem sentido (ex: $2.09) 
 
 **Arquivos:** `core/tasks/_reconciliation.py` (sync), task de snapshot legada em `core/tasks/`, `api/routes/portfolio.py` (equity-curve), migração Alembic de limpeza.
 
-### [ ] 9.12 — Backtest utilizável na UI de prod (crash React #185)
+### [x] 9.12 — Backtest utilizável na UI de prod (crash React #185) ✅ 2026-07-19
+
+**Implementado:**
+- [x] `errorElement` (`RouteError`) em todas as rotas — crash de uma página renderiza um card de erro dentro do layout; o resto do app sobrevive.
+- [x] `useWebSocket` endurecido: (a) dependência do effect passa a ser a string `channels.join(',')` em vez da identidade do array — um literal inline causaria reconexão infinita (close → status → re-render → reconnect = React #185); (b) `updateStatus` vira no-op quando o status não muda, cortando re-renders durante tempestade de reconexão.
+- [x] Sanitização antes do Recharts (`utils/sanitize.ts`): pontos não-finitos (NaN/Infinity) são descartados no `EquityCurveChart`, nas curvas do compare e na curva combinada do multi-strategy.
+- [x] Flag de implausibilidade: linhas do compare com |retorno| > 1000% geram warning na UI ("degenerate slice capital") em vez de passar despercebidas.
+- [x] Gatilho principal já removido pela 9.1 (backtest não bloqueia mais a API/WebSocket).
+- [x] Causa do 10500% investigada: `compare.py` usa `slot_capital = backtest.initial_capital / max_concurrent_positions` — com capital pequeno a fatia degenera. Modelagem correta (min-notional/lot-size) é a task 9.4.
 
 **Problema (reportado 2026-07-08):** rodar backtest em prod derruba o frontend inteiro com `Minified React error #185` ("Maximum update depth exceeded" — loop infinito de setState). O span de medição do Recharts mostra `10500.0%` no momento do crash. Três fatores se combinam:
 
