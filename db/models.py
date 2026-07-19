@@ -287,7 +287,9 @@ class BacktestResult(Base):
     __tablename__ = "backtest_results"
     
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    run_id: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    # Not unique: a backtest job persists one row per (strategy, symbol)
+    # sharing the job's run_id for grouping (task 9.2).
+    run_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     strategy: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     symbol: Mapped[str] = mapped_column(String(20), nullable=False)
     start_date: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)

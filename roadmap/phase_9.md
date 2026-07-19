@@ -2,7 +2,7 @@
 
 > **Goal:** Corrigir os problemas que os dados de produção provaram estar custando dinheiro, e submeter toda mudança de estratégia a um gate de backtest antes de voltar ao live.
 > **Motivação:** Diagnóstico (2026-07-08): trading live perdeu ~$7.5 (~13% da conta de ~$50) em 10 semanas com churn de 6.4 trades/dia e custo de ~0.2-0.3% por ida-e-volta; 17% dos exits forçados por bug de reconciliação; mean_reversion nunca disparou; backtest quebra a UI e nunca persiste resultados; e o histórico de equity (`portfolio_snapshots`) está corrompido — fatias por (strategy, symbol) do modelo pré-Phase 7, snapshots paper marcados como live e escritas duplicadas, fazendo o dashboard mostrar $2.09 numa conta de $50.
-> **Status:** Planning
+> **Status:** In progress — Etapa 1 (9.1 + 9.2 + 9.3) concluída em 2026-07-18
 > **Regra de ouro da fase:** nenhuma mudança de estratégia vai ao live sem passar pelo gate da task 9.9.
 
 ---
@@ -26,7 +26,14 @@
 
 ## Track A — Bugs e infraestrutura
 
-### [ ] 9.1 — Backtest como Celery task (corrige a UI quebrando)
+### [x] 9.1 — Backtest como Celery task (corrige a UI quebrando) ✅ 2026-07-18
+
+**Implementado:**
+- [x] Task Celery `run_backtest_job(job_type, params)` em `core/tasks/_backtest.py` — executa compare / multi_strategy / optimize / walk_forward no worker; payload idêntico ao dos endpoints síncronos antigos.
+- [x] `POST /compare|/multi-strategy|/optimize|/walk-forward` agora enfileiram e retornam HTTP 202 com `{job_id, job_type, status}`.
+- [x] `GET /api/backtest/jobs/{job_id}` — mapeia estado Celery → `pending/running/done/failed`; resultado quando done, erro quando failed (resultado expira do Redis em 1h via `result_expires`).
+- [x] Eventos `BACKTEST_JOB_STARTED/COMPLETED/FAILED` publicados no canal SYSTEM.
+- [x] Frontend: `useCompare`/`useMultiStrategy`/`useOptimize`/`useWalkForward` reescritos sobre um runner genérico (enqueue POST + polling de 2s no job) preservando as interfaces que a MetricsPage consome — zero mudança na página.
 
 **Problema:** Os 4 endpoints de `api/routes/backtest.py` (`/compare`, `/multi-strategy`, `/optimize`, `/walk-forward`) executam o backtest inteiro **dentro do request HTTP**, no processo da API. O loop candle-a-candle em pandas é CPU-bound; segura o GIL, o event loop engasga, heartbeats de WebSocket estouram, o healthcheck falha e o dashboard inteiro cai junto. Requests de minutos também estouram timeout no frontend.
 
@@ -39,7 +46,14 @@
 
 **Arquivos:** `api/routes/backtest.py`, `core/tasks/`, `core/celery_app.py`, `frontend/src/pages/Metrics*`
 
-### [ ] 9.2 — Persistir todo backtest em `backtest_results`
+### [x] 9.2 — Persistir todo backtest em `backtest_results` ✅ 2026-07-18
+
+**Implementado:**
+- [x] Runs de `compare` e `multi_strategy` persistem 1 linha por (strategy, symbol) com `run_id = "job:{job_id}"` e `config_snapshot = {job_type, params, strategy_config}`.
+- [x] Migração `m8n9o0p1q234`: índice de `run_id` deixa de ser único (linhas agrupam por job). **Pendente manual: `alembic upgrade head` em prod.**
+- [x] `GET /api/backtest/history` — filtros strategy/symbol/run_id, paginação, mais recentes primeiro.
+- [x] Optimize/walk-forward não persistem aqui (combos do grid não têm métricas completas) — o gate da 9.9 persistirá seus runs finais com prefixo `gate:`.
+- [x] Testes: `tests/test_backtest_job.py` (persistência agrupada por run_id + config_snapshot + validação de job_type).
 
 **Problema:** A tabela `backtest_results` existe, tem schema completo (incl. `config_snapshot` jsonb) e está **vazia**. Backtests rodados pela API são descartados — impossível comparar experimentos ao longo do tempo.
 
@@ -48,7 +62,7 @@
 - `run_id` único por job para agrupar.
 - Endpoint `GET /api/backtest/history` para listar runs persistidos (a página Metrics consome).
 
-### [ ] 9.3 — Investigar e conter `reconciliation_force_close`
+### [x] 9.3 — Investigar e conter `reconciliation_force_close` ✅ 2026-07-18 (código; auditoria dos 79 casos históricos fica como análise opcional)
 
 **Problema:** 79 exits live (17%) foram fechamentos forçados pela reconciliação (Phase 6), com PnL médio -0.085%. A reconciliação está decidindo trades no lugar da estratégia — ou há dessincronia real recorrente (pior ainda), ou o repair é agressivo demais.
 
@@ -61,6 +75,8 @@
 **Causas raiz já identificadas na revisão de 2026-07-08** (detalhes em `bugs.md`):
 - **BUG-015:** `exit_price` cai para `entry_price` quando o fetch de ticker falha (engolido por `except Exception` silencioso) → os 79 trades têm PnL fabricado (~0), corrompendo o histórico.
 - **BUG-016:** força fechamento sem carência nem checagem de ordens em voo — janela de corrida com o sync de 2 min; auto-Earn/dust da Binance também zera o saldo spot e dispara falso positivo.
+
+**Resolvido via BUG-015 + BUG-016 (ambos Fixed, ver `bugs.md`):** exit_price real via VWAP de `myTrades` com fallback em cascata e flag `exit_price_estimated`; carência + histerese (min_cycles) + checagem de ordens abertas antes do force close. Testes de regressão em `tests/test_reconciliation.py`.
 
 ### [ ] 9.4 — Modelar min-notional e lot-size no backtest
 

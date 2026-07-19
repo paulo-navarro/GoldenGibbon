@@ -127,6 +127,11 @@ class EventType(str, Enum):
     POSITION_RECONSTRUCTED = "position_reconstructed"
     STOP_ORDER_SYNCED = "stop_order_synced"
 
+    # ── Backtest jobs (task 9.1) ─────────────────────────────────────
+    BACKTEST_JOB_STARTED = "backtest_job_started"
+    BACKTEST_JOB_COMPLETED = "backtest_job_completed"
+    BACKTEST_JOB_FAILED = "backtest_job_failed"
+
 
 # ── Event Envelope ───────────────────────────────────────────────────────────
 
