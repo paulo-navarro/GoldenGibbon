@@ -27,7 +27,7 @@ logger = structlog.get_logger(__name__)
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 _FETCH_LIMIT = 5
-_HEARTBEAT_KEY = "gg:heartbeat"
+_HEARTBEAT_KEY = "gg:heartbeat:last"  # must match api/routes/system.py health check
 _HEARTBEAT_TTL = 180  # seconds
 
 
