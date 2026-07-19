@@ -342,6 +342,12 @@ class ExecutionConfig(BaseModel):
     slippage: float = Field(default=0.001, ge=0, le=0.1)
     taker_fee: float = Field(default=0.001, ge=0, le=0.1)
     maker_fee: float = Field(default=0.001, ge=0, le=0.1)
+    # Task 9.4: Binance spot exchange filters, simulated by PaperExecutor.
+    # min_notional: orders below this USDT value are rejected (NOTIONAL
+    # filter, ~5 USDT on spot). qty_step: quantity is floored to this step
+    # (LOT_SIZE filter; per-symbol on the real exchange, one default here).
+    min_notional: float = Field(default=5.0, ge=0)
+    qty_step: float = Field(default=0.00001, ge=0)
     default_order_type: str = Field(default="market")
     order_timeout: int = Field(default=30, ge=1)
     max_retries: int = Field(default=3, ge=0)

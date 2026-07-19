@@ -135,6 +135,11 @@ class BacktestRunner:
             portfolio_manager=pm,
             slippage=Decimal(str(self._execution_config.get("slippage", 0.001))),
             simulate_slippage=True,
+            # Task 9.4: simulate Binance NOTIONAL / LOT_SIZE filters so
+            # small-capital backtests stop being optimistic about fills
+            # the real exchange would reject.
+            min_notional=Decimal(str(self._execution_config.get("min_notional", 0))),
+            qty_step=Decimal(str(self._execution_config.get("qty_step", 0))),
         )
 
         # Reset strategy state

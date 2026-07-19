@@ -78,7 +78,9 @@ def compare_strategies(
 
     result = ComparisonResult(days=days)
 
-    total_capital = Decimal(str(settings.backtest.initial_capital))
+    from core.backtest.capital import resolve_total_capital
+
+    total_capital = resolve_total_capital(settings)
     max_pos = settings.risk.max_concurrent_positions
     slot_capital = total_capital / max_pos
 

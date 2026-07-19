@@ -807,3 +807,122 @@ class TestShortOrderSideCorrectness:
 
         assert result.order.side == expected_side
 
+
+
+# ── Exchange filters: min-notional / lot-size (task 9.4) ─────────────────────
+
+
+def _filtered_executor(
+    pm: PortfolioManager | None = None,
+    min_notional: Decimal = Decimal("5"),
+    qty_step: Decimal = Decimal("0.00001"),
+) -> PaperExecutor:
+    if pm is None:
+        pm = _pm()
+    return PaperExecutor(
+        strategy_name="smart_hodler",
+        portfolio_manager=pm,
+        slippage=SLIPPAGE,
+        simulate_slippage=False,
+        min_notional=min_notional,
+        qty_step=qty_step,
+    )
+
+
+class TestExchangeFilters:
+    def test_open_below_min_notional_rejected(self):
+        pm = _pm()
+        ex = _filtered_executor(pm=pm)
+        # 0.00008 BTC × $50k = $4 < $5 min notional
+        result = ex.execute(
+            _open_decision(size=Decimal("0.00008"), price=Decimal("50000")), T0
+        )
+        assert result is None
+        assert not pm.has_position("BTCUSDT")
+        assert pm.portfolio.usdt_balance == Decimal("10000")
+
+    def test_open_at_min_notional_fills(self):
+        pm = _pm()
+        ex = _filtered_executor(pm=pm)
+        # 0.0002 BTC × $50k = $10 ≥ $5
+        result = ex.execute(
+            _open_decision(size=Decimal("0.0002"), price=Decimal("50000")), T0
+        )
+        assert result is not None
+        assert pm.has_position("BTCUSDT")
+
+    def test_size_floored_to_qty_step(self):
+        pm = _pm()
+        ex = _filtered_executor(pm=pm, qty_step=Decimal("0.001"))
+        result = ex.execute(
+            _open_decision(size=Decimal("0.10159"), price=Decimal("50000")), T0
+        )
+        assert result is not None
+        assert result.order.amount == Decimal("0.101")
+        assert pm.get_position("BTCUSDT").size == Decimal("0.101")
+
+    def test_size_zero_after_step_rejected(self):
+        pm = _pm()
+        ex = _filtered_executor(pm=pm, qty_step=Decimal("0.001"))
+        result = ex.execute(
+            _open_decision(size=Decimal("0.0004"), price=Decimal("50000")), T0
+        )
+        assert result is None
+        assert not pm.has_position("BTCUSDT")
+
+    def test_scale_in_below_min_notional_rejected(self):
+        pm = _pm()
+        ex = _filtered_executor(pm=pm)
+        ex.execute(_open_decision(size=Decimal("0.01"), price=Decimal("50000")), T0)
+
+        scale = RiskDecision(
+            action=RiskAction.SCALE_IN,
+            symbol="BTCUSDT",
+            size=Decimal("0.00008"),  # $4 < $5
+            price=Decimal("50000"),
+        )
+        result = ex.execute(scale, T1)
+        assert result is None
+        assert pm.get_position("BTCUSDT").size == Decimal("0.01")
+
+    def test_close_exempt_from_min_notional(self):
+        """Exits must always flatten the position, even below min notional."""
+        pm = _pm()
+        ex = _filtered_executor(pm=pm, min_notional=Decimal("0"))
+        ex.execute(_open_decision(size=Decimal("0.0002"), price=Decimal("50000")), T0)
+
+        ex2 = _filtered_executor(pm=pm, min_notional=Decimal("100"))
+        # 0.0002 × $51k = $10.2 < $100 min notional — close still fills
+        result = ex2.execute(
+            _close_decision(size=Decimal("0.0002"), price=Decimal("51000")), T1
+        )
+        assert result is not None
+        assert result.trade is not None
+        assert not pm.has_position("BTCUSDT")
+
+    def test_filters_disabled_by_default(self):
+        """Zero defaults keep legacy behavior (no rejection, no rounding)."""
+        pm = _pm()
+        ex = _executor(pm=pm)
+        result = ex.execute(
+            _open_decision(size=Decimal("0.00001"), price=Decimal("50000")), T0
+        )
+        assert result is not None
+        assert result.order.amount == Decimal("0.00001")
+
+    def test_rejection_publishes_event(self):
+        with patch("core.execution.paper.get_publisher") as mock_get_pub:
+            mock_pub = MagicMock()
+            mock_get_pub.return_value = mock_pub
+
+            ex = _filtered_executor()
+            ex.execute(
+                _open_decision(size=Decimal("0.00008"), price=Decimal("50000")), T0
+            )
+
+            rejected = [
+                c for c in mock_pub.publish.call_args_list
+                if c.args[1] == EventType.ORDER_REJECTED
+            ]
+            assert len(rejected) == 1
+            assert rejected[0].args[2]["reason"] == "below_min_notional"

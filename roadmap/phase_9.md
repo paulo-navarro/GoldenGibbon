@@ -2,7 +2,7 @@
 
 > **Goal:** Corrigir os problemas que os dados de produção provaram estar custando dinheiro, e submeter toda mudança de estratégia a um gate de backtest antes de voltar ao live.
 > **Motivação:** Diagnóstico (2026-07-08): trading live perdeu ~$7.5 (~13% da conta de ~$50) em 10 semanas com churn de 6.4 trades/dia e custo de ~0.2-0.3% por ida-e-volta; 17% dos exits forçados por bug de reconciliação; mean_reversion nunca disparou; backtest quebra a UI e nunca persiste resultados; e o histórico de equity (`portfolio_snapshots`) está corrompido — fatias por (strategy, symbol) do modelo pré-Phase 7, snapshots paper marcados como live e escritas duplicadas, fazendo o dashboard mostrar $2.09 numa conta de $50.
-> **Status:** In progress — Etapa 1 (9.1 + 9.2 + 9.3) concluída em 2026-07-18; Etapa 2 (9.11) e Etapa 3 (9.12) em 2026-07-19
+> **Status:** In progress — Etapa 1 (9.1 + 9.2 + 9.3) concluída em 2026-07-18; Etapas 2-4 (9.11, 9.12, 9.4) em 2026-07-19
 > **Regra de ouro da fase:** nenhuma mudança de estratégia vai ao live sem passar pelo gate da task 9.9.
 
 ---
@@ -78,7 +78,14 @@
 
 **Resolvido via BUG-015 + BUG-016 (ambos Fixed, ver `bugs.md`):** exit_price real via VWAP de `myTrades` com fallback em cascata e flag `exit_price_estimated`; carência + histerese (min_cycles) + checagem de ordens abertas antes do force close. Testes de regressão em `tests/test_reconciliation.py`.
 
-### [ ] 9.4 — Modelar min-notional e lot-size no backtest
+### [x] 9.4 — Modelar min-notional e lot-size no backtest ✅ 2026-07-19
+
+**Implementado:**
+- [x] `ExecutionConfig`: `min_notional` (default $5, filtro NOTIONAL) e `qty_step` (default 0.00001, filtro LOT_SIZE). `0` desabilita.
+- [x] `PaperExecutor._normalize_entry_size`: arredonda entradas para baixo ao step e rejeita notional < mínimo (loga + publica `ORDER_REJECTED`). Exits são isentos — um close sempre consegue zerar a posição.
+- [x] Aplicado em OPEN e SCALE_IN, tanto no backtest quanto no paper trading do tick (mesmos filtros que o live enfrenta).
+- [x] `core/backtest/capital.py::resolve_total_capital`: em modo live o capital total do backtest vem da conta real (cache de 5 min), não do fictício `backtest.initial_capital` — usado por compare, multi-strategy e optimize/walk-forward (per-slot).
+- [x] Testes: rejeição abaixo do mínimo, arredondamento ao step, size zero pós-step, scale-in rejeitado, close isento, defaults zero = comportamento legado, evento ORDER_REJECTED.
 
 **Problema:** O backtest simula taxa (0.1%) e slippage (0.1%), mas não os limites reais da Binance (notional mínimo ~$5, step de quantidade). Com capital pequeno, esses limites mudam o resultado — o backtest é otimista demais exatamente no cenário atual.
 

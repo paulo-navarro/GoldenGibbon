@@ -152,12 +152,21 @@ def _run_single_backtest(
     strategy_cls = registry[strategy_name]
     strategy = strategy_cls(config)
 
+    # Task 9.4: optimize against per-slot capital derived from the real
+    # account (live) or configured total, matching compare/multi-strategy.
+    from core.backtest.capital import resolve_total_capital
+
+    bt_config = settings.backtest.model_dump()
+    bt_config["initial_capital"] = float(
+        resolve_total_capital(settings) / settings.risk.max_concurrent_positions
+    )
+
     runner = BacktestRunner(
         strategy=strategy,
         strategy_config=config,
         risk_config=settings.risk.model_dump(),
         execution_config=settings.execution.model_dump(),
-        backtest_config=settings.backtest.model_dump(),
+        backtest_config=bt_config,
     )
 
     bt_result = runner.run(
