@@ -117,7 +117,7 @@ def _seed_snapshots(
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
 
-def _make_client():
+def _make_client(mode: str = "paper"):
     """Create a TestClient with mocked Redis."""
     mock_async_redis = AsyncMock()
     mock_async_redis.ping = AsyncMock(return_value=True)
@@ -128,7 +128,7 @@ def _make_client():
         patch("api.main.reset_publisher"),
         patch("api.main.check_connection", return_value=True),
         patch("redis.asyncio.from_url", return_value=mock_async_redis),
-        patch("api.routes.portfolio._default_trading_mode", return_value="paper"),
+        patch("api.routes.portfolio._default_trading_mode", return_value=mode),
     )
 
 
@@ -387,6 +387,90 @@ class TestGetEquityCurve:
             params={"run_id": "nonexistent"},
         ).json()
         assert data == []
+
+
+# ── Live mode: account-level curve (task 9.11) ───────────────────────────────
+
+
+@pytest.fixture()
+def live_client():
+    """TestClient in live mode with per-slice AND account-level snapshots."""
+    p1, p2, p3, p4, p5 = _make_client(mode="live")
+    with p1 as mock_init, p2, p3, p4, p5:
+        mock_pub = MagicMock()
+        mock_pub.enabled = True
+        mock_init.return_value = mock_pub
+
+        app = create_app()
+
+        with get_session() as db:
+            # Per-slice tick snapshots (legacy curve pollution)
+            _seed_snapshots(
+                db, run_id="live_smart_hodler_BTCUSDT", count=5,
+                base_equity=Decimal("3000"), trading_mode="live",
+            )
+            _seed_snapshots(
+                db, run_id="live_smart_hodler_ETHUSDT", count=5,
+                base_equity=Decimal("2000"), trading_mode="live",
+            )
+            # Account-level truth written by sync_exchange_balances
+            _seed_snapshots(
+                db, run_id="account", count=3,
+                base_equity=Decimal("50"), trading_mode="live",
+            )
+
+        with TestClient(app) as tc:
+            yield tc
+
+
+class TestEquityCurveLiveAccountLevel:
+    """In live mode the curve must contain only account-level snapshots."""
+
+    def test_returns_only_account_rows(self, live_client):
+        data = live_client.get("/api/portfolio/equity-curve").json()
+        assert len(data) == 3
+
+    def test_account_equity_values(self, live_client):
+        """Slice equities (3000/2000) must not leak into the curve."""
+        data = live_client.get("/api/portfolio/equity-curve").json()
+        for snap in data:
+            assert Decimal(snap["total_equity"]) < Decimal("1000")
+
+    def test_explicit_slice_run_id_still_works(self, live_client):
+        data = live_client.get(
+            "/api/portfolio/equity-curve",
+            params={"run_id": "live_smart_hodler_BTCUSDT"},
+        ).json()
+        assert len(data) == 5
+
+
+# ── Snapshot uniqueness (task 9.11) ──────────────────────────────────────────
+
+
+class TestSnapshotUniqueness:
+    """(run_id, timestamp) is unique — double-writes must be rejected."""
+
+    def test_duplicate_run_ts_rejected(self):
+        from sqlalchemy.exc import IntegrityError
+
+        def _row():
+            return PortfolioSnapshotRecord(
+                run_id="dup-run",
+                timestamp=BASE_TIME,
+                usdt_balance=Decimal("100"),
+                positions_value=Decimal("0"),
+                total_equity=Decimal("100"),
+                total_pnl=Decimal("0"),
+                open_positions_count=0,
+                trading_mode="live",
+            )
+
+        with pytest.raises(IntegrityError):
+            with get_session() as db:
+                db.add(_row())
+                db.commit()
+                db.add(_row())
+                db.commit()
 
     def test_empty_when_no_snapshots(self, client):
         data = client.get("/api/portfolio/equity-curve").json()

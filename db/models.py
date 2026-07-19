@@ -270,6 +270,9 @@ class PortfolioSnapshot(Base):
 
     __table_args__ = (
         Index("ix_portfolio_snapshots_trading_mode", "trading_mode"),
+        # Task 9.11: one snapshot per (run_id, timestamp) — tick re-runs
+        # were double-writing slices and doubling the equity curve.
+        Index("uq_portfolio_snapshots_run_ts", "run_id", "timestamp", unique=True),
     )
 
     def __repr__(self) -> str:

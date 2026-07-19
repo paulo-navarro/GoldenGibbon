@@ -87,8 +87,25 @@ def _persist_tick_results(
             session.add(trade_rec)
 
     # ── 2. Portfolio snapshot ────────────────────────────────────────
-    snap_rec = portfolio_snapshot_to_orm(snapshot, run_id=run_id, trading_mode=comp.trading_mode)
-    session.add(snap_rec)
+    # Task 9.11: upsert on (run_id, timestamp) — a re-run of the same tick
+    # (acks_late redelivery, lock race) must not duplicate the row. Prod
+    # data showed 2× rows at whole-hour timestamps doubling the curve.
+    existing_snap = (
+        session.query(PortfolioSnapshotORM)
+        .filter_by(run_id=run_id, timestamp=snapshot.timestamp)
+        .first()
+    )
+    if existing_snap is None:
+        snap_rec = portfolio_snapshot_to_orm(snapshot, run_id=run_id, trading_mode=comp.trading_mode)
+        session.add(snap_rec)
+    else:
+        existing_snap.usdt_balance = snapshot.usdt_balance
+        existing_snap.positions_value = snapshot.positions_value
+        existing_snap.total_equity = snapshot.total_equity
+        existing_snap.daily_pnl = snapshot.daily_pnl
+        existing_snap.total_pnl = snapshot.total_pnl
+        existing_snap.open_positions_count = snapshot.open_positions_count
+        existing_snap.trading_mode = comp.trading_mode
 
     # ── 3. Position upsert / delete ──────────────────────────────────
     existing_pos = (

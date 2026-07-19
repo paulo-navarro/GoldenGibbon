@@ -212,6 +212,10 @@ def get_equity_curve(
     ``run_id`` overrides the trading_mode filter.  When neither
     ``start`` nor ``end`` is supplied the most recent *limit* snapshots
     are returned.
+
+    In live mode only account-level snapshots (``run_id='account'``,
+    written by ``sync_exchange_balances`` — task 9.11) are returned;
+    per-slice tick snapshots would sum fictitious per-strategy capital.
     """
     if run_id is not None:
         stmt = select(PortfolioSnapshotRecord).where(
@@ -222,6 +226,10 @@ def get_equity_curve(
         stmt = select(PortfolioSnapshotRecord).where(
             PortfolioSnapshotRecord.trading_mode == mode,
         )
+        if mode == "live":
+            from core.tasks._reconciliation import ACCOUNT_RUN_ID
+
+            stmt = stmt.where(PortfolioSnapshotRecord.run_id == ACCOUNT_RUN_ID)
 
     if start is not None:
         stmt = stmt.where(PortfolioSnapshotRecord.timestamp >= start)

@@ -22,6 +22,10 @@ logger = structlog.get_logger(__name__)
 # Tolerance for trade PnL arithmetic comparison (advisory check).
 _PNL_TOLERANCE = Decimal("0.01")
 
+# Task 9.11: run_id of account-level equity snapshots persisted by
+# sync_exchange_balances — the only rows the live equity curve reads.
+ACCOUNT_RUN_ID = "account"
+
 
 def _reconcile_pair(
     session,  # noqa: ANN001 – SQLAlchemy Session
@@ -1158,6 +1162,19 @@ def sync_exchange_balances(self) -> Dict[str, Any]:  # noqa: ANN001
                 )
                 publisher.publish_model(
                     EventChannel.PORTFOLIO, EventType.EQUITY_UPDATED, snapshot,
+                )
+
+                # Task 9.11: persist the real account equity. The live
+                # equity curve is built from these account-level rows
+                # (run_id='account'); per-slice snapshots written by the
+                # tick keep serving state recovery but no longer feed
+                # the dashboard curve.
+                from db.utils import portfolio_snapshot_to_orm
+
+                session.add(
+                    portfolio_snapshot_to_orm(
+                        snapshot, run_id=ACCOUNT_RUN_ID, trading_mode="live",
+                    )
                 )
 
                 # Auto-repair balance drift if above threshold

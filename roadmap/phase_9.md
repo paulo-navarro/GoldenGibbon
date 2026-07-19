@@ -2,7 +2,7 @@
 
 > **Goal:** Corrigir os problemas que os dados de produção provaram estar custando dinheiro, e submeter toda mudança de estratégia a um gate de backtest antes de voltar ao live.
 > **Motivação:** Diagnóstico (2026-07-08): trading live perdeu ~$7.5 (~13% da conta de ~$50) em 10 semanas com churn de 6.4 trades/dia e custo de ~0.2-0.3% por ida-e-volta; 17% dos exits forçados por bug de reconciliação; mean_reversion nunca disparou; backtest quebra a UI e nunca persiste resultados; e o histórico de equity (`portfolio_snapshots`) está corrompido — fatias por (strategy, symbol) do modelo pré-Phase 7, snapshots paper marcados como live e escritas duplicadas, fazendo o dashboard mostrar $2.09 numa conta de $50.
-> **Status:** In progress — Etapa 1 (9.1 + 9.2 + 9.3) concluída em 2026-07-18
+> **Status:** In progress — Etapa 1 (9.1 + 9.2 + 9.3) concluída em 2026-07-18; Etapa 2 (9.11) em 2026-07-19
 > **Regra de ouro da fase:** nenhuma mudança de estratégia vai ao live sem passar pelo gate da task 9.9.
 
 ---
@@ -87,7 +87,15 @@
 - `PaperExecutor`: rejeitar ordens abaixo do mínimo e arredondar quantidade ao step, como a exchange faz.
 - Backtest com `initial_capital` igual ao capital real da conta, não valor fictício.
 
-### [ ] 9.11 — Consertar a coleta do histórico de equity (`portfolio_snapshots`)
+### [x] 9.11 — Consertar a coleta do histórico de equity (`portfolio_snapshots`) ✅ 2026-07-19
+
+**Implementado:**
+- [x] `sync_exchange_balances` persiste 1 snapshot account-level por execução (`run_id='account'`, `trading_mode='live'`) — a equity real que antes era calculada e jogada fora.
+- [x] `GET /equity-curve` no modo live retorna **apenas** linhas `run_id='account'`; fatias continuam acessíveis via `run_id` explícito.
+- [x] Fatias por (strategy, symbol) continuam sendo gravadas (state recovery precisa delas), mas não entram mais na curva.
+- [x] Dupla escrita: `_persist_tick_results` agora faz upsert por (run_id, timestamp) — re-execução do mesmo tick (redelivery com acks_late / corrida de lock) não duplica mais.
+- [x] Migração `n9o0p1q2r345`: corrige `trading_mode` das fatias paper marcadas como live, deduplica (run_id, timestamp) mantendo a linha mais antiga, e cria índice único `uq_portfolio_snapshots_run_ts`. **Pendente manual: `alembic upgrade head` em prod.**
+- [x] Testes: sync persiste account snapshot; curva live só retorna account-level; duplicata (run_id, timestamp) rejeitada pelo banco.
 
 **Problema (confirmado em prod, 2026-07-08):** a conta real tem $50.10 e o endpoint `GET /api/portfolio/` mostra isso corretamente (consulta a Binance ao vivo), mas o **histórico** está corrompido:
 
