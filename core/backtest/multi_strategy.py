@@ -91,8 +91,10 @@ def run_multi_strategy_backtest(
     if symbols is None:
         symbols = [s.symbol for s in settings.enabled_symbols]
 
+    from core.backtest.capital import resolve_total_capital
+
     result = MultiStrategyResult(days=days)
-    total_capital = Decimal(str(settings.backtest.initial_capital))
+    total_capital = resolve_total_capital(settings)
     result.total_initial_capital = str(total_capital)
 
     # Build strategy configs

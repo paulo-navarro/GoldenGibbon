@@ -6,7 +6,7 @@
 // Pages can read directly from `data` (React Query cache) or from the Zustand
 // store (kept in sync via seed + WebSocket events).
 
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { fetchApi, postApi, patchApi, deleteApi } from './client';
 
@@ -345,6 +345,74 @@ export function useStrategySignals(params: UseStrategyParams = {}) {
   return query;
 }
 
+// ── Backtest jobs (task 9.1) ────────────────────────────────────────────────
+// Backtests run in Celery workers. POST enqueues and returns a job_id (202);
+// the UI then polls GET /api/backtest/jobs/{job_id} until done/failed.
+
+export interface JobEnqueuedResponse {
+  job_id: string;
+  job_type: string;
+  status: string;
+}
+
+export interface BacktestJobStatus<T> {
+  job_id: string;
+  status: 'pending' | 'running' | 'done' | 'failed';
+  result: T | null;
+  error: string | null;
+}
+
+const JOB_POLL_INTERVAL_MS = 2000;
+
+function useBacktestJob<TResult>(endpoint: string) {
+  const [jobId, setJobId] = useState<string | null>(null);
+
+  const enqueue = useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      postApi<JobEnqueuedResponse>(endpoint, body),
+    onSuccess: (res) => setJobId(res.job_id),
+  });
+
+  const poll = useQuery({
+    queryKey: ['backtest-job', endpoint, jobId],
+    queryFn: () =>
+      fetchApi<BacktestJobStatus<TResult>>(`/api/backtest/jobs/${jobId}`),
+    enabled: !!jobId,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === 'done' || status === 'failed' ? false : JOB_POLL_INTERVAL_MS;
+    },
+  });
+
+  const status = jobId ? poll.data?.status : undefined;
+  const isRunning =
+    enqueue.isPending || (!!jobId && status !== 'done' && status !== 'failed');
+  const data = status === 'done' ? (poll.data?.result ?? undefined) : undefined;
+  const error: Error | null =
+    (enqueue.error as Error | null) ??
+    (poll.error as Error | null) ??
+    (status === 'failed'
+      ? new Error(poll.data?.error ?? 'Backtest job failed')
+      : null);
+
+  const { mutate: enqueueMutate } = enqueue;
+  const start = useCallback(
+    (body: Record<string, unknown>) => {
+      enqueueMutate(body);
+    },
+    [enqueueMutate],
+  );
+
+  return { start, data, error, isRunning };
+}
+
+/** "BTCUSDT,ETHUSDT" → ["BTCUSDT", "ETHUSDT"]; empty/undefined → undefined. */
+function splitCsv(value?: string): string[] | undefined {
+  if (!value) return undefined;
+  const parts = value.split(',').map((s) => s.trim()).filter(Boolean);
+  return parts.length > 0 ? parts : undefined;
+}
+
 // ── Backtest Comparison ─────────────────────────────────────────────────────
 
 export interface UseCompareParams {
@@ -388,17 +456,14 @@ export interface ComparisonResponse {
 
 export function useCompare(params: UseCompareParams = {}) {
   const { symbols, days = 90, strategies } = params;
+  const { start, data, error, isRunning } =
+    useBacktestJob<ComparisonResponse>('/api/backtest/compare');
 
-  return useQuery({
-    queryKey: ['backtest-compare', symbols, days, strategies],
-    queryFn: () =>
-      fetchApi<ComparisonResponse>('/api/backtest/compare', {
-        symbols,
-        days,
-        strategies,
-      }),
-    enabled: false,
-  });
+  const refetch = useCallback(() => {
+    start({ symbols: splitCsv(symbols), days, strategies: splitCsv(strategies) });
+  }, [start, symbols, days, strategies]);
+
+  return { data, isLoading: isRunning, isFetching: isRunning, error, refetch };
 }
 
 // ── Multi-Strategy Backtest ─────────────────────────────────────────────────
@@ -441,19 +506,15 @@ export interface MultiStrategyResponse {
 }
 
 export function useMultiStrategy(params: UseMultiStrategyParams = {}) {
-  const { symbols, days = 90, strategies, regime_shift_pct } = params;
+  const { symbols, days = 90, strategies } = params;
+  const { start, data, error, isRunning } =
+    useBacktestJob<MultiStrategyResponse>('/api/backtest/multi-strategy');
 
-  return useQuery({
-    queryKey: ['backtest-multi-strategy', symbols, days, strategies, regime_shift_pct],
-    queryFn: () =>
-      fetchApi<MultiStrategyResponse>('/api/backtest/multi-strategy', {
-        symbols,
-        days,
-        strategies,
-        regime_shift_pct,
-      }),
-    enabled: false,
-  });
+  const refetch = useCallback(() => {
+    start({ symbols: splitCsv(symbols), days, strategies: splitCsv(strategies) });
+  }, [start, symbols, days, strategies]);
+
+  return { data, isLoading: isRunning, isFetching: isRunning, error, refetch };
 }
 
 // ── System ───────────────────────────────────────────────────────────────────
@@ -681,17 +742,27 @@ export interface WalkForwardResponse {
 }
 
 export function useOptimize() {
-  return useMutation({
-    mutationFn: (req: OptimizationRequest) =>
-      postApi<OptimizationResponse>('/api/backtest/optimize', req as unknown as Record<string, unknown>),
-  });
+  const { start, data, error, isRunning } =
+    useBacktestJob<OptimizationResponse>('/api/backtest/optimize');
+
+  const mutate = useCallback(
+    (req: OptimizationRequest) => start(req as unknown as Record<string, unknown>),
+    [start],
+  );
+
+  return { mutate, isPending: isRunning, data, error };
 }
 
 export function useWalkForward() {
-  return useMutation({
-    mutationFn: (req: WalkForwardRequest) =>
-      postApi<WalkForwardResponse>('/api/backtest/walk-forward', req as unknown as Record<string, unknown>),
-  });
+  const { start, data, error, isRunning } =
+    useBacktestJob<WalkForwardResponse>('/api/backtest/walk-forward');
+
+  const mutate = useCallback(
+    (req: WalkForwardRequest) => start(req as unknown as Record<string, unknown>),
+    [start],
+  );
+
+  return { mutate, isPending: isRunning, data, error };
 }
 
 // ── Symbol Management (task 7.7–7.10) ────────────────────────────────────────

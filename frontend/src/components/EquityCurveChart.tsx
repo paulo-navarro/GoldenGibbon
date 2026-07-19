@@ -14,6 +14,7 @@ import {
 
 import { useEquityCurve } from '../api';
 import { usePortfolioStore } from '../stores/portfolioStore';
+import { finiteNumber } from '../utils/sanitize';
 
 interface EquityCurveChartProps {
   limit?: number;
@@ -49,21 +50,28 @@ export default function EquityCurveChart({
   const chartData = useMemo(() => {
     if (equityCurve.length === 0) return [];
 
-    const firstEquity = parseFloat(equityCurve[0].total_equity);
+    // Task 9.12: drop non-finite points — NaN/Infinity break Recharts.
+    const points = equityCurve
+      .map((s) => ({
+        timestamp: s.timestamp,
+        equity: finiteNumber(s.total_equity),
+        pnl: finiteNumber(s.total_pnl) ?? 0,
+      }))
+      .filter((p): p is { timestamp: string; equity: number; pnl: number } => p.equity !== null);
 
-    return equityCurve.map((s) => {
-      const equity = parseFloat(s.total_equity);
-      const pnl = parseFloat(s.total_pnl);
-      return {
-        time: new Date(s.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-        equity: percent && firstEquity !== 0
-          ? ((equity - firstEquity) / firstEquity) * 100
-          : equity,
-        pnl: percent && firstEquity !== 0
-          ? (pnl / firstEquity) * 100
-          : pnl,
-      };
-    });
+    if (points.length === 0) return [];
+
+    const firstEquity = points[0].equity;
+
+    return points.map((p) => ({
+      time: new Date(p.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+      equity: percent && firstEquity !== 0
+        ? ((p.equity - firstEquity) / firstEquity) * 100
+        : p.equity,
+      pnl: percent && firstEquity !== 0
+        ? (p.pnl / firstEquity) * 100
+        : p.pnl,
+    }));
   }, [equityCurve, percent]);
 
   if (isLoading) return <Skeleton variant="rounded" height={placeholderHeight} />;

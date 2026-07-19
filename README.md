@@ -400,6 +400,33 @@ Current test coverage: **1 360 passing tests** across indicators, strategies, ev
 
 ---
 
+## 🚦 Validation Gate (mandatory before live)
+
+**Phase-9 golden rule: no strategy change goes live without an approved
+walk-forward gate run.** The gate (`core/backtest/gate.py`) walk-forwards
+the candidate parameters over ≥ 365 days (≥ 3 folds, costs and exchange
+filters enabled) and approves only when **all** criteria hold:
+
+- positive net return in every out-of-sample test fold
+- profit factor > 1.2 in every fold that produced one
+- no fold with max drawdown > 25%
+- no fold flagged as overfit
+
+```bash
+# CLI (exit code 0 = approved, 2 = rejected):
+python -m core.backtest.gate smart_hodler '{"ema_fast": 12}' BTCUSDT
+
+# Or as a Celery task:
+from core.tasks import run_validation_gate
+run_validation_gate.delay("smart_hodler", {"ema_fast": 12})
+```
+
+Every gate run persists its per-fold evidence in `backtest_results` under
+a `gate:`-prefixed `run_id` — queryable via
+`GET /api/backtest/history?run_id=gate:...`.
+
+---
+
 ## 📊 Roadmap
 
 Active development is tracked in [roadmap/kanban.md](roadmap/kanban.md).

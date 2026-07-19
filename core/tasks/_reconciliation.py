@@ -22,6 +22,10 @@ logger = structlog.get_logger(__name__)
 # Tolerance for trade PnL arithmetic comparison (advisory check).
 _PNL_TOLERANCE = Decimal("0.01")
 
+# Task 9.11: run_id of account-level equity snapshots persisted by
+# sync_exchange_balances — the only rows the live equity curve reads.
+ACCOUNT_RUN_ID = "account"
+
 
 def _reconcile_pair(
     session,  # noqa: ANN001 – SQLAlchemy Session
@@ -1160,6 +1164,19 @@ def sync_exchange_balances(self) -> Dict[str, Any]:  # noqa: ANN001
                     EventChannel.PORTFOLIO, EventType.EQUITY_UPDATED, snapshot,
                 )
 
+                # Task 9.11: persist the real account equity. The live
+                # equity curve is built from these account-level rows
+                # (run_id='account'); per-slice snapshots written by the
+                # tick keep serving state recovery but no longer feed
+                # the dashboard curve.
+                from db.utils import portfolio_snapshot_to_orm
+
+                session.add(
+                    portfolio_snapshot_to_orm(
+                        snapshot, run_id=ACCOUNT_RUN_ID, trading_mode="live",
+                    )
+                )
+
                 # Auto-repair balance drift if above threshold
                 state_recs = list(session.query(StrategyStateRecord).all())
                 local_usdt_total = Decimal("0")
@@ -1205,6 +1222,38 @@ def sync_exchange_balances(self) -> Dict[str, Any]:  # noqa: ANN001
                         drift=str(usdt_drift),
                     )
 
+                # ── Account-level kill switch (task 9.10) ────────────
+                # Real equity vs the persisted account peak (9.11 data).
+                account_kill_switch = False
+                threshold = Decimal(
+                    str(settings.live_trading.account_kill_switch_drawdown)
+                )
+                if threshold > 0:
+                    from db.models import PortfolioSnapshot as _SnapORM
+
+                    peak = (
+                        session.execute(
+                            sa_select(sa_func.max(_SnapORM.total_equity)).where(
+                                _SnapORM.run_id == ACCOUNT_RUN_ID
+                            )
+                        ).scalar()
+                        or Decimal("0")
+                    )
+                    peak = max(peak, real_equity)
+                    if peak > 0:
+                        account_dd = (peak - real_equity) / peak
+                        if account_dd >= threshold:
+                            account_kill_switch = _trigger_account_kill_switch(
+                                state_recs=state_recs,
+                                drawdown=account_dd,
+                                threshold=threshold,
+                                peak=peak,
+                                equity=real_equity,
+                                now=now,
+                                publisher=publisher,
+                                settings=settings,
+                            )
+
         summary: Dict[str, Any] = {
             "status": "ok",
             "exchange_usdt": str(exchange_usdt),
@@ -1213,6 +1262,7 @@ def sync_exchange_balances(self) -> Dict[str, Any]:  # noqa: ANN001
             "local_usdt": str(local_usdt_total),
             "drift": str(usdt_drift),
             "repaired": repaired,
+            "account_kill_switch": account_kill_switch,
         }
         logger.info("sync_exchange_balances: done", **summary)
         return summary
@@ -1224,6 +1274,92 @@ def sync_exchange_balances(self) -> Dict[str, Any]:  # noqa: ANN001
             exc_info=True,
         )
         return {"status": "error", "error": str(exc)}
+
+
+# ── Account-level kill switch (task 9.10) ───────────────────────────────────
+
+
+def _trigger_account_kill_switch(
+    *,
+    state_recs,  # noqa: ANN001 – list[StrategyStateRecord], session-attached
+    drawdown: Decimal,
+    threshold: Decimal,
+    peak: Decimal,
+    equity: Decimal,
+    now,  # noqa: ANN001 – datetime
+    publisher,  # noqa: ANN001 – EventPublisher
+    settings,  # noqa: ANN001 – Settings
+) -> bool:
+    """
+    Latch the kill switch on every strategy when account drawdown breaches
+    the threshold. The tick loop picks the flag up from
+    ``StrategyStateRecord.state_data`` (external-trigger sync) and blocks
+    new orders. Returns True when newly triggered, False when already
+    latched (no re-alerting).
+    """
+    from core.events import EventChannel, EventType
+
+    untriggered = [
+        rec for rec in state_recs
+        if not (rec.state_data or {}).get("kill_switch_triggered", False)
+    ]
+    if not untriggered:
+        return False  # already latched everywhere — stay quiet
+
+    reason = (
+        f"Account drawdown {drawdown:.2%} exceeded threshold "
+        f"{threshold:.2%} (peak {peak}, equity {equity})"
+    )
+
+    for rec in untriggered:
+        rec.state_data = {
+            **(rec.state_data or {}),
+            "kill_switch_triggered": True,
+            "kill_switch_reason": reason,
+            "kill_switch_trigger_time": now.isoformat(),
+            "kill_switch_trading_mode": "live",
+        }
+
+    logger.critical(
+        "account_kill_switch: TRIGGERED",
+        category="risk",
+        drawdown=str(drawdown),
+        threshold=str(threshold),
+        peak_equity=str(peak),
+        equity=str(equity),
+        strategies_flagged=len(untriggered),
+    )
+    publisher.publish(
+        EventChannel.SYSTEM,
+        EventType.KILL_SWITCH_TRIGGERED,
+        {
+            "type": "account_drawdown",
+            "reason": reason,
+            "drawdown_pct": str(drawdown),
+            "threshold_pct": str(threshold),
+            "peak_equity": str(peak),
+            "current_equity": str(equity),
+            "timestamp": now.isoformat(),
+        },
+    )
+
+    if settings.alerting.enabled:
+        try:
+            from core.alerting import get_alerter
+
+            alerter = get_alerter()
+            if alerter.enabled:
+                alerter.alert_kill_switch(
+                    reason=reason,
+                    equity=str(equity),
+                    peak_equity=str(peak),
+                )
+        except Exception as alert_exc:
+            logger.warning(
+                "account_kill_switch: alert failed", error=str(alert_exc),
+            )
+
+    return True
 
 
 # ── Open order sync (phase 6.4) ──────────────────────────────────────────────

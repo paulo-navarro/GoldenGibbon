@@ -417,6 +417,10 @@ def _get_or_create_components(
                 portfolio_manager=pm,
                 slippage=Decimal(str(execution_config.get("slippage", 0.001))),
                 simulate_slippage=paper_config.get("simulate_slippage", True),
+                # Task 9.4: paper trading honours the same exchange
+                # filters (NOTIONAL / LOT_SIZE) live trading faces.
+                min_notional=Decimal(str(execution_config.get("min_notional", 0))),
+                qty_step=Decimal(str(execution_config.get("qty_step", 0))),
             )
 
         # Regime detector (phase 3, task 1.1)

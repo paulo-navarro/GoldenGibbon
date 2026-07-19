@@ -165,6 +165,23 @@ class KillSwitch:
 
         return False
 
+    # ── External trigger (task 9.10) ─────────────────────────────────────
+
+    def trigger_external(
+        self,
+        reason: str,
+        timestamp: datetime,
+        data: Optional[dict] = None,
+    ) -> None:
+        """
+        Latch the kill-switch from outside the per-pair check loop —
+        e.g. the account-level drawdown monitor in
+        ``sync_exchange_balances``. Idempotent when already triggered.
+        """
+        if self._triggered:
+            return
+        self._trigger(reason=reason, timestamp=timestamp, data=data or {})
+
     # ── Reset ────────────────────────────────────────────────────────────
 
     def reset(self) -> None:

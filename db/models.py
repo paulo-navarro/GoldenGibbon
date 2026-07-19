@@ -270,6 +270,9 @@ class PortfolioSnapshot(Base):
 
     __table_args__ = (
         Index("ix_portfolio_snapshots_trading_mode", "trading_mode"),
+        # Task 9.11: one snapshot per (run_id, timestamp) — tick re-runs
+        # were double-writing slices and doubling the equity curve.
+        Index("uq_portfolio_snapshots_run_ts", "run_id", "timestamp", unique=True),
     )
 
     def __repr__(self) -> str:
@@ -287,7 +290,9 @@ class BacktestResult(Base):
     __tablename__ = "backtest_results"
     
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    run_id: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    # Not unique: a backtest job persists one row per (strategy, symbol)
+    # sharing the job's run_id for grouping (task 9.2).
+    run_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     strategy: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     symbol: Mapped[str] = mapped_column(String(20), nullable=False)
     start_date: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)

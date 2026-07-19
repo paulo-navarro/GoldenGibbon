@@ -55,6 +55,8 @@ class PaperExecutor:
         portfolio_manager: PortfolioManager,
         slippage: Decimal = Decimal("0.001"),
         simulate_slippage: bool = True,
+        min_notional: Decimal = Decimal("0"),
+        qty_step: Decimal = Decimal("0"),
     ) -> None:
         """
         Args:
@@ -64,11 +66,18 @@ class PaperExecutor:
             slippage: Fractional slippage rate (0.001 = 0.1 %).
             simulate_slippage: When False, slippage is skipped (fill at
                                reference price).
+            min_notional: Reject entry orders whose value (size × price)
+                          is below this, like Binance's NOTIONAL filter
+                          (task 9.4). ``0`` disables the check.
+            qty_step: Floor entry sizes to this step, like Binance's
+                      LOT_SIZE filter (task 9.4). ``0`` disables rounding.
         """
         self._strategy = strategy_name
         self._pm = portfolio_manager
         self._slippage = slippage
         self._simulate_slippage = simulate_slippage
+        self._min_notional = min_notional
+        self._qty_step = qty_step
 
     # ── Properties ───────────────────────────────────────────────────────
 
@@ -134,16 +143,20 @@ class PaperExecutor:
         self,
         decision: RiskDecision,
         timestamp: datetime,
-    ) -> ExecutionResult:
+    ) -> Optional[ExecutionResult]:
         """OPEN → fill at slippage-adjusted price, open new position."""
         order_side = (
             OrderSide.SELL if decision.side == PositionSide.SHORT else OrderSide.BUY
         )
         fill_price = self._apply_slippage(decision.price, order_side)
 
+        size = self._normalize_entry_size(decision.size, fill_price, decision.symbol)
+        if size is None:
+            return None
+
         position = self._pm.open_position(
             symbol=decision.symbol,
-            size=decision.size,
+            size=size,
             entry_price=fill_price,
             entry_time=timestamp,
             hard_stop_price=decision.hard_stop_price or Decimal("0"),
@@ -156,7 +169,7 @@ class PaperExecutor:
             "execution.open",
             symbol=decision.symbol,
             side=decision.side.value,
-            size=str(decision.size),
+            size=str(size),
             fill_price=str(fill_price),
             slippage=str(self._slippage),
         )
@@ -166,6 +179,7 @@ class PaperExecutor:
             side=order_side,
             fill_price=fill_price,
             timestamp=timestamp,
+            size=size,
         )
         return ExecutionResult(order=order, position=position)
 
@@ -173,13 +187,17 @@ class PaperExecutor:
         self,
         decision: RiskDecision,
         timestamp: datetime,
-    ) -> ExecutionResult:
+    ) -> Optional[ExecutionResult]:
         """SCALE_IN → buy at slippage-adjusted price, add to position."""
         fill_price = self._apply_slippage(decision.price, OrderSide.BUY)
 
+        size = self._normalize_entry_size(decision.size, fill_price, decision.symbol)
+        if size is None:
+            return None
+
         position = self._pm.scale_in(
             symbol=decision.symbol,
-            additional_size=decision.size,
+            additional_size=size,
             price=fill_price,
             time=timestamp,
         )
@@ -187,7 +205,7 @@ class PaperExecutor:
         logger.info(
             "execution.scale_in",
             symbol=decision.symbol,
-            size=str(decision.size),
+            size=str(size),
             fill_price=str(fill_price),
         )
 
@@ -196,6 +214,7 @@ class PaperExecutor:
             side=OrderSide.BUY,
             fill_price=fill_price,
             timestamp=timestamp,
+            size=size,
         )
         return ExecutionResult(order=order, position=position)
 
@@ -279,6 +298,57 @@ class PaperExecutor:
 
     # ── Private: helpers ─────────────────────────────────────────────────
 
+    def _normalize_entry_size(
+        self,
+        size: Decimal,
+        price: Decimal,
+        symbol: str,
+    ) -> Optional[Decimal]:
+        """
+        Apply Binance-style exchange filters to an entry order (task 9.4).
+
+        Floors ``size`` to ``qty_step`` (LOT_SIZE) and rejects the order
+        when the resulting notional is below ``min_notional`` (NOTIONAL).
+        Exits are deliberately exempt — a close must always be able to
+        flatten the position.
+
+        Returns the adjusted size, or ``None`` when the order is rejected.
+        """
+        adjusted = size
+        if self._qty_step > 0:
+            adjusted = (adjusted // self._qty_step) * self._qty_step
+
+        notional = adjusted * price
+        if adjusted <= 0 or (
+            self._min_notional > 0 and notional < self._min_notional
+        ):
+            logger.warning(
+                "execution.rejected_exchange_filter",
+                symbol=symbol,
+                size=str(size),
+                adjusted_size=str(adjusted),
+                notional=str(notional),
+                min_notional=str(self._min_notional),
+                qty_step=str(self._qty_step),
+            )
+            publisher = get_publisher()
+            publisher.publish(
+                EventChannel.EXECUTION,
+                EventType.ORDER_REJECTED,
+                {
+                    "symbol": symbol,
+                    "strategy": self._strategy,
+                    "size": str(size),
+                    "adjusted_size": str(adjusted),
+                    "notional": str(notional),
+                    "min_notional": str(self._min_notional),
+                    "reason": "below_min_notional" if adjusted > 0 else "zero_after_qty_step",
+                },
+            )
+            return None
+
+        return adjusted
+
     def _apply_slippage(self, price: Decimal, side: OrderSide) -> Decimal:
         """
         Apply always-adverse slippage.
@@ -304,8 +374,10 @@ class PaperExecutor:
         side: OrderSide,
         fill_price: Decimal,
         timestamp: datetime,
+        size: Optional[Decimal] = None,
     ) -> Order:
-        """Build a filled Order record."""
+        """Build a filled Order record (``size`` overrides ``decision.size``)."""
+        amount = size if size is not None else decision.size
         slippage_pct = (
             abs(fill_price - decision.price) / decision.price * 100
             if decision.price > 0
@@ -316,10 +388,10 @@ class PaperExecutor:
             symbol=decision.symbol,
             side=side,
             order_type=OrderType.MARKET,
-            amount=decision.size,
+            amount=amount,
             price=decision.price,
             status=OrderStatus.FILLED,
-            filled_amount=decision.size,
+            filled_amount=amount,
             avg_fill_price=fill_price,
             slippage_percent=slippage_pct,
             created_at=timestamp,

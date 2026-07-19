@@ -46,6 +46,7 @@ import EquityCurveChart from '../components/EquityCurveChart';
 import type { ComparisonMetricsRow, GridSearchRow, WalkForwardFold } from '../api';
 import { useTradesStore } from '../stores/tradesStore';
 import { usePortfolioStore } from '../stores/portfolioStore';
+import { finiteNumber, isPlausiblePercent, MAX_PLAUSIBLE_PERCENT } from '../utils/sanitize';
 import type { PortfolioSnapshot } from '../types/portfolio';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -290,6 +291,12 @@ function StrategyComparison() {
 
   const rows = data?.rows ?? [];
 
+  // Task 9.12: |return| beyond the plausibility bound means a degenerate
+  // slice (e.g. near-zero initial capital), not real performance.
+  const implausibleRows = rows.filter(
+    (r) => !isPlausiblePercent(parseFloat(r.total_return)),
+  );
+
   return (
     <Card>
       <CardContent>
@@ -327,6 +334,14 @@ function StrategyComparison() {
         {data?.errors && data.errors.length > 0 && (
           <Alert severity="warning" variant="outlined" sx={{ mb: 2 }}>
             {data.errors.length} pair(s) failed: {data.errors.map((e) => `${e.strategy ?? ''}:${e.symbol ?? ''}`).join(', ')}
+          </Alert>
+        )}
+
+        {implausibleRows.length > 0 && (
+          <Alert severity="warning" variant="outlined" sx={{ mb: 2 }}>
+            {implausibleRows.length} row(s) have returns beyond ±{MAX_PLAUSIBLE_PERCENT}% —
+            likely degenerate slice capital, not real performance:{' '}
+            {implausibleRows.map((r) => `${r.strategy}:${r.symbol}`).join(', ')}
           </Alert>
         )}
 
@@ -409,11 +424,14 @@ function ComparisonEquityChart({ curves }: { curves: Record<string, Array<{ time
 
     for (const key of seriesKeys) {
       for (const point of curves[key]) {
+        // Task 9.12: skip non-finite equities — they break Recharts.
+        const equity = finiteNumber(point.equity);
+        if (equity === null) continue;
         const time = new Date(point.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
         if (!tsMap.has(point.timestamp)) {
           tsMap.set(point.timestamp, { time, _ts: new Date(point.timestamp).getTime() });
         }
-        tsMap.get(point.timestamp)![key] = parseFloat(point.equity);
+        tsMap.get(point.timestamp)![key] = equity;
       }
     }
 
@@ -478,11 +496,16 @@ function MultiStrategyBacktest() {
 
   const equityData = useMemo(() => {
     if (!data?.combined_equity_curve) return [];
-    return data.combined_equity_curve.map((p) => ({
-      time: new Date(p.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-      timestamp: new Date(p.timestamp).getTime(),
-      equity: parseFloat(p.equity),
-    }));
+    // Task 9.12: drop non-finite equities before they reach Recharts.
+    return data.combined_equity_curve.flatMap((p) => {
+      const equity = finiteNumber(p.equity);
+      if (equity === null) return [];
+      return [{
+        time: new Date(p.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+        timestamp: new Date(p.timestamp).getTime(),
+        equity,
+      }];
+    });
   }, [data]);
 
   const regimeBands = useMemo(() => {

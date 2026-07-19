@@ -75,6 +75,11 @@ class WalkForwardFold:
     test_sharpe: Optional[float] = None
     test_return: float = 0.0
     overfit: bool = False
+    # Task 9.9: full out-of-sample metrics so the validation gate can
+    # check profit factor / drawdown per fold and persist the run.
+    test_profit_factor: Optional[float] = None
+    test_max_drawdown: Optional[float] = None
+    test_metrics: Optional[Any] = None  # BacktestMetrics (not serialized by the API)
 
 
 @dataclass
@@ -152,12 +157,21 @@ def _run_single_backtest(
     strategy_cls = registry[strategy_name]
     strategy = strategy_cls(config)
 
+    # Task 9.4: optimize against per-slot capital derived from the real
+    # account (live) or configured total, matching compare/multi-strategy.
+    from core.backtest.capital import resolve_total_capital
+
+    bt_config = settings.backtest.model_dump()
+    bt_config["initial_capital"] = float(
+        resolve_total_capital(settings) / settings.risk.max_concurrent_positions
+    )
+
     runner = BacktestRunner(
         strategy=strategy,
         strategy_config=config,
         risk_config=settings.risk.model_dump(),
         execution_config=settings.execution.model_dump(),
-        backtest_config=settings.backtest.model_dump(),
+        backtest_config=bt_config,
     )
 
     bt_result = runner.run(
@@ -381,6 +395,12 @@ def walk_forward(
             if test_metrics:
                 fold_result.test_sharpe = float(test_metrics.sharpe_ratio) if test_metrics.sharpe_ratio else None
                 fold_result.test_return = float(test_metrics.total_return)
+                fold_result.test_profit_factor = (
+                    float(test_metrics.profit_factor)
+                    if test_metrics.profit_factor is not None else None
+                )
+                fold_result.test_max_drawdown = float(test_metrics.max_drawdown)
+                fold_result.test_metrics = test_metrics
 
                 if fold_result.train_sharpe and fold_result.test_sharpe is not None:
                     if fold_result.train_sharpe > 0 and fold_result.test_sharpe < fold_result.train_sharpe * 0.5:
