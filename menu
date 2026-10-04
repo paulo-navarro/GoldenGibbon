@@ -1,0 +1,281 @@
+#!/usr/bin/env bash
+# menu — generic project task runner. Contains only the menu engine; the project's
+# commands live in ./menu_cmd (see below).
+#
+#   ./menu                    interactive menu (↑/↓ Enter, number, name prefix, ← back, Esc/q quit)
+#   ./menu <cmd> [args]       run a command directly           e.g. ./menu dev
+#   ./menu <group> <cmd>      run a command inside a group     e.g. ./menu api test -- --nocapture
+#   ./menu <group>            open a group's submenu
+#   ./menu help               list every command
+#
+# Commands (./menu_cmd, override with MENU_CMD_DIR):
+#   menu_cmd/*.sh             top-level commands
+#   menu_cmd/<group>/*.sh     commands of submenu <group>
+#
+# A shell function becomes a command when the line directly above it is a `## description`
+# comment (two hashes; plain `# comments` are ignored). Functions without it are helpers and are ignored. In a group folder, a function
+# named <group>_<cmd> is shown as <cmd>; underscores become dashes (api_rust_check -> rust-check).
+# Files are sourced together, so helpers and the color/log helpers (info warn error, $RED …) are shared.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CMD_DIR="${MENU_CMD_DIR:-$ROOT/menu_cmd}"
+PROJECT_NAME="$(basename "$ROOT")"
+cd "$ROOT"
+
+# ── Colors ───────────────────────────────────────────────────────────────────
+BLUE=$'\033[34m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RED=$'\033[31m'
+BOLD=$'\033[1m'; DIM=$'\033[2m'; NC=$'\033[0m'
+
+info()  { echo -e "${BLUE}$*${NC}"; }
+warn()  { echo -e "${YELLOW}$*${NC}"; }
+error() { echo -e "${RED}$*${NC}" >&2; }
+
+# ── Theme ────────────────────────────────────────────────────────────────────
+# Values are 256-color numbers (0-255; list: `for i in {0..255}; do printf "\e[48;5;${i}m %3d \e[0m" $i; done`).
+# Override any of them in ~/.config/menu/theme (shared by all projects) or ./.menu.theme (this project).
+_fg() { printf '\033[38;5;%sm' "$1"; }
+_bg() { printf '\033[48;5;%sm' "$1"; }
+
+THEME_HEADER=         # project name at the top (default: same as THEME_SEL_BG)
+THEME_TITLE=          # submenu title (default: same as THEME_SEL_BG)
+THEME_ITEM=252       # unselected item name
+THEME_DESC=244       # unselected item description + footer
+THEME_SEL_FG=231     # selected row text
+THEME_SEL_BG=98      # selected row background
+THEME_RUN=114        # "▶ ./menu cmd" line
+SHOW_HEADER=1        # 0 hides the project name
+
+# shellcheck disable=SC1090
+for _f in "$HOME/.config/menu/theme" "$ROOT/.menu.theme"; do [[ -f "$_f" ]] && source "$_f"; done
+unset _f
+
+THEME_HEADER=${THEME_HEADER:-$THEME_SEL_BG}; THEME_TITLE=${THEME_TITLE:-$THEME_SEL_BG}
+C_HEADER=$(_fg "$THEME_HEADER"); C_TITLE=$(_fg "$THEME_TITLE"); C_ITEM=$(_fg "$THEME_ITEM")
+C_DESC=$(_fg "$THEME_DESC"); C_SEL="$(_bg "$THEME_SEL_BG")$(_fg "$THEME_SEL_FG")"; C_RUN=$(_fg "$THEME_RUN")
+
+# ── Header ───────────────────────────────────────────────────────────────────
+# Project name, uppercase and bold, in the highlight color. Derived from the folder name:
+# "personal_page" -> PERSONAL PAGE, "CrystalBall" -> CRYSTAL BALL.
+_title_name() {
+    local n="$PROJECT_NAME"
+    n="$(sed -E 's/([a-z0-9])([A-Z])/\1 \2/g; s/[_-]+/ /g' <<<"$n")"
+    echo "${n^^}"
+}
+PROJECT_TITLE="$(_title_name)"
+
+print_header() {   # prints the project name; sets HEADER_LINES
+    HEADER_LINES=0
+    [[ "$SHOW_HEADER" == 1 ]] || return 0
+    printf "\n  %s%s%s%s\n" "$BOLD" "$C_HEADER" "$PROJECT_TITLE" "$NC"
+    HEADER_LINES=2
+}
+
+# ── Discovery ────────────────────────────────────────────────────────────────
+SEP=$'\x1f'
+declare -a ENTRIES=()       # "group SEP name SEP description SEP function"   (group empty = top level)
+declare -a MENU_GROUPS=()   # group names (one per subfolder that has commands)
+
+# Register every `## description` + `fn() {` pair found in a file.
+_scan_file() {   # file group
+    local file="$1" grp="$2" prev="" line fn name
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ -n "$prev" && "$line" =~ ^[[:space:]]*(function[[:space:]]+)?([A-Za-z_][A-Za-z0-9_-]*)[[:space:]]*\(\) ]]; then
+            fn="${BASH_REMATCH[2]}"
+            name="${fn#"${grp}_"}"; name="${name//_/-}"
+            ENTRIES+=("${grp}${SEP}${name}${SEP}${prev}${SEP}${fn}")
+        fi
+        if [[ "$line" =~ ^[[:space:]]*##[[:space:]]*([^[:space:]#].*)$ ]]; then
+            prev="${BASH_REMATCH[1]}"
+        else
+            prev=""
+        fi
+    done <"$file"
+}
+
+discover() {
+    local f d g before
+    for f in "$CMD_DIR"/*.sh; do [[ -f "$f" ]] && _scan_file "$f" ""; done
+    for d in "$CMD_DIR"/*/; do
+        [[ -d "$d" ]] || continue
+        g="$(basename "$d")"; before=${#ENTRIES[@]}
+        for f in "$d"*.sh; do [[ -f "$f" ]] && _scan_file "$f" "$g"; done
+        ((${#ENTRIES[@]} > before)) && MENU_GROUPS+=("$g")
+    done
+}
+
+_load_commands() {   # source every command file so helpers are shared
+    local f
+    for f in "$CMD_DIR"/*.sh "$CMD_DIR"/*/*.sh; do
+        # shellcheck disable=SC1090
+        [[ -f "$f" ]] && source "$f"
+    done
+}
+
+run_task() {   # group name [args...]
+    local g="$1" n="$2"; shift 2
+    local e eg en ed fn=""
+    for e in "${ENTRIES[@]}"; do
+        IFS="$SEP" read -r eg en ed fn_ <<<"$e"
+        [[ "$eg" == "$g" && "$en" == "$n" ]] && { fn="$fn_"; break; }
+    done
+    [[ -n "$fn" ]] || { error "Unknown command: ${g:+$g }$n"; return 127; }
+    echo -e "\n  ${C_RUN}▶ ./menu ${g:+$g }$n${NC}\n"
+    _load_commands
+    "$fn" "$@"
+}
+
+_is_group() {
+    local e; for e in "${MENU_GROUPS[@]}"; do [[ "$e" == "$1" ]] && return 0; done
+    return 1
+}
+
+_has_task() {
+    local e g n d fn
+    for e in "${ENTRIES[@]}"; do
+        IFS="$SEP" read -r g n d fn <<<"$e"
+        [[ "$g" == "$1" && "$n" == "$2" ]] && return 0
+    done
+    return 1
+}
+
+print_help() {
+    local e g n d fn gd x
+    echo -e "${BOLD}${PROJECT_NAME} — available commands${NC}   usage: ./menu ${BLUE}[group] <cmd>${NC}\n"
+    for e in "${ENTRIES[@]}"; do
+        IFS="$SEP" read -r g n d fn <<<"$e"
+        [[ -z "$g" ]] && printf "  ${C_ITEM}%-22s${NC} %s\n" "$n" "$d"
+    done
+    for gd in "${MENU_GROUPS[@]}"; do
+        echo -e "\n  ${BOLD}$gd${NC}"
+        for x in "${ENTRIES[@]}"; do
+            IFS="$SEP" read -r g n d fn <<<"$x"
+            [[ "$g" == "$gd" ]] && printf "    ${C_ITEM}%-26s${NC} %s\n" "$gd $n" "$d"
+        done
+    done
+}
+
+# Interactive menu for one level ("" = top level, otherwise a group name).
+menu_loop() {
+    local grp="$1"
+    local -a names=() descs=() kinds=() labels=()
+    local e g n d first=0
+    [[ -n "$grp" ]] && { names+=(back); labels+=("← back"); descs+=(""); kinds+=(back); first=1; }   # "← back" row, unnumbered
+
+    for e in "${ENTRIES[@]}"; do
+        IFS="$SEP" read -r g n d fn <<<"$e"
+        [[ "$g" == "$grp" ]] && { names+=("$n"); labels+=("$n"); descs+=("$d"); kinds+=(task); }
+    done
+    if [[ -z "$grp" ]]; then
+        for n in "${MENU_GROUPS[@]}"; do
+            names+=("$n"); labels+=("▪ $n/"); descs+=(""); kinds+=(group)
+        done
+    fi
+
+    local count=${#names[@]} selected=$first rendered=0 total_lines=0 max_name=0 i
+    for n in "${labels[@]}"; do ((${#n} > max_name)) && max_name=${#n}; done
+
+    erase() {
+        if ((rendered)); then
+            for ((i = 0; i < total_lines; i++)); do echo -en "\033[A\033[2K"; done
+        fi
+        rendered=0
+    }
+
+    draw() {
+        erase
+        rendered=1; total_lines=0
+        print_header; total_lines=$HEADER_LINES
+        echo "";                                                ((++total_lines))
+        if [[ -n "$grp" ]]; then echo -e "  ${BOLD}${C_TITLE}${grp}${NC}"; ((++total_lines)); fi
+        for i in "${!names[@]}"; do
+            if [[ "${kinds[i]}" == back ]]; then
+                if ((i == selected)); then printf "  ${C_SEL}${BOLD} ← back ${NC}\n"
+                else printf "  ${C_DESC} ← back${NC}\n"; fi
+            elif [[ "${kinds[i]}" == group ]]; then
+                if ((i == selected)); then printf "  ${C_SEL}${BOLD} %d) %s ${NC}\n" "$((i + 1 - first))" "${labels[i]}"
+                else printf "  ${C_ITEM} %d) %s${NC}\n" "$((i + 1 - first))" "${labels[i]}"; fi
+            elif ((i == selected)); then
+                printf "  ${C_SEL}${BOLD} %d) %-${max_name}s  →  %s ${NC}\n" "$((i + 1 - first))" "${labels[i]}" "${descs[i]}"
+            else
+                printf "  ${C_ITEM} %d) %-${max_name}s${C_DESC}  →  %s${NC}\n" "$((i + 1 - first))" "${labels[i]}" "${descs[i]}"
+            fi
+            ((++total_lines))
+        done
+        echo "";                                                ((++total_lines))
+        echo -e "  ${C_DESC}↑/↓ Navigate  •  Enter Select  •  Number or name  •  ← Back  •  Esc/q Quit${NC}"; ((++total_lines))
+    }
+
+    activate() {   # returns 0 to go back one level
+        case "${kinds[selected]}" in
+            back)  erase; return 0 ;;
+            group) erase; menu_loop "${names[selected]}"; draw ;;
+            task)
+                echo; tput cnorm 2>/dev/null || true
+                run_task "$grp" "${names[selected]}"
+                exit 0 ;;
+        esac
+        return 1
+    }
+
+    tput civis 2>/dev/null || true
+    draw
+
+    local key rest buf ch enter_pressed
+    while true; do
+        IFS= read -rsn1 key < /dev/tty
+        case "$key" in
+            $'\x1b')
+                rest=""; read -rsn2 -t 0.1 rest < /dev/tty || true
+                case "$rest" in
+                    '[A') ((selected > 0)) && ((selected--)) || true; draw ;;
+                    '[B') ((selected < count - 1)) && ((selected++)) || true; draw ;;
+                    '[D') if [[ -n "$grp" ]]; then erase; return 0; fi ;;
+                    '') echo; echo "  Cancelled."; exit 0 ;;   # bare Esc
+                esac ;;
+            '') activate && return 0 || true ;;
+            q|Q) echo; echo "  Cancelled."; exit 0 ;;
+            [1-9])
+                if ((key - 1 + first < count)); then selected=$((key - 1 + first)); draw; fi ;;
+            *)
+                buf="$key"; enter_pressed=0
+                while IFS= read -rsn1 -t 0.4 ch < /dev/tty; do
+                    if [[ -z "$ch" ]]; then enter_pressed=1; break; fi
+                    buf+="$ch"
+                done
+                for i in "${!names[@]}"; do
+                    if [[ "${names[i]}" == "$buf"* ]]; then selected=$i; break; fi
+                done
+                draw
+                if ((enter_pressed)); then activate && return 0 || true; fi ;;
+        esac
+    done
+}
+
+cleanup() { tput cnorm 2>/dev/null || true; stty sane 2>/dev/null || true; }
+trap cleanup EXIT
+
+main() {
+    case "${1:-}" in
+        "")
+            if [[ -t 0 && -t 1 ]]; then menu_loop ""; else print_help; fi ;;
+        help|-h|--help|list) print_help ;;
+        *)
+            if _has_task "" "$1"; then
+                local n="$1"; shift; run_task "" "$n" "$@"
+            elif _is_group "$1"; then
+                if [[ -n "${2:-}" ]]; then
+                    _has_task "$1" "$2" || { error "Unknown task: $1 $2"; print_help; exit 127; }
+                    local g="$1" n="$2"; shift 2; run_task "$g" "$n" "$@"
+                else
+                    menu_loop "$1"
+                fi
+            else
+                error "Unknown command: $1"; echo; print_help; exit 127
+            fi ;;
+    esac
+}
+
+discover
+main "$@"

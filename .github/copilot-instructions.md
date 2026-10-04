@@ -44,9 +44,9 @@ docker compose run --rm app alembic revision --autogenerate -m "<description>"
 docker compose run --rm app alembic upgrade head
 
 # Dev environment
-make dev        # all services
-make api        # API + infra only
-make frontend   # frontend + API + infra
+./menu dev        # all services
+./menu api        # API + infra only
+./menu frontend   # frontend + API + infra
 ```
 
 ## Key Conventions

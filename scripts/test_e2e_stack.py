@@ -9,7 +9,7 @@ Runs on the HOST (needs Docker access + websocket-client).
 
 Usage:
     python3 scripts/test_e2e_stack.py
-    make test-e2e
+    ./menu test e2e
 """
 
 from __future__ import annotations

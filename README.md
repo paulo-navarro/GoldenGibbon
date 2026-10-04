@@ -296,19 +296,19 @@ See [`strategy_mean_reversion.md`](strategy_mean_reversion.md) for full specific
 
 3. **Start services:**
    ```bash
-   make dev    # Full stack (app + API + workers + postgres + redis)
+   ./menu dev    # Full stack (app + API + workers + postgres + redis)
    # Or just the API:
-   make api    # API server + postgres + redis only
+   ./menu api    # API server + postgres + redis only
    ```
 
 4. **Run database migrations:**
    ```bash
-   make migrate
+   ./menu db migrate
    ```
 
 5. **Test the setup:**
    ```bash
-   make test
+   ./menu test unit
    ```
 
 6. **Access the API:**
@@ -370,7 +370,7 @@ GoldenGibbon/
 ├── alembic/            # Database migrations
 ├── docker-compose.yml  # Services orchestration
 ├── Dockerfile          # Multi-stage build
-├── Makefile            # Convenience commands
+├── menu, menu_cmd/    # Task runner (./menu help)
 └── pyproject.toml      # Python dependencies
 ```
 
@@ -381,7 +381,7 @@ GoldenGibbon/
 Run the full test suite:
 
 ```bash
-make test
+./menu test unit
 # Or directly:
 docker compose run --rm -e PYTHONPATH=/app app pytest -v
 ```
@@ -477,7 +477,7 @@ This is a personal trading platform under active development. Contributions, sug
 
 1. Create a feature branch
 2. Write tests for new functionality
-3. Ensure all tests pass: `make test`
+3. Ensure all tests pass: `./menu test unit`
 4. Submit a pull request
 
 ### Code Style

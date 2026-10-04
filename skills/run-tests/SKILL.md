@@ -6,7 +6,7 @@ argument-hint: '[test file/pattern, or "full" for the whole suite]'
 
 # Run Tests (host)
 
-Fast host-based testing. `make test` runs inside Docker (needs the full stack);
+Fast host-based testing. `./menu test unit` runs inside Docker (needs the full stack);
 this skill runs directly against the dev Postgres container — much faster for
 iteration.
 

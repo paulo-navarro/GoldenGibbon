@@ -1,0 +1,3 @@
+# Menu theme for this project (see THEME_* in ./menu)
+THEME_SEL_BG=178   # gold highlight
+THEME_SEL_FG=16    # black text on it

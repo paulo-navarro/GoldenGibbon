@@ -7,7 +7,7 @@ the API container to simulate a crash.
 
 Usage:
     python3 scripts/test_ws_reconnect.py
-    make test-ws-reconnect
+    ./menu test ws-reconnect
 """
 
 from __future__ import annotations
